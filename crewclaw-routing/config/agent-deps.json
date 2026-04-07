@@ -1,0 +1,36 @@
+[
+  {
+    "agent": "andy",
+    "name": "Plandex",
+    "binEnvKey": "PLANDEX_BIN",
+    "binDefault": "plandex",
+    "verifyArgs": ["version"],
+    "versionArgs": ["version"],
+    "installStrategies": [
+      { "cmd": "sh", "args": ["-c", "mkdir -p ~/.local/bin && curl -fsSL 'https://github.com/plandex-ai/plandex/releases/download/cli%2Fv2.2.1/plandex_2.2.1_darwin_arm64.tar.gz' | tar xz -C ~/.local/bin plandex"] }
+    ],
+    "upgradeStrategies": [
+      { "cmd": "sh", "args": ["-c", "mkdir -p ~/.local/bin && curl -fsSL 'https://github.com/plandex-ai/plandex/releases/download/cli%2Fv2.2.1/plandex_2.2.1_darwin_arm64.tar.gz' | tar xz -C ~/.local/bin plandex"] }
+    ],
+    "rollbackCmdTemplate": "mkdir -p ~/.local/bin && curl -fsSL 'https://github.com/plandex-ai/plandex/releases/download/cli%2Fv{version}/plandex_{version}_darwin_arm64.tar.gz' | tar xz -C ~/.local/bin plandex",
+    "upgradeIntervalDays": 7
+  },
+  {
+    "agent": "lisa",
+    "name": "OpenCode",
+    "binEnvKey": "OPENCODE_BIN",
+    "binDefault": "opencode",
+    "verifyArgs": ["--version"],
+    "versionArgs": ["--version"],
+    "installStrategies": [
+      { "cmd": "npm",  "args": ["install", "-g", "opencode"] },
+      { "cmd": "brew", "args": ["install", "opencode"] }
+    ],
+    "upgradeStrategies": [
+      { "cmd": "npm",  "args": ["update", "-g", "opencode"] },
+      { "cmd": "brew", "args": ["upgrade", "opencode"] }
+    ],
+    "rollbackCmdTemplate": "npm install -g opencode@{version}",
+    "upgradeIntervalDays": 7
+  }
+]

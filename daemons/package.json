@@ -1,0 +1,32 @@
+{
+  "name": "crewclaw-daemons",
+  "version": "2026.3.17",
+  "description": "CrewClaw 守护进程：Lucas / Andy / Lisa / wecom-entrance",
+  "main": "lucas-daemon/index.js",
+  "scripts": {
+    "start": "pm2 start ecosystem.config.js",
+    "stop": "pm2 stop all",
+    "status": "pm2 status",
+    "logs": "pm2 logs",
+    "monitor": "node ../../scripts/monitor.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.76",
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@wecom/aibot-node-sdk": "^1.0.2",
+    "axios": "^1.6.0",
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0",
+    "chalk": "^5.6.2",
+    "chromadb": "^1.9.0",
+    "chromadb-default-embed": "^2.14.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
+    "express": "^4.18.2",
+    "playwright": "^1.58.2",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "uuid": "^9.0.0",
+    "winston": "^3.11.0"
+  }
+}

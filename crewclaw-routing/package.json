@@ -1,0 +1,14 @@
+{
+  "name": "@crewclaw/routing",
+  "version": "2026.3.17",
+  "description": "CrewClaw 三层路由插件：Layer 2 模型路由 / Layer 3 ChromaDB 注入 / Layer 1 开发任务工具",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}

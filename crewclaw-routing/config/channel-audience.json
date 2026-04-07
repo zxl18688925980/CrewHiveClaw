@@ -1,0 +1,14 @@
+{
+  "_comment": "HomeAI 实例层：渠道受众配置。框架层读取此文件注入受众感知上下文。audienceType: single（单人）| multiple（多人，已知成员）| broadcast（广播，不特定受众）。membersSource=family_members 时从家人档案动态解析成员列表，不硬编码。新增渠道在此追加，不改框架代码。",
+  "wecom_private": {
+    "audienceType": "single",
+    "label": "私聊",
+    "contextSensitivity": "private"
+  },
+  "wecom_group": {
+    "audienceType": "multiple",
+    "label": "家庭群聊",
+    "membersSource": "family_members",
+    "contextSensitivity": "public"
+  }
+}

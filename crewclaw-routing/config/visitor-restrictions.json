@@ -1,0 +1,19 @@
+{
+  "_comment": "HomeAI 实例层配置：访客会话工具禁令。基础设施层强制拦截（before_tool_call），不依赖模型合规。新增/调整限制在此文件修改，不改框架代码。",
+  "blockedTools": [
+    "send_message",
+    "send_voice",
+    "send_file",
+    "trigger_development_pipeline",
+    "recall_memory",
+    "query_member_profile",
+    "flag_for_skill",
+    "follow_up_requirement",
+    "create_member_shadow",
+    "record_outcome_feedback",
+    "list_active_tasks",
+    "cancel_task",
+    "report_bug",
+    "gen_visitor_invite"
+  ]
+}

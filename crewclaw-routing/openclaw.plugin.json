@@ -1,0 +1,13 @@
+{
+  "id": "crewclaw-routing",
+  "description": "CrewClaw 三层路由：Layer 2 模型路由 / Layer 3 ChromaDB 注入 / Layer 1 开发任务工具",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "andyUrl":      { "type": "string" },
+      "wecomPushUrl": { "type": "string" },
+      "chromadbUrl":  { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$comment": "Andy 输出的结构化 Implementation Spec 格式。在 before_prompt_build 注入给 Andy 作为输出约束。",
+  "schema": {
+    "requirement": "string — 需求描述（完整）",
+    "tech_stack": ["string — 使用的技术/语言/库"],
+    "files": [
+      {
+        "path": "string — 精确文件路径（相对项目根）",
+        "purpose": "string — 该文件的用途",
+        "key_functions": ["string — 关键函数名"]
+      }
+    ],
+    "entry_point": "string — 主入口文件路径",
+    "dependencies": ["string — 需要安装的依赖包"],
+    "validation_cmd": "string — 验证命令（如 python3 -m py_compile scripts/xxx.py）",
+    "clawhub_installs": ["string — 需要 clawhub install 的 slug（可为空数组）"],
+    "complexity": "low | medium | high"
+  },
+  "example": {
+    "requirement": "每天早上8点推送A股日报给爸爸",
+    "tech_stack": ["python3", "requests", "sqlite3"],
+    "files": [
+      { "path": "scripts/stock_report.py", "purpose": "抓取A股数据并格式化日报", "key_functions": ["fetch_index_data", "format_report", "main"] },
+      { "path": "scripts/cron_stock.sh", "purpose": "定时任务脚本", "key_functions": [] }
+    ],
+    "entry_point": "scripts/stock_report.py",
+    "dependencies": ["requests", "pandas"],
+    "validation_cmd": "python3 -m py_compile scripts/stock_report.py",
+    "clawhub_installs": [],
+    "complexity": "medium"
+  }
+}

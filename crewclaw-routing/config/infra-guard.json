@@ -1,0 +1,10 @@
+{
+  "_comment": "HomeAI 实例层配置：基础设施变更关键词。命中任一关键词的需求，Lisa 完成后需系统工程师审核才能部署。调整守卫范围在此文件修改，不改框架代码。",
+  "infraKeywords": [
+    "crewclaw-routing", "index.ts", "路由插件", "routing",
+    "BOOTSTRAP.md", "BOOTSTRAP", "人格文件", "openclaw.json",
+    "wecom/index.js", "wecom-entrance", "ecosystem.config.js",
+    "start-gateway.sh", "gateway", "Gateway",
+    "基础设施", "插件代码", "守护进程"
+  ]
+}
