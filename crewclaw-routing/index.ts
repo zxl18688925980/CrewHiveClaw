@@ -98,6 +98,11 @@ const KUZU_PYTHON3_BIN    = "/opt/homebrew/opt/python@3.11/bin/python3.11";
 
 type ThreadEntry = { role: "user" | "assistant"; text: string; ts: number };
 
+// ── 时区统一：所有时间戳使用 CST（UTC+8，格式 2026-04-08T02:15:44+08:00）──
+const nowCST   = (): string => new Date(Date.now() + 8 * 3600000).toISOString().replace('Z', '+08:00');
+const todayCST = (): string => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+const agoCST   = (ms: number): string => new Date(Date.now() - ms + 8 * 3600000).toISOString().replace('Z', '+08:00');
+
 function agentThreadFile(threadId: string): string {
   return join(AGENT_THREAD_DIR, threadId.replace(/[^a-zA-Z0-9_\-:]/g, "_") + ".json");
 }
@@ -525,7 +530,7 @@ async function runCmd(cmd: string, args: string[]): Promise<boolean> {
 }
 
 function logDep(record: Record<string, unknown>): void {
-  appendJsonl(DEP_LOG, { timestamp: new Date().toISOString(), ...record });
+  appendJsonl(DEP_LOG, { timestamp: nowCST(), ...record });
 }
 
 // ── 二进制备份与恢复 ────────────────────────────────────────────────────────
@@ -583,7 +588,7 @@ async function manageDep(dep: DepSpec): Promise<void> {
       logDep({ agent: dep.agent, dep: dep.name, status: ok ? "installed" : "strategy_failed", via: `${s.cmd} ${s.args.join(" ")}` });
       if (ok) {
         const ver = await captureVersion(dep.bin, dep.versionArgs);
-        state[dep.name] = { installed: true, version: ver, last_upgraded: new Date().toISOString() };
+        state[dep.name] = { installed: true, version: ver, last_upgraded: nowCST() };
         saveDepState(state);
         return;
       }
@@ -625,7 +630,7 @@ async function manageDep(dep: DepSpec): Promise<void> {
   if (stillWorks) {
     const newVer = await captureVersion(dep.bin, dep.versionArgs);
     logDep({ agent: dep.agent, dep: dep.name, status: "upgraded", prev_version: prevVersion, new_version: newVer });
-    state[dep.name] = { installed: true, version: newVer, last_upgraded: new Date().toISOString() };
+    state[dep.name] = { installed: true, version: newVer, last_upgraded: nowCST() };
     saveDepState(state);
     return;
   }
@@ -640,7 +645,7 @@ async function manageDep(dep: DepSpec): Promise<void> {
       const recovered = await isBinAvailable(dep.bin, dep.verifyArgs);
       if (recovered) {
         logDep({ agent: dep.agent, dep: dep.name, status: "rolled_back", via: "backup_binary", version: prevVersion });
-        state[dep.name] = { installed: true, version: prevVersion, last_upgraded: new Date().toISOString() };
+        state[dep.name] = { installed: true, version: prevVersion, last_upgraded: nowCST() };
         saveDepState(state);
         return;
       }
@@ -662,7 +667,7 @@ async function manageDep(dep: DepSpec): Promise<void> {
     const recovered = await isBinAvailable(dep.bin, dep.verifyArgs);
     if (recovered) {
       logDep({ agent: dep.agent, dep: dep.name, status: "rolled_back", via: `${s.cmd} ${s.args.join(" ")}`, version: prevVersion });
-      state[dep.name] = { installed: true, version: prevVersion, last_upgraded: new Date().toISOString() };
+      state[dep.name] = { installed: true, version: prevVersion, last_upgraded: nowCST() };
       saveDepState(state);
       return;
     }
@@ -1204,7 +1209,7 @@ interface ConvMeta {
 async function writeMemory(prompt: string, response: string, meta: ConvMeta, collection = "conversations"): Promise<void> {
   // 调试日志：确认 writeMemory 被调用
   const debugEntry = {
-    t: new Date().toISOString(),
+    t: nowCST(),
     collection,
     fromId: meta.fromId,
     toId: meta.toId,
@@ -1242,13 +1247,13 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
       userId:         meta.fromId.toLowerCase(),
       source:         meta.channel === "wecom_group" ? "group" : "private",
       // ── 检索辅助 ─────────────────────────────────────────────────────
-      timestamp:      new Date().toISOString(),
+      timestamp:      nowCST(),
       prompt:         prompt.slice(0, 500),
       response:       response.slice(0, 500),
     }, embedding);
   } catch (e) {
     appendJsonl(join(PROJECT_ROOT, "data/learning/memory-write-errors.jsonl"), {
-      t: new Date().toISOString(),
+      t: nowCST(),
       error: e instanceof Error ? e.message : String(e),
       stack: (e as any)?.stack?.slice(0, 500),
     });
@@ -1850,7 +1855,7 @@ async function updateDecisionOutcome(
   try {
     await chromaUpdate("decisions", decisionId, {
       outcome,
-      outcome_at: new Date().toISOString(),
+      outcome_at: nowCST(),
       outcome_note: outcomeNote,
       agent: agentId, // 保留以防 ChromaDB 部分更新丢失
     });
@@ -1875,7 +1880,7 @@ async function writeRequirement(params: {
     await chromaAdd("requirements", params.requirementId, params.requirement, {
       userId: params.userId,
       intentType: params.intentType,
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
       outcome: "",         // "" = 进行中（ChromaDB 不接受 null）
       outcome_at: "",
       outcome_note: "",
@@ -1893,7 +1898,7 @@ async function updateRequirementOutcome(
   try {
     await chromaUpdate("requirements", requirementId, {
       outcome,
-      outcome_at: new Date().toISOString(),
+      outcome_at: nowCST(),
       outcome_note: outcomeNote,
     });
   } catch {
@@ -1929,7 +1934,7 @@ async function writeAgentInteraction(params: {
       agentId: params.agentId ?? params.fromAgent ?? "",
       toAgent: params.toAgent ?? "",
       interactionType: params.interactionType ?? (params.fromAgent ? "shadow-query" : ""),
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
     }, embedding);
   } catch {
     // 写入失败静默处理
@@ -1954,7 +1959,7 @@ async function writeCodeHistory(params: {
       requirementId: params.requirementId,
       filePaths: params.filePaths.join(","),
       description: params.description.slice(0, 500),
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
     }, embedding);
   } catch {
     // 写入失败静默处理
@@ -1982,7 +1987,7 @@ async function writeBehaviorPattern(params: {
     const embedding = await embedText(document);
     await chromaAdd("behavior_patterns", id, document, {
       userId: params.userId,
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
       prompt: params.prompt.slice(0, 300),
       response: params.response.slice(0, 300),
     }, embedding);
@@ -2012,7 +2017,7 @@ async function writeFamilyKnowledge(params: {
     const embedding = await embedText(document);
     await chromaAdd("family_knowledge", id, document, {
       userId: params.userId,
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
       prompt: params.prompt.slice(0, 300),
       response: params.response.slice(0, 300),
     }, embedding);
@@ -2043,7 +2048,7 @@ async function writeAgentRecord(params: {
       parentAgentId: params.parentAgentId,
       description: params.description.slice(0, 500),
       status: params.status,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowCST(),
     }, embedding);
   } catch {
     // 写入失败静默处理
@@ -2212,17 +2217,17 @@ async function spawnParallelLisa(
       const result = await callGatewayAgent("lisa", lisaPrompt, 600_000, threadId);
       writeFileSync(
         join(pipelineDir, `${taskId}.json`),
-        JSON.stringify({ taskId, title, status: "completed", result, timestamp: new Date().toISOString() }, null, 2),
+        JSON.stringify({ taskId, title, status: "completed", result, timestamp: nowCST() }, null, 2),
       );
       appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
-        timestamp: new Date().toISOString(), source: "coordinator", reqId, taskId, content: result,
+        timestamp: nowCST(), source: "coordinator", reqId, taskId, content: result,
       });
       return { taskId, title, result, success: true };
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       writeFileSync(
         join(pipelineDir, `${taskId}.json`),
-        JSON.stringify({ taskId, title, status: "failed", error: errMsg, timestamp: new Date().toISOString() }, null, 2),
+        JSON.stringify({ taskId, title, status: "failed", error: errMsg, timestamp: nowCST() }, null, 2),
       );
       return { taskId, title, result: errMsg, success: false };
     }
@@ -2400,7 +2405,7 @@ async function runAndyPipeline(params: {
     id: requirementId,
     requirement: params.requirement,
     submittedBy: params.wecomUserId,
-    submittedAt: new Date().toISOString(),
+    submittedAt: nowCST(),
     status: "running",
     currentPhase: "andy_designing",
     ...(params.lucasContext ? { lucasContext: params.lucasContext } : {}),
@@ -2413,7 +2418,7 @@ async function runAndyPipeline(params: {
   void addDecisionMemory({
     decision_id: requirementId,
     agent: "lucas",
-    timestamp: new Date().toISOString(),
+    timestamp: nowCST(),
     context: params.requirement.slice(0, 300),
     decision: "触发 Andy→Lisa 开发流水线",
     outcome: null,
@@ -2588,7 +2593,7 @@ async function executeOpenCode(
   // debug: 记录调用参数，确认 model 名称是否正确
   const { appendFileSync } = await import("fs");
   appendFileSync("/tmp/opencode-debug.log",
-    `[${new Date().toISOString()}] executeOpenCode called: model=${model} cwd=${projectRoot}\n`);
+    `[${nowCST()}] executeOpenCode called: model=${model} cwd=${projectRoot}\n`);
 
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -2676,7 +2681,7 @@ async function launchOpenCodeBackground(
   const logFile = `/tmp/opencode-${sessionId}.log`;
 
   appendFileSync("/tmp/opencode-debug.log",
-    `[${new Date().toISOString()}] launchOpenCodeBackground: model=${model} sessionId=${sessionId}\n`);
+    `[${nowCST()}] launchOpenCodeBackground: model=${model} sessionId=${sessionId}\n`);
 
   const { createWriteStream } = await import("fs");
   const logStream = createWriteStream(logFile, { flags: "a" });
@@ -2709,7 +2714,7 @@ async function launchOpenCodeBackground(
   persistOpencodeSession(sessionId, {
     pid: proc.pid,
     logFile,
-    startedAt: new Date().toISOString(),
+    startedAt: nowCST(),
     taskSummary: task.split("\n").filter(Boolean).slice(0, 2).join(" ").slice(0, 150),
     completed: false,
   });
@@ -2726,8 +2731,8 @@ async function launchOpenCodeBackground(
     persistOpencodeSession(sessionId, {
       pid: proc.pid,
       logFile,
-      startedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
+      startedAt: nowCST(),
+      completedAt: nowCST(),
       taskSummary: task.split("\n").filter(Boolean).slice(0, 2).join(" ").slice(0, 150),
       completed: true,
       exitCode: code,
@@ -2743,7 +2748,7 @@ async function launchOpenCodeBackground(
     try {
       appendJsonl(join(PROJECT_ROOT, "data/learning/opencode-results.jsonl"), {
         sessionId,
-        timestamp: new Date().toISOString(),
+        timestamp: nowCST(),
         exitCode: code,
         success: code === 0,
         taskSummary: task.split("\n").filter(Boolean).slice(0, 2).join(" ").slice(0, 150),
@@ -2814,7 +2819,7 @@ async function launchOpenCodeBackground(
         const embedding = await embedText(document);
         const obsId = `codebase-obs-${sessionId}`;
         await chromaUpsert("codebase_patterns", obsId, document, {
-          timestamp:   new Date().toISOString(),
+          timestamp:   nowCST(),
           exitCode:    code ?? -1,
           success:     code === 0,
           matchRate,
@@ -3080,8 +3085,8 @@ function markTaskStatus(taskId: string, status: TaskRegistryEntry["status"]): vo
   const entry = entries.find(e => e.id === taskId);
   if (!entry) return;
   entry.status = status;
-  if (status === "cancelled") entry.cancelledAt = new Date().toISOString();
-  if (status === "completed") entry.completedAt = new Date().toISOString();
+  if (status === "cancelled") entry.cancelledAt = nowCST();
+  if (status === "completed") entry.completedAt = nowCST();
   writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
 }
 
@@ -3194,7 +3199,7 @@ function detectDpoCandidates(params: {
   });
   if (recentDup) return false;
 
-  const nowIso = new Date().toISOString();
+  const nowIso = nowCST();
   appendJsonl(DPO_CANDIDATES_FILE, {
     t: nowIso,
     sessionKey,
@@ -3275,7 +3280,7 @@ function detectUserCorrection(params: {
   if (!prevAssistant) return;
 
   appendJsonl(DPO_CANDIDATES_FILE, {
-    t:                new Date().toISOString(),
+    t:                nowCST(),
     sessionKey,
     userId,
     type:             "user_correction",
@@ -3330,7 +3335,7 @@ function enqueueForFinetune(params: {
   score: number;
 }): void {
   appendJsonl(FINETUNE_QUEUE_FILE, {
-    timestamp: new Date().toISOString(),
+    timestamp: nowCST(),
     agentId: params.agentId,
     prompt: params.prompt.slice(0, 800),
     response: params.response.slice(0, 800),
@@ -3371,7 +3376,7 @@ async function syncCapabilityToChroma(params: {
       toolName: params.toolName,
       callCount: params.callCount,
       success: params.success,
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
     }, embedding);
   } catch {
     // 写入失败静默处理
@@ -3480,7 +3485,7 @@ async function runDiagnostic(): Promise<void> {
 
   if (dataIssues.length > 0) {
     appendJsonl(DIAGNOSTIC_RESULTS_FILE, {
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
       layer: "Data",
       issues: dataIssues,
     });
@@ -3507,7 +3512,7 @@ async function runDiagnostic(): Promise<void> {
         ),
       ];
       appendJsonl(DIAGNOSTIC_RESULTS_FILE, {
-        timestamp: new Date().toISOString(),
+        timestamp: nowCST(),
         layer: "Capability",
         agentId: cfg.agentId,
         successRate,
@@ -3541,7 +3546,7 @@ async function runDiagnostic(): Promise<void> {
 
     // 将该信号标记为 processing，防止重复触发
     const updated = signals.map(e =>
-      e === oldest ? { ...e, status: "processing", processing_at: new Date().toISOString() } : e,
+      e === oldest ? { ...e, status: "processing", processing_at: nowCST() } : e,
     );
     writeJsonlEntries(signalsPath, updated);
   }
@@ -3602,7 +3607,7 @@ async function checkAndAlertFailure(params: {
 
   // 失败：递增计数
   streak.count++;
-  streak.lastFailAt = new Date().toISOString();
+  streak.lastFailAt = nowCST();
 
   // 检测资金安全关键词（响应中含危险关键词立即告警）
   const hasFinancialRisk = FINANCIAL_SAFETY_TERMS.some(t => params.response.includes(t));
@@ -3654,7 +3659,7 @@ async function checkChromaCapacity(): Promise<void> {
       if (count > CHROMA_MAX_COLLECTION_SIZE) {
         // 超限：记录告警到 diagnostic-results（实际归档逻辑留给系统工程师处理）
         appendJsonl(DIAGNOSTIC_RESULTS_FILE, {
-          timestamp: new Date().toISOString(),
+          timestamp: nowCST(),
           layer: "Data",
           issues: [`ChromaDB 集合 "${name}" 记录数 ${count} 超过阈值 ${CHROMA_MAX_COLLECTION_SIZE}`],
         });
@@ -3712,7 +3717,7 @@ async function archiveAgentMemory(agentId: string, reason: "evicted" | "dormant"
       type: "archive_summary",
       agentId,
       reason,
-      archivedAt: new Date().toISOString(),
+      archivedAt: nowCST(),
     });
   } catch {
     // 归档失败静默处理
@@ -3817,7 +3822,7 @@ async function runReflectionEngine(): Promise<void> {
   }
 
   appendJsonl(REFLECTION_RESULTS_FILE, {
-    timestamp: new Date().toISOString(),
+    timestamp: nowCST(),
     outcomeRate: outcomeTotal > 0 ? outcomeSuccess / outcomeTotal : null,
     avgToolCalls,
     responseRate,
@@ -3858,14 +3863,14 @@ function evolveRouting(): void {
 
     if (lines.length < EVOLUTION_MIN_EVENTS) {
       appendJsonl(EVOLUTION_EVENTS_FILE, {
-        timestamp: new Date().toISOString(),
+        timestamp: nowCST(),
         event: "routing_evolution_skipped",
         reason: `insufficient_events(${lines.length}<${EVOLUTION_MIN_EVENTS})`,
       });
       return;
     }
 
-    const cutoff30d = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    const cutoff30d = agoCST(30 * 86_400_000);
 
     // 按 agentId 分组统计过去 30 天本地 vs 云端路由次数
     type Counts = { total: number; local: number };
@@ -3927,7 +3932,7 @@ function evolveRouting(): void {
         current.localThreshold = parseFloat(
           Math.min(0.9, current.localThreshold + EVOLUTION_THRESHOLD_STEP).toFixed(2),
         );
-        current.lastAdjusted = new Date().toISOString();
+        current.lastAdjusted = nowCST();
         changed = true;
         adjusted = true;
       }
@@ -3944,7 +3949,7 @@ function evolveRouting(): void {
     if (changed) saveRoutingThresholds(thresholds);
 
     appendJsonl(EVOLUTION_EVENTS_FILE, {
-      timestamp: new Date().toISOString(),
+      timestamp: nowCST(),
       event: "routing_evolution_cycle",
       thresholdChanged: changed,
       agents: snapshot,
@@ -3977,7 +3982,7 @@ function evolveRouting(): void {
 
 function evolveLifecycles(): void {
   const now = Date.now();
-  const expiredAt = new Date().toISOString();
+  const expiredAt = nowCST();
 
   // ── Data 层：Andy corpus TTL 执行 ────────────────────────────────────
   const andyCorpusPath = join(PROJECT_ROOT, "data/corpus/andy-corpus.jsonl");
@@ -4247,7 +4252,7 @@ const crewclawRoutingPlugin = {
         const toolNames = (event.tools ?? []).map((t: { name?: string }) => t.name ?? "?").join(",");
         const eventKeys = Object.keys(event).join(",");
         dbgLog("/tmp/opencode-debug.log",
-          `[${new Date().toISOString()}] llm_input: agent=${ctx.agentId} model=${event.model} tools=[${toolNames}] eventKeys=${eventKeys}\n`);
+          `[${nowCST()}] llm_input: agent=${ctx.agentId} model=${event.model} tools=[${toolNames}] eventKeys=${eventKeys}\n`);
       } catch {}
       const isCloud = event.provider !== "ollama" && !event.model.includes(LOCAL_MODEL);
 
@@ -4272,7 +4277,7 @@ const crewclawRoutingPlugin = {
 
       appendJsonl(join(PROJECT_ROOT, "data/learning/route-events.jsonl"), {
         id: `${event.runId}_${Math.random().toString(36).slice(2, 6)}`,
-        timestamp: new Date().toISOString(),
+        timestamp: nowCST(),
         agentId: ctx.agentId,
         intent,
         isCloud,
@@ -4320,7 +4325,7 @@ const crewclawRoutingPlugin = {
               try {
                 const topK   = typeof _boundParams.topK === "number" ? _boundParams.topK : 30;
                 // date() 在 Kuzu 0.11.3 中不支持无参调用，替换为今天的日期字面量
-                const todayStr = new Date().toISOString().slice(0, 10);
+                const todayStr = todayCST();
                 const cypher = _cypher
                   .replace(/\$topK\b/g, String(topK))
                   .replace(/\bdate\(\)/g, `date('${todayStr}')`);
@@ -4643,7 +4648,7 @@ const crewclawRoutingPlugin = {
           try {
             const signalsPath = join(PROJECT_ROOT, "data", "lucas-behavior-signals.jsonl");
             if (existsSync(signalsPath)) {
-              const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+              const thirtyDaysAgo = agoCST(30 * 24 * 60 * 60 * 1000).slice(0, 10);
               const lines = readFileSync(signalsPath, "utf-8").split("\n").filter(Boolean);
               const recentSignals = lines
                 .map(l => { try { return JSON.parse(l) as Record<string, string>; } catch { return null; } })
@@ -5070,7 +5075,7 @@ const crewclawRoutingPlugin = {
       const DEBUG_LOG_FILE = join(PROJECT_ROOT, "data/learning/agent-end-debug.jsonl");
       const MAX_DEBUG_ENTRIES = 200;
       appendJsonl(DEBUG_LOG_FILE, {
-        t: new Date().toISOString(),
+        t: nowCST(),
         agentId: ctx.agentId,
         sessionKey: ctx.sessionKey,
         success: event.success,
@@ -5150,7 +5155,7 @@ const crewclawRoutingPlugin = {
       const totalToolCalls = Object.values(toolUseCounts).reduce((s, n) => s + n, 0);
       if (totalToolCalls > 0) {
         appendJsonl(config.capabilityEventsFile, {
-          timestamp: new Date().toISOString(),
+          timestamp: nowCST(),
           agentId: ctx.agentId,
           sessionKey: ctx.sessionKey,
           userId,
@@ -5182,7 +5187,7 @@ const crewclawRoutingPlugin = {
       // ── Axis 2 信号采集：对话参与深度 ─────────────────────────────────
       // 记录每次对话的工具调用数 + 消息轮次，供反思引擎分析趋势
       appendJsonl(DIALOGUE_DEPTH_FILE, {
-        timestamp: new Date().toISOString(),
+        timestamp: nowCST(),
         agentId: ctx.agentId,
         userId,
         messageCount: msgs.length,
@@ -5284,7 +5289,7 @@ const crewclawRoutingPlugin = {
           );
           if (!recentDup) {
             appendJsonl(skillCandidatesFile, {
-              timestamp: new Date().toISOString(),
+              timestamp: nowCST(),
               source: "auto_detect",
               pattern_name: `工具组合：${comboKey}`,
               description: `Lucas 在一次对话中调用了 ${actionTools.length} 个工具（${comboKey}）。触发内容：${actualPrompt.slice(0, 120)}`,
@@ -5323,7 +5328,7 @@ const crewclawRoutingPlugin = {
               const obsId = `codebase-obs-edit-${Date.now()}`;
               const embedding = await embedText(document);
               await chromaUpsert("codebase_patterns", obsId, document, {
-                timestamp:    new Date().toISOString(),
+                timestamp:    nowCST(),
                 exitCode:     0,
                 success:      true,
                 matchRate:    -1,           // -1 标识 edit 路径，无 spec 吻合率比较
@@ -5530,7 +5535,7 @@ const crewclawRoutingPlugin = {
 
       // ── 所有 Agent：写入 corpus（微调语料 + DPO 原料）──────────────
       appendJsonl(config.corpusFile, {
-        timestamp: new Date().toISOString(),
+        timestamp: nowCST(),
         role: ctx.agentId,
         prompt: actualPrompt,
         response: lastAssistant,
@@ -5680,7 +5685,7 @@ const crewclawRoutingPlugin = {
         if (!urgent && !isOffPeak) {
           const queuedId = `queued_${Date.now()}`;
           appendJsonl(TASK_QUEUE_FILE, {
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
             requirement: req,
             intentType,
             wecomUserId,
@@ -5691,7 +5696,7 @@ const crewclawRoutingPlugin = {
             id: queuedId,
             requirement: req,
             submittedBy: wecomUserId,
-            submittedAt: new Date().toISOString(),
+            submittedAt: nowCST(),
             status: "queued",
             ...(lucasContext ? { lucasContext } : {}),
           });
@@ -5889,7 +5894,7 @@ const crewclawRoutingPlugin = {
               ].join("\n"), "pipeline", "lisa");
 
               appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
-                timestamp: new Date().toISOString(),
+                timestamp: nowCST(),
                 role: "lisa",
                 requirement_id: bugId,
                 ttl_days: 90,
@@ -5900,11 +5905,11 @@ const crewclawRoutingPlugin = {
               void addDecisionMemory({
                 decision_id: bugId,
                 agent: "lisa",
-                timestamp: new Date().toISOString(),
+                timestamp: nowCST(),
                 context: `${p.symptom} | 分析：${(lisaAnalysis ?? "").slice(0, 200)}`,
                 decision: lisaFixResponse.split("\n").filter(Boolean).slice(0, 2).join(" / "),
                 outcome: "delivered",
-                outcome_at: new Date().toISOString(),
+                outcome_at: nowCST(),
                 outcome_note: "Bug fix：Lisa 分析 → Andy 技术审阅 → Lisa 修复",
               } satisfies DecisionRecord);
 
@@ -6389,7 +6394,7 @@ const crewclawRoutingPlugin = {
           const reqIdEarly = p.requirement_id ?? "";
           if (reqIdEarly) {
             const threadIdEarly = `andy-to-lisa:${reqIdEarly}_collab`;
-            const placeholder: ThreadEntry[] = [{ role: "user", text: `spec submitted at ${new Date().toISOString()}`, ts: Date.now() }];
+            const placeholder: ThreadEntry[] = [{ role: "user", text: `spec submitted at ${nowCST()}`, ts: Date.now() }];
             try { writeFileSync(agentThreadFile(threadIdEarly), JSON.stringify(placeholder)); } catch {}
           }
         }
@@ -6433,7 +6438,7 @@ const crewclawRoutingPlugin = {
             }
             if (lisaResponse && !lisaBypassedOpencode) {
               appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
-                timestamp: new Date().toISOString(),
+                timestamp: nowCST(),
                 role: "lisa",
                 requirement_id: reqId,
                 ttl_days: 180,
@@ -6475,8 +6480,8 @@ const crewclawRoutingPlugin = {
                       capability_id: reqId,
                       title: capTitle,
                       entry_point: capEntryPoint,
-                      timestamp: new Date().toISOString(),
-                      last_used: new Date().toISOString(),
+                      timestamp: nowCST(),
+                      last_used: nowCST(),
                       requirement: p.spec.slice(0, 200),
                       status: "active",
                     });
@@ -6489,11 +6494,11 @@ const crewclawRoutingPlugin = {
               void addDecisionMemory({
                 decision_id: reqId,
                 agent: "lisa",
-                timestamp: new Date().toISOString(),
+                timestamp: nowCST(),
                 context: p.spec.slice(0, 300),
                 decision: lisaSummary,
                 outcome: "delivered",
-                outcome_at: new Date().toISOString(),
+                outcome_at: nowCST(),
                 outcome_note: "TUI 路径实现完成，语法验证通过",
               } satisfies DecisionRecord);
 
@@ -6502,11 +6507,11 @@ const crewclawRoutingPlugin = {
               void addDecisionMemory({
                 decision_id: `${reqId}-andy-outcome`,
                 agent: "andy",
-                timestamp: new Date().toISOString(),
+                timestamp: nowCST(),
                 context: p.spec.slice(0, 300),
                 decision: "spec 交付 Lisa 实现",
                 outcome: "implemented",
-                outcome_at: new Date().toISOString(),
+                outcome_at: nowCST(),
                 outcome_note: lisaSummary.slice(0, 200),
               } satisfies DecisionRecord);
 
@@ -6522,7 +6527,7 @@ const crewclawRoutingPlugin = {
                 const lucasAcceptance = await callGatewayAgent("lucas", lucasPrompt, 120_000);
                 if (lucasAcceptance) {
                   appendJsonl(join(PROJECT_ROOT, "data/corpus/lucas-corpus.jsonl"), {
-                    timestamp: new Date().toISOString(),
+                    timestamp: nowCST(),
                     role: "lucas",
                     requirement_id: reqId,
                     task: "delivery_acceptance",
@@ -6532,11 +6537,11 @@ const crewclawRoutingPlugin = {
                   void addDecisionMemory({
                     decision_id: reqId,
                     agent: "lucas",
-                    timestamp: new Date().toISOString(),
+                    timestamp: nowCST(),
                     context: p.spec.slice(0, 300),
                     decision: "TUI 路径验收并重包装",
                     outcome: "delivered",
-                    outcome_at: new Date().toISOString(),
+                    outcome_at: nowCST(),
                     outcome_note: "Lucas 验收并推送用户",
                   } satisfies DecisionRecord);
                   responseText = lucasAcceptance;
@@ -6557,11 +6562,11 @@ const crewclawRoutingPlugin = {
             void addDecisionMemory({
               decision_id: `req_${Date.now()}-andy-outcome`,
               agent: "andy",
-              timestamp: new Date().toISOString(),
+              timestamp: nowCST(),
               context: p.spec.slice(0, 300),
               decision: "spec 交付 Lisa 实现",
               outcome: "failed",
-              outcome_at: new Date().toISOString(),
+              outcome_at: nowCST(),
               outcome_note: errMsg.slice(0, 200),
             } satisfies DecisionRecord);
           }
@@ -6608,8 +6613,8 @@ const crewclawRoutingPlugin = {
               appendJsonl(followupFile, {
                 taskId: reqId,
                 userId: wecomUserId,
-                requirementSummary: p.requirement?.slice(0, 100) ?? "",
-                deliveredAt: new Date().toISOString(),
+                requirementSummary: specPreview.slice(0, 200),
+                deliveredAt: nowCST(),
                 status: "pending",
               });
             } catch { /* 写入失败不影响主流程 */ }
@@ -6673,11 +6678,11 @@ const crewclawRoutingPlugin = {
           void addDecisionMemory({
             decision_id: `andy_query_${Date.now()}`,
             agent: "andy",
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
             context: `需求澄清：${p.question.slice(0, 200)}`,
             decision: (lucasReply ?? "(无回复)").slice(0, 300),
             outcome: "clarified",
-            outcome_at: new Date().toISOString(),
+            outcome_at: nowCST(),
             outcome_note: "Andy 向 Lucas 发起需求澄清，已收到回复",
           });
 
@@ -6736,7 +6741,7 @@ const crewclawRoutingPlugin = {
                 agent: agentId,   // 与 addDecisionMemory 字段名一致，供 queryDecisionMemory 过滤
                 type: "research",
                 query: p.query.slice(0, 500),
-                timestamp: new Date().toISOString(),
+                timestamp: nowCST(),
               }, embedding)
             )
             .catch(() => { /* 写入失败不影响调研结果返回 */ });
@@ -6913,11 +6918,11 @@ const crewclawRoutingPlugin = {
           void addDecisionMemory({
             decision_id: `lisa-issue-${Date.now()}`,
             agent: "lisa",
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
             context: p.issue.slice(0, 200),
             decision: "实现遇阻，上报 Andy",
             outcome: andyReply ? "andy_responded" : "andy_no_reply",
-            outcome_at: new Date().toISOString(),
+            outcome_at: nowCST(),
             outcome_note: (andyReply ?? "").slice(0, 200),
           } satisfies DecisionRecord);
           return {
@@ -7094,7 +7099,7 @@ const crewclawRoutingPlugin = {
             const lisaResponse = await callGatewayAgentWithRetry("lisa", lisaPrompt, 600_000, threadId);
 
             appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
-              timestamp: new Date().toISOString(), source: "coordinator-integration", reqId, content: lisaResponse,
+              timestamp: nowCST(), source: "coordinator-integration", reqId, content: lisaResponse,
             });
 
             if (wecomUserId && wecomUserId !== "unknown") {
@@ -7163,11 +7168,11 @@ const crewclawRoutingPlugin = {
           void addDecisionMemory({
             decision_id: `andy-consult-${Date.now()}`,
             agent: "andy",
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
             context: p.question.slice(0, 200),
             decision: "技术可行性咨询 Lisa",
             outcome: lisaReply ? "lisa_responded" : "lisa_no_reply",
-            outcome_at: new Date().toISOString(),
+            outcome_at: nowCST(),
             outcome_note: (lisaReply ?? "").slice(0, 200),
           } satisfies DecisionRecord);
           return {
@@ -7234,11 +7239,11 @@ const crewclawRoutingPlugin = {
           void addDecisionMemory({
             decision_id: `lisa-eval-${Date.now()}`,
             agent: "lisa",
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
             context: p.spec_summary.slice(0, 200),
             decision: "请求独立验收",
             outcome: passed ? "eval_pass" : "eval_fail",
-            outcome_at: new Date().toISOString(),
+            outcome_at: nowCST(),
             outcome_note: evalReply.slice(0, 200),
           } satisfies DecisionRecord);
           return {
@@ -7311,11 +7316,11 @@ const crewclawRoutingPlugin = {
           void addDecisionMemory({
             decision_id: `andy-eval-${Date.now()}`,
             agent: "andy",
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
             context: p.spec_summary.slice(0, 200),
             decision: "请求 Spec 独立审查",
             outcome: passed ? "eval_pass" : "eval_fail",
-            outcome_at: new Date().toISOString(),
+            outcome_at: nowCST(),
             outcome_note: evalReply.slice(0, 200),
           } satisfies DecisionRecord);
           return {
@@ -7378,7 +7383,7 @@ const crewclawRoutingPlugin = {
         // 记录主动触达信号（Axis 2 信号3：响应率）
         // responded=true 表示用户在本次对话中确认了需求结果
         appendJsonl(PROACTIVE_RESPONSE_FILE, {
-          timestamp: new Date().toISOString(),
+          timestamp: nowCST(),
           userId,
           requirementId: requirement_id ?? null,
           requirementSummary: requirement_summary.slice(0, 200),
@@ -7522,7 +7527,7 @@ const crewclawRoutingPlugin = {
         const skillCandidatesFile = join(PROJECT_ROOT, "data/learning/skill-candidates.jsonl");
         try {
           appendJsonl(skillCandidatesFile, {
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
             pattern_name,
             description,
             suggested_form: suggested_form ?? "unknown",
@@ -7583,7 +7588,7 @@ const crewclawRoutingPlugin = {
             type: "knowledge_injection",
             topic,
             source,
-            timestamp: new Date().toISOString(),
+            timestamp: nowCST(),
           }, embedding);
           return {
             content: [{ type: "text", text: `✅ 已将「${topic}」路由给 Andy，他会在下次巡检时消化这个知识并形成改进提案。` }],
@@ -7632,7 +7637,7 @@ const crewclawRoutingPlugin = {
             visitor_user_id,
             tag,
             reason,
-            proposedAt: new Date().toISOString(),
+            proposedAt: nowCST(),
             status: "pending",
           });
           writeFileSync(pendingTagsFile, JSON.stringify(existing, null, 2), "utf8");

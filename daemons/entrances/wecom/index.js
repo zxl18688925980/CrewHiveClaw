@@ -38,6 +38,10 @@ const { chromium }   = require('playwright');
 const { TaskManager } = require('./task-manager');
 require('dotenv').config();
 
+// ── 时区统一：所有时间戳使用 CST（UTC+8）──
+const nowCST   = () => new Date(Date.now() + 8 * 3600000).toISOString().replace('Z', '+08:00');
+const todayCST = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+
 // ─── 全局路径常量（必须在任何函数定义之前）────────────────────────────────────
 const HOMEAI_ROOT    = path.join(__dirname, '../../../..');
 const WHISPER_MODEL  = path.join(HOMEAI_ROOT, 'models/whisper/ggml-base.bin');
@@ -554,7 +558,7 @@ async function describeImageWithLlava(imagePath) {
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
-    winston.format.timestamp(),
+    winston.format.timestamp({ format: () => nowCST() }),
     winston.format.json()
   ),
   transports: [
@@ -800,7 +804,7 @@ app.post('/wecom/callback', async (req, res) => {
             const ct = imgResp.headers['content-type'] || '';
             mainImageMime = ct.includes('png') ? 'image/png' : 'image/jpeg';
             // 落盘
-            const dateStr   = new Date().toISOString().slice(0, 10);
+            const dateStr   = todayCST();
             const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'images');
             fs.mkdirSync(uploadDir, { recursive: true });
             const imgExt      = mainImageMime === 'image/png' ? '.png' : '.jpg';
@@ -841,7 +845,7 @@ app.post('/wecom/callback', async (req, res) => {
               { responseType: 'arraybuffer', timeout: 60000 }
             );
             const vidBuffer = Buffer.from(vidResp.data);
-            const dateStr   = new Date().toISOString().slice(0, 10);
+            const dateStr   = todayCST();
             const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'videos');
             fs.mkdirSync(uploadDir, { recursive: true });
             const vidFilename = `main-${Date.now()}.mp4`;
@@ -878,7 +882,7 @@ app.post('/wecom/callback', async (req, res) => {
               { responseType: 'arraybuffer', timeout: 30000 }
             );
             const voiceBuffer = Buffer.from(voiceResp.data);
-            const dateStr   = new Date().toISOString().slice(0, 10);
+            const dateStr   = todayCST();
             const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'voices');
             fs.mkdirSync(uploadDir, { recursive: true });
             const voiceFilename = `main-${Date.now()}.amr`;
@@ -2384,7 +2388,7 @@ async function executeMainTool(toolName, toolInput) {
     try {
       let hb = fs.readFileSync(heartbeatPath, 'utf8');
       const { operation, observation } = toolInput;
-      const nowIso = new Date().toISOString();
+      const nowIso = nowCST();
       const nowLocal = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
       if (operation === 'append_observation') {
@@ -2966,7 +2970,7 @@ async function saveTechDocToObsidian(category, doc) {
   }
 
   // 文件名：日期-标题slug.md
-  const date = new Date().toISOString().split('T')[0];
+  const date = todayCST();
   const slug = (title || 'untitled')
     .slice(0, 40)
     .replace(/[^\w\u4e00-\u9fa5]/g, '-')
@@ -3813,7 +3817,7 @@ function startBotLongConnection() {
 
     // 逐张图片下载 + GLM vision 分析
     const imageDescs = [];
-    const dateStr = new Date().toISOString().slice(0, 10);
+    const dateStr = todayCST();
     const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'images');
     fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -4360,7 +4364,7 @@ app.post('/api/wecom/send-message', async (req, res) => {
     if (!entry) return res.status(404).json({ success: false, error: `未找到访客：${visitorName}` });
     const token = entry[0].toLowerCase();
     if (!visitorPendingMessages[token]) visitorPendingMessages[token] = [];
-    visitorPendingMessages[token].push({ id: Date.now(), text: stripMarkdownForWecom(text), ts: new Date().toISOString() });
+    visitorPendingMessages[token].push({ id: Date.now(), text: stripMarkdownForWecom(text), ts: nowCST() });
     logger.info('访客消息已推送到队列', { visitorName, token });
     return res.json({ success: true, userId, channel: 'visitor-push' });
   }
@@ -4455,7 +4459,7 @@ async function markCommitmentNotified(id, outcome = 'proactive_notified') {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ids: [id],
-        metadatas: [{ outcome, notified_at: new Date().toISOString() }],
+        metadatas: [{ outcome, notified_at: nowCST() }],
       }),
     });
     logger.info('承诺标记为已触达', { id, outcome });
@@ -4581,7 +4585,7 @@ async function runMainMonitorLoop() {
 
     // 更新 HEARTBEAT.md 的运行记录
     try {
-      const nowIso = new Date().toISOString();
+      const nowIso = nowCST();
       let hb = fs.readFileSync(heartbeatPath, 'utf8');
       hb = hb.replace(/- 上次健康检查：.*/,  `- 上次健康检查：${nowIso}`);
       if (toolsCalled.includes('scan_lucas_quality')) {
@@ -4701,7 +4705,7 @@ ${precomputedSkillCandidates}
         logger.info('Andy HEARTBEAT 巡检完成', { reply: (reply || '').slice(0, 150) });
         // 更新 Andy HEARTBEAT.md 时间戳
         try {
-          const nowIso = new Date().toISOString();
+          const nowIso = nowCST();
           let hb = fs.readFileSync(andyHbPath, 'utf8');
           if (hb.includes('- 上次巡检：')) {
             hb = hb.replace(/- 上次巡检：.*/, `- 上次巡检：${nowIso}`);
