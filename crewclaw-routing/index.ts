@@ -4881,7 +4881,23 @@ const crewclawRoutingPlugin = {
         const cleanPrompt = sessionPrompt.get(ctx.sessionKey ?? "") ?? (event.prompt ?? "");
         if (MEMORY_INTENT_RE.test(cleanPrompt)) {
           try {
-            const intentEmbedding = await embedText(cleanPrompt.slice(0, 400));
+            // 第一步：原始 query embedding，用于 Topic-first 查找相关话题
+            const baseEmbedding = await embedText(cleanPrompt.slice(0, 400));
+            // 第二步：Topic-first query rewriting——私聊时找相关 Kuzu 话题，扩展查询
+            // 「第十条」→「抖音成长故事 第十条 脚本完成 启灵自我成长故事」命中率大幅提升
+            let intentEmbedding = baseEmbedding;
+            if (!isGroup) {
+              const relatedTopics = await queryRelevantTopics(baseEmbedding, userId);
+              if (relatedTopics.length > 0) {
+                const topicKeywords = relatedTopics
+                  .slice(0, 3)
+                  .map(t => `${t.topicName} ${t.context.slice(0, 60)}`.trim())
+                  .join(" ");
+                const expandedQuery = `${cleanPrompt.slice(0, 300)} ${topicKeywords}`.trim();
+                intentEmbedding = await embedText(expandedQuery.slice(0, 500));
+              }
+            }
+            // 第三步：用扩展后的 embedding 检索对话记忆
             // where：私聊限定当前用户，群聊不过滤（与 recall_memory 默认 scope=all 对齐）
             const intentWhere = isGroup ? undefined : { userId: { $eq: userId } };
             const intentRaw = await chromaQuery("conversations", intentEmbedding, 12, intentWhere);
