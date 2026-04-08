@@ -2415,7 +2415,7 @@ async function runAndyPipeline(params: {
   });
 
   // 通报系统工程师：流水线启动
-  void notifyEngineer(`流水线启动 [${requirementId}]\n发起人：${params.wecomUserId}\n\n━━ 需求原文 ━━\n${params.requirement}`);
+  void notifyEngineer(`流水线启动 [${requirementId}]\n发起人：${params.wecomUserId}\n\n━━ 需求原文 ━━\n${params.requirement}`, "pipeline", "lucas");
 
   // Lucas 路由决策记忆：记录"为这个需求触发了流水线"
   void addDecisionMemory({
@@ -2512,7 +2512,7 @@ async function runAndyPipeline(params: {
         markTaskStatus(requirementId, "completed");
       } else {
         markTaskStatus(requirementId, "failed");
-        void notifyEngineer(`流水线异常 [${requirementId}]\nAndy 响应但未触发 Lisa（无协作线程文件）`);
+        void notifyEngineer(`流水线异常 [${requirementId}]\nAndy 响应但未触发 Lisa（无协作线程文件）`, "pipeline", "lucas");
         // Andy 没有启动实现流水线——让 Lucas 判断原因并决定下一步
         // Lucas 有家人背景/记忆，能判断：①自己补充背景重新触发 ②问用户一个关键问题 ③判断是技术问题上报
         void (async () => {
@@ -2550,11 +2550,11 @@ async function runAndyPipeline(params: {
     const threadFile = join(AGENT_THREAD_DIR, `andy-to-lisa:${requirementId}_collab.json`);
     if (existsSync(threadFile)) {
       // Andy 已触发 Lisa，任务保持 running，Lisa 的 async IIFE 负责最终状态
-      void notifyEngineer(`Andy 超时但已触发 Lisa [${requirementId}]，Lisa 在后台继续执行`);
+      void notifyEngineer(`Andy 超时但已触发 Lisa [${requirementId}]，Lisa 在后台继续执行`, "pipeline", "lucas");
     } else {
       // Andy 未触发 Lisa，真正的失败
       markTaskStatus(requirementId, "failed");
-      void notifyEngineer(`流水线失败 [${requirementId}]\n\n━━ 错误详情 ━━\n${rawErr}`);
+      void notifyEngineer(`流水线失败 [${requirementId}]\n\n━━ 错误详情 ━━\n${rawErr}`, "pipeline", "lucas");
       // 通过 Lucas 包装成人话再推送，避免裸机器错误出现在家人界面
       try {
         const lucasPrompt = [
@@ -2746,7 +2746,21 @@ async function launchOpenCodeBackground(
 
   // ── 监控通知：opencode 启动 ─────────────────────────────────────────────
   const opencodeTaskDesc = task.split("\n").filter(Boolean).slice(0, 2).join(" ").slice(0, 120);
-  void notifyEngineer(`【opencode启动】[${sessionId}]\n${opencodeTaskDesc}`);
+  void notifyEngineer(`【opencode启动】[${sessionId}]\n${opencodeTaskDesc}`, "pipeline", "lisa");
+  // Lucas 知情：Lisa 已开始编写代码（用户可能在等待，Lucas 决定是否主动告知进展）
+  if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
+    void callGatewayAgent(
+      "lucas",
+      [
+        `【Lisa 开始编写代码 · ${_taskRequirementId || sessionId}】`,
+        `opencode 已启动，Lisa 正在实现代码，这个过程可能需要几分钟到十几分钟，完成后 Andy 会验收。`,
+        ``,
+        `用户 ID：${_taskRequesterUserId}`,
+        `如果用户在问进展，可以告知"正在实现中，稍等"；如果用户没有追问则不必主动打扰。`,
+      ].join("\n"),
+      20_000,
+    );
+  }
 
   proc.on("close", (code) => {
     session.completed = true;
@@ -2877,7 +2891,7 @@ async function launchOpenCodeBackground(
     const taskSummary = task.split("\n").filter(Boolean).slice(0, 2).join(" ").slice(0, 150);
 
     // ── 监控通知：opencode 执行完成 ──────────────────────────────────────────
-    void notifyEngineer(`【opencode${code === 0 ? "完成" : `失败(exit${code})`}】[${sessionId}]\n${taskSummary}`);
+    void notifyEngineer(`【opencode${code === 0 ? "完成" : `失败(exit${code})`}】[${sessionId}]\n${taskSummary}`, "pipeline", "lisa");
 
     if (code === 0) {
       void (async () => {
@@ -2914,6 +2928,21 @@ async function launchOpenCodeBackground(
         }
       })();
     } else {
+      // 立即告知 Lucas opencode 失败，不等 Andy 5 分钟分析完再告知
+      // Andy 分析完后还会再次告知 Lucas 更具体的进展（见下方 IIFE）
+      if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
+        void callGatewayAgent(
+          "lucas",
+          [
+            `【实现遇到技术问题 · ${_taskRequirementId || sessionId}】`,
+            `代码实现遇到了技术问题，Andy 正在分析原因和决定下一步方向，稍后会给你进展更新。`,
+            ``,
+            `用户 ID：${_taskRequesterUserId}`,
+            `用户可能在等待，你可以告知"实现遇到了技术阻塞，团队正在处理，稍等"；Andy 分析完后我会再告诉你具体结论。`,
+          ].join("\n"),
+          20_000,
+        );
+      }
       void (async () => {
         const andyAssessment = await callGatewayAgent(
           "andy",
@@ -6205,7 +6234,7 @@ const crewclawRoutingPlugin = {
                   );
                 }
                 // 通报系统工程师：Coordinator 并行调度启动
-                void notifyEngineer(`【${reqId}】${subSpecs.length}个子任务并行启动：${subSpecs.map(s => s.title).join(" / ")}`);
+                void notifyEngineer(`【${reqId}】${subSpecs.length}个子任务并行启动：${subSpecs.map(s => s.title).join(" / ")}`, "pipeline", "lisa");
 
                 // 异步并行执行，不阻塞工具返回给 Andy
                 // Andy 拿到聚合结果后可自主综合并调用 trigger_lisa_integration
@@ -6237,7 +6266,7 @@ const crewclawRoutingPlugin = {
                     ].join("\n");
 
                     // 通报系统工程师：Coordinator 并行阶段完成，Andy 综合中
-                    void notifyEngineer(`【${reqId}】Lisa并行完成：${succeeded}成功/${failed}失败，Andy综合中`);
+                    void notifyEngineer(`【${reqId}】Lisa并行完成：${succeeded}成功/${failed}失败，Andy综合中`, "pipeline", "lisa");
                     // 触发 Andy 综合：新的独立 session，Andy 在干净上下文里接收完成报告
                     // 不带 threadId，避免历史噪音干扰判断
                     // Andy 验收通过后必须输出 Lucas交付：格式，插件层提取后告知 Lucas
@@ -7011,6 +7040,24 @@ const crewclawRoutingPlugin = {
           };
         }
 
+        // Lucas 知情：Lisa 遇到实现阻塞，Andy 在决策（用户可能在等，Lucas 可告知"正在处理"）
+        if (p.requirement_id) {
+          const issueTask = readTaskRegistry().find(t => t.id === p.requirement_id);
+          if (issueTask?.submittedBy) {
+            void callGatewayAgent(
+              "lucas",
+              [
+                `【实现遇到阻塞，团队处理中 · ${p.requirement_id}】`,
+                `Lisa 在实现代码时遇到了技术阻塞，已向 Andy 反馈，Andy 正在决策下一步方向后 Lisa 继续实现。`,
+                ``,
+                `用户 ID：${issueTask.submittedBy}`,
+                `如果用户在问进展，可以说"正在处理一个技术细节，快好了"，不需要说具体是什么阻塞问题。`,
+              ].join("\n"),
+              15_000,
+            );
+          }
+        }
+
         const parts = [
           `【来自Lisa·实现阻塞反馈】`,
           p.requirement_id ? `需求 ID：${p.requirement_id}` : "",
@@ -7273,6 +7320,23 @@ const crewclawRoutingPlugin = {
           `请评估技术可行性：1) 可行/不可行 2) 具体风险或障碍 3) 建议的实现方向或替代方案。`,
         ].filter(Boolean).join("\n");
 
+        // Lucas 知情：Andy 开始与 Lisa 确认技术方案（在调用 Lisa 之前就告知，避免用户等待期间无信息）
+        if (p.requirement_id) {
+          const consultTask = readTaskRegistry().find(t => t.id === p.requirement_id);
+          if (consultTask?.submittedBy) {
+            void callGatewayAgent(
+              "lucas",
+              [
+                `【Andy 与 Lisa 确认技术方案 · ${p.requirement_id}】`,
+                `Andy 在设计方案时遇到技术不确定点，正在和 Lisa 确认可行性，确认后继续写方案再交给 Lisa 实现。`,
+                ``,
+                `用户 ID：${consultTask.submittedBy}`,
+                `如果用户在问进展，可以告知"开发团队在核对技术细节，快了"；不必追加到每次回复里。`,
+              ].join("\n"),
+              15_000,
+            );
+          }
+        }
         try {
           const lisaReply = await callGatewayAgentWithRetry("lisa", prompt, 300_000, threadId);
           void addDecisionMemory({
@@ -7346,6 +7410,19 @@ const crewclawRoutingPlugin = {
         try {
           const evalReply = await callGatewayAgent("andy-evaluator", evalPrompt, 300_000, threadId);
           const passed = evalReply.includes("PASS") && !evalReply.includes("FAIL");
+          // Evaluator FAIL → 立即通知 Lucas（需求方），避免需求方空等
+          if (!passed) {
+            const lucasNotifyPrompt = [
+              `【Lisa-evaluator 评估未通过】`,
+              `需求 ID：${p.requirement_id ?? "未知"}`,
+              ``,
+              `Lisa 的实现方案未被评估通过，需要 Andy 重新修订。`,
+              ``,
+              `【评估反馈摘要】`,
+              evalReply.slice(0, 500),
+            ].filter(Boolean).join("\n");
+            void callGatewayAgent("lucas", lucasNotifyPrompt, 60_000);
+          }
           void addDecisionMemory({
             decision_id: `lisa-eval-${Date.now()}`,
             agent: "lisa",
@@ -7423,6 +7500,19 @@ const crewclawRoutingPlugin = {
         try {
           const evalReply = await callGatewayAgent("lisa-evaluator", evalPrompt, 300_000, threadId);
           const passed = evalReply.includes("PASS") && !evalReply.includes("FAIL");
+          // Evaluator FAIL → 立即通知 Lucas（需求方），避免需求方空等
+          if (!passed) {
+            const lucasNotifyPrompt = [
+              `【Lisa-evaluator 评估未通过】`,
+              `需求 ID：${p.requirement_id ?? "未知"}`,
+              ``,
+              `Andy 的设计方案未被评估通过，需要 Andy 重新修订后再提交。`,
+              ``,
+              `【评估反馈摘要】`,
+              evalReply.slice(0, 500),
+            ].filter(Boolean).join("\n");
+            void callGatewayAgent("lucas", lucasNotifyPrompt, 60_000);
+          }
           void addDecisionMemory({
             decision_id: `andy-eval-${Date.now()}`,
             agent: "andy",
@@ -7564,12 +7654,12 @@ const crewclawRoutingPlugin = {
     //
     // 不适用：家人可见的告警或通知，那些走 alert_owner 或 send_message。
 
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "通知系统工程师",
       name: "notify_engineer",
       description: [
-        "Lucas 专属工具：通过系统工程师通道（企业应用，显示「系统工程师」）向系统工程师发送通知。",
-        "适用于需要工程师介入的情况（流水线持续失败、超出能力边界、需要架构干预）以及流程通报（流水线关键结果）。",
+        "Lucas / Andy / Lisa 通用：通过系统工程师通道（企业应用，显示「系统工程师」）向系统工程师发送观测通知。",
+        "适用于流水线关键状态通报（启动/完成/失败）、需要工程师关注的技术问题、以及其他工程师需要知情的情况。",
         "消息不经过家庭 bot 通道，家庭成员不可见。",
         "type 参数：'intervention'（干预请求，🔧）| 'pipeline'（流程通报，📋）| 'info'（一般信息，ℹ️）",
         "不要用于普通家庭通知，那些走 send_message；紧急告警可同时调用 alert_owner。",
@@ -7578,13 +7668,14 @@ const crewclawRoutingPlugin = {
         message: Type.String({ description: "通知内容（简洁描述，100字以内）" }),
         type: Type.Optional(Type.String({ description: '"intervention" | "pipeline" | "info"（默认 info）' })),
       }),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+      execute: async (_toolCallId, params, _toolCtx): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const callerAgentId = (_toolCtx as { agentId?: string })?.agentId ?? "lucas";
         const { message, type = "info" } = params as { message: string; type?: string };
         try {
           const resp = await fetch(CHANNEL_NOTIFY_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message, type }),
+            body: JSON.stringify({ message, type, fromAgent: callerAgentId }),
             signal: AbortSignal.timeout(10_000),
           });
           if (!resp.ok) {
@@ -7593,14 +7684,14 @@ const crewclawRoutingPlugin = {
           }
           void writeAgentInteraction({
             requirementId: undefined,
-            agentId: "lucas",
+            agentId: callerAgentId,
             toAgent: "engineer",
             interactionType: `notify_${type}`,
             content: message,
           });
           return {
             content: [{ type: "text", text: `✅ 已通过系统工程师通道发送：${message}` }],
-            details: { notified: true, type },
+            details: { notified: true, type, fromAgent: callerAgentId },
           };
         } catch (e) {
           return {
