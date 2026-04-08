@@ -92,8 +92,11 @@ try { mkdirSync(AGENT_THREAD_DIR, { recursive: true }); } catch {}
 // ── 增量蒸馏冷却（事件驱动感知侧，30 分钟/用户）────────────────────────────
 const DISTILL_COOLDOWN_MS               = 30 * 60 * 1000;
 const lastDistillTrigger                = new Map<string, number>();
-const ACTIVE_THREAD_DISTILL_COOLDOWN_MS = 6 * 60 * 60 * 1000;
-const lastActiveThreadDistillTrigger    = new Map<string, number>();
+const ACTIVE_THREAD_DISTILL_COOLDOWN_MS  = 6 * 60 * 60 * 1000;
+const lastActiveThreadDistillTrigger     = new Map<string, number>();
+// 盲区蒸馏：recall_memory 找不到记录时按需触发，4 小时/用户冷却
+const BLIND_SPOT_DISTILL_COOLDOWN_MS     = 4 * 60 * 60 * 1000;
+const lastBlindSpotDistillTrigger        = new Map<string, number>();
 const KUZU_PYTHON3_BIN    = "/opt/homebrew/opt/python@3.11/bin/python3.11";
 
 type ThreadEntry = { role: "user" | "assistant"; text: string; ts: number };
@@ -8548,7 +8551,24 @@ const crewclawRoutingPlugin = {
             parts.push(`找到 ${results.length} 条语义相关对话：\n\n${lines.join("\n---\n")}`);
           }
           if (parts.length === 0) {
-            return { content: [{ type: "text", text: "记忆库中没有找到相关记录。（注：当前对话本轮之前的历史已写入记忆库，可被检索到；本轮刚发生的对话尚未写入。）" }], details: { query, count: 0 } };
+            // ── 盲区蒸馏：记忆空白时按需触发蒸馏，下次对话 inject.md 会更新 ──
+            if (recallUserId && !recallUserId.startsWith("visitor:")) {
+              const now = Date.now();
+              const lastBs = lastBlindSpotDistillTrigger.get(recallUserId) ?? 0;
+              if (now - lastBs >= BLIND_SPOT_DISTILL_COOLDOWN_MS) {
+                lastBlindSpotDistillTrigger.set(recallUserId, now);
+                // fire-and-forget：蒸馏 + 渲染，下次对话 inject.md 会带上这段历史
+                const distillScript = join(PROJECT_ROOT, "scripts/distill-memories.py");
+                const renderScript  = join(PROJECT_ROOT, "scripts/render-knowledge.py");
+                const dp = spawn(KUZU_PYTHON3_BIN, [distillScript, "--user", recallUserId, "--force"], { detached: true, stdio: "ignore" });
+                dp.unref();
+                dp.once("close", () => {
+                  const rp = spawn(KUZU_PYTHON3_BIN, [renderScript, "--user", recallUserId], { detached: true, stdio: "ignore" });
+                  rp.unref();
+                });
+              }
+            }
+            return { content: [{ type: "text", text: "记忆库中没有找到相关记录。（注：当前对话本轮之前的历史已写入记忆库，可被检索到；本轮刚发生的对话尚未写入。已触发后台记忆整理，稍后再问可能会有更准确的结果。）" }], details: { query, count: 0 } };
           }
           // 当前轮提示：提醒 Lucas 本轮内容尚未写入，不要以为"搜不到"就否认当前对话
           const sessionNote = "\n\n（以上结果来自持久化记忆库。当前轮刚发生的对话尚未写入——若家人刚才在本条消息里说了什么，请直接用对话内容回答，不需要工具核实。）";
