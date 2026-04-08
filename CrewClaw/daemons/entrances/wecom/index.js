@@ -4301,7 +4301,7 @@ async function sendLongWeComMessage(userId, text) {
 }
 
 app.post('/api/wecom/notify-engineer', async (req, res) => {
-  const { message, type = 'info' } = req.body || {};
+  const { message, type = 'info', fromAgent = 'pipeline' } = req.body || {};
   if (!message) {
     return res.status(400).json({ success: false, error: 'message is required' });
   }
@@ -4309,7 +4309,8 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
     return res.status(500).json({ success: false, error: 'WECOM_OWNER_ID not configured' });
   }
   const icon = type === 'intervention' ? '🔧' : type === 'pipeline' ? '📋' : 'ℹ️';
-  const text = `${icon} [Lucas → 系统工程师]\n${message}`;
+  const agentLabel = { lucas: 'Lucas', andy: 'Andy', lisa: 'Lisa', main: 'Main', pipeline: '系统' }[fromAgent] ?? fromAgent;
+  const text = `${icon} [${agentLabel} → 系统工程师]\n${message}`;
   try {
     await sendLongWeComMessage(WECOM_OWNER_ID, text);
     logger.info('notify-engineer 已发送 (app)', { type, length: message.length });

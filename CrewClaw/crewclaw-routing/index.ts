@@ -2251,7 +2251,7 @@ async function notifyEngineer(message: string, type: "pipeline" | "intervention"
   void fetch(CHANNEL_NOTIFY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, type }),
+    body: JSON.stringify({ message, type, fromAgent }),
   }).catch(() => {});
   // 同步写入 agent_interactions，让工程师通知可检索、可审计
   void writeAgentInteraction({
