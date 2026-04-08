@@ -1,0 +1,3837 @@
+# 项目概述
+
+---
+
+## 目录
+
+**Part 1：CrewHiveClaw 架构**
+- 一、架构概述
+- 二、总体架构
+**Part 2：CrewHiveClaw 设计哲学**
+- 一、Agentic Organization：概念终点
+- 二、组织转型路径：旁挂而非颠覆
+- 三、分布式智能演化
+- 四、多层架构原则：效率与博弈的均衡
+- 五、四角色的专精分工
+- 六、Data / Knowledge / Capability：AI 进化的物质条件
+- 七、进化层次框架：增强到扩张的坐标系
+- 八、进化方向与合法性原则
+- 九、模型蒸馏与统一路由：本地专精和持续进化的技术基础
+**Part 3：CrewClaw 框架实现**
+- 一、框架 / 实例职责边界
+- 二、认知基础层：框架侧机制契约
+- 三、整体架构
+- 四、CrewClaw 执行层设计
+- 五、角色体系与协作设计
+- 六、记忆系统与角色的自我进化
+- 七、能力扩张与组织自进化设计
+- 八、可复制支撑机制
+- 九、系统监控与维护
+- 十、实例层配置规范
+- 十一、新实例部署 SOP
+**Part 4：HomeAI 实例部署参考**
+- 零、HomeAI 整体部署架构
+- 一、HomeAI 实例部署参考值
+- 二、HomeAI 家庭身份配置实例
+- 三、HomeAI Channel 设计实例
+
+**Part 5：云端进化设计**
+- 一、云端架构
+
+---
+
+# Part 1：CrewHiveClaw 架构
+
+## 一、架构概述
+
+**CrewHiveClaw** 是本系统的架构名称。它以 **Agentic Organization**（人、AI Agent、组织结构三者真正协作）为概念锚点，最终支撑**Agiantic-Organized Society**构想，将以下三个核心机制提炼为可复制的组织 AI 化框架：
+
+| 机制               | 含义                                           |
+| ---------------- | -------------------------------------------- |
+| **多角色分工**        | Lucas 浸入信息流积累组织智能，Andy/Lisa 按需生长能力，系统工程师超然观测 |
+| **双层自进化**        | 本地层保持组织专精，云端层积累集体智慧并反哺各实例                    |
+| **Channel 信息接入** | 从组织通信渠道持续接入信息流，AI 在场而不只是响应请求                 |
+
+**技术层次**：CrewHiveClaw 构建在 OpenClaw 平台之上，两者职责严格分层：
+
+| 层 | 解决什么 | 具体机制（开箱即有，无需另建）|
+|---|---------|----------------------|
+| **OpenClaw** | **个体基础设施** | 8文件体系（Agent 完整自我定义）/ Gateway + hooks（信息全链路采集）/ **Agent 自写 workspace**（L1 即激活的自主进化路径，修改后下次 session 立即生效）/ **MEMORY.md 常青**（不参与时间衰减，沉淀永不褪色）/ Skills 分层覆盖（workspace 层优先级最高，可覆盖框架层）/ Heartbeat + cron（主动行为时钟）|
+| **CrewHiveClaw** | **组织基础设施** | 多 Agent 路由（subagents.allowAgents 权限白名单）/ ChromaDB 跨 session 记忆（per-message 独立 session + 语义注入替代 session 历史）/ V字流水线（角色间协作编排）/ 三层路由引擎（路由即学习）|
+
+> **⚠️ 多实例隔离原则（部署新组织前必读）**：OpenClaw 采用「单用户信任」模型——**同一 Gateway 上的调用者可以互相看到数据**，sessionKey 是路由控制，不是授权边界。这是设计意图，不是漏洞。因此：**每个组织实例（HomeAI、小姨公司、下一个实例）必须运行在独立的 Gateway 上**（独立 OS 用户或独立主机）。共用一个 Gateway 等同于数据共享，在多组织场景下是安全边界缺失。
+
+OpenClaw 打好地基，CrewHiveClaw 在上面建组织。HomeAI 是 CrewHiveClaw 的第一个组织实例。
+
+## 二、总体架构
+
+```
+系统工程师（超然观测 / 越界矫正 / 系统进化方向）
+        ↕  CLAUDE.md + 知识库（元层级，与组织信息流隔离）
+┌──────────────────────────────────────────────────────────┐
+│              云端 HiveClaw 进化系统（架构预留，本地验证优先）   │
+│  业务大师 / 架构大师 / 实现大师 → 三合一蒸馏              │
+│  Readme 进化引擎 → 按组织类型生成可复制部署文档           │
+└──────────────────────┬───────────────────────────────────┘
+                       ↑ 去标识化语料上传
+┌──────────────────────┴───────────────────────────────────┐
+│              本地 CrewClaw 运行进化系统（组织实例）         │
+│                                                           │
+│  Channel 层：持续接入组织信息流，身份映射，信息管控         │
+│                                                           │
+│  Gateway + 三层路由引擎                                    │
+│    意图路由层（直接响应 / 触发协作 / 调工具）        │
+│    模型路由层（本地/云端，数据驱动，Axis 3 进化）    │
+│    工具路由层（Skill / MCP，Axis 1 能力进化）        │
+│                                                           │
+│  三角色（浸入信息流 / 方案设计 / 代码实现）                 │
+│    └── 各角色按需创建虚拟小弟 / 成员数字分身               │
+│                                                           │
+│  三轴自进化学习管道                                        │
+│    Axis 1：能力进化（持续引入更强大有效的能力，淘汰低效能力）  │
+│    Axis 2：协作进化（Lucas 与组织成员横向协作越来越准确）     │
+│    Axis 3：本地专精进化（路由比例上升 + 语料微调正循环）     │
+│                                                           │
+│  实例配置层：组织专属身份 / 知识库 / 决策记忆               │
+└──────────────────────────────────────────────────────────┘
+```
+
+# Part 2：CrewHiveClaw 设计哲学
+
+## 一、Agentic Organization：概念终点
+
+组织里每天都在发生大量的协作：讨论问题、拍板决策、解决冲突、交付成果。这些过程产生的上下文，是理解一个组织如何运转的最真实素材。
+
+但这些东西一直在消散。
+
+这套架构的核心命题是：**让 AI 真正在场，持续理解组织，并从组织的真实运转中生长出服务组织的能力**——而不是等人提需求、做一个交付一个。传统组织里，人做决策，工具执行。数字化组织里，人做决策，软件自动化执行。**Agentic Organization 里，人、AI Agent、组织结构三者之间是真正的协作关系**——每一方都有主体性，每一方都在学习，"工具"与"协作者"的边界消解。
+
+**家庭是最小的组织单元**，也是最好的起点——关系最紧密，信任最高，信息流最自然，最容易验证 AI 真正成为组织成员的可能性。**HomeAI** 是 CrewHiveClaw 在家庭场景的第一个实例验证。验证成功即证明这套架构在任意组织中的可行性。
+
+这套架构如何通向 Agentic Organization：
+
+```
+组织通信渠道（Lucas 持续浸入，不只是响应请求）
+        ↓
+  组织协作上下文（讨论/过程/冲突/决策）沉淀为组织智能
+        ↓
+  Lucas 真正理解这个组织的运转方式
+        ↓ 指挥方向               ↓ 并行
+  Andy/Lisa 做出符合组织      为每个成员创建专属 Agent
+  基因的能力                  （个人 AI 协作者，Lucas 管生命周期）
+        ↓
+  两层学习结构：成员 Agent 学个人，Lucas 学组织
+```
+
+## 二、组织转型路径：旁挂而非颠覆
+
+CrewHiveClaw 架构进入一个组织的方式是**旁挂**，而不是颠覆。
+
+现有角色不动，现有软件系统不动，现有的协作流程不动。Lucas 从信息流的侧面挂进来，积累上下文、提供帮助。Andy/Lisa 从组织真实运转中涌现出来的需求里，逐步补强组织原来做不到或做得很费力的事。
+
+转型路径是一条从内部生长的曲线：
+
+```
+旁挂接入（不冲击现有结构）
+     ↓
+浸入信息流（积累组织协作上下文）
+     ↓
+从内部优化（增强已有角色的能力）
+     ↓
+扩张组织能做的事（而不是精简组织的人）
+```
+
+不是「裁汰然后替代」，而是「增强然后扩张」。
+
+之所以选择这条路，不只是为了降低接受阻力——它符合人类社会系统的真实演进规律。电力没有「颠覆」人类组织，它被已有的角色和组织逐步采纳，在博弈中重塑了一切。最终脱颖而出的，是能充分利用电力的组织。AI 进入组织，与此相同。
+
+**哪个组织能脱颖而出，不是被 AI 选出来的，而是在人类社会的系统博弈中演进出来的。**
+
+## 三、分布式智能演化
+
+> 保持专精，同时从群体中获得最大支撑。
+
+### 核心张力
+
+当前 AI 发展面临一个根本矛盾：
+
+```
+集中式 AI（通用大模型）      纯本地 AI
+  集体智慧最大化               个体专精最大化
+  但不懂「你」                 但孤岛，无法进化
+  数据主权丧失                 能力天花板低
+```
+
+全知全能的 AI 短期内难以实现，各行各业的数据主权博弈也不允许数据全部汇聚。
+人类真正需要的，是**更懂我的 AI**，而不是更通用的 AI。
+
+### 选择的路径：每个实例（家庭/业务作战单元）保持本地专精，同时通过云端持续获得集体智慧的支撑。
+
+```
+群体集体智慧（云端）
+  ↕ 方法论流通，数据不出本地
+个体本地专精（本地）
+  持续理解这个家庭/业务作战单元
+  私有数据永不离开
+```
+
+**三个核心原则：**
+
+| 原则        | 含义                                    |
+| --------- | ------------------------------------- |
+| **专精不漂移** | 本地模型始终围绕这个家庭/业务作战单元优化，不被通用性稀释         |
+| **群体赋能**  | 云端从所有实例提炼集体智慧，蒸馏后反哺每个本地实例             |
+| **路由即进化** | 三层路由每次决策都在积累数据，同时驱动能力、协作、本地专精三个维度持续进化 |
+
+## 四、多层架构原则：效率与博弈的均衡
+
+分布式演化落地到具体部署时，面临一个组织层面的设计问题：层次如何安排？
+
+两个核心角色始终存在：
+
+| 角色          | 定义                | 职责               |
+| ----------- | ----------------- | ---------------- |
+| **最小组织单元**  | 拥有统一控制权和共享情境的最小主体 | 专精发生的地方；私有数据不出边界 |
+| **组织能力核心层** | 跨单元积累集体智能的枢纽      | 提炼集体智慧；向下赋能各实例   |
+
+两者之间可以有**中间层**——部门层、分公司层、行业协会层。当控制权争议或数据主权要求某段数据流无法直通时，中间层自然出现。**中间层不是设计缺陷，是组织博弈的映射。** 这和组织转型路径（旁挂而非颠覆）是同一个逻辑：不强制推倒既有控制结构，而是在理解博弈现实的基础上逐步推动扁平化。
+
+**极端优化形态：双层扁平**
+
+当组织信任充分、数据流无壁垒时，压缩掉所有中间层 → 双层扁平，效率最高：
+
+- 路由延迟最低（本地直连核心，无中转）
+- 语料积累最快（无中间层过滤）
+- 系统演进速度最快（改进信号直达最小单元）
+
+| 层次数          | 适用场景           | 特征             |
+| ------------ | -------------- | -------------- |
+| **双层（极端优化）** | 家庭、独立小团队、初创公司  | 完整自治，信任充分，直连核心 |
+| **三层**       | 中型企业、医疗集团      | 存在数据主权边界或汇报层级  |
+| **多层**       | 大型集团、跨国组织、行业联盟 | 控制结构复杂，多级博弈    |
+
+家庭场景天然是极端优化形态：完整自治权，信任无阻，直连核心层。这是选择用家庭验证的原因之一——越接近极端优化，越能清晰观察架构的演进效果，不被中间层博弈噪音干扰。从多层博弈形态向双层极端优化形态演进，是系统在一个组织里长期价值的量化体现。
+
+## 五、四角色分工
+
+业务是每个组织都有的，但软件研发能力不是。在没有全知全能 AI 之前，业务的数字化运转依赖大量的信息架构设计和软件开发——而传统定制软件方案代价高、周期长、无法适应各组织的个性化要求。
+
+这四个角色的设计出发点，正是用 AI 支撑的工具研发角色（Andy/Lisa），让每个组织都能以极低代价获得专属的数字化和智能化能力——业务需求由 Lucas 理解和提炼，Andy 负责工具设计，Lisa 负责工具实现，系统工程师作为超然的构建者和观测者保持系统方向。Andy/Lisa 造的是**工具**：首先服务于 Lucas（让他能做更多事、陪得更好），其次服务于系统自身的进化（让系统在系统工程师监控下越来越强）。
+
+三类知识性质不同，分开独立进化才能各自专精，混在一起只会互相稀释。Claude Code 之所以做得好，正是因为它专注于「编码技巧」这个通用层——背后的 Sonnet 等模型由程序员语料训练，而程序员是人类里逻辑最严密的群体，专精这个领域让它在编码上达到顶级水平。这正是专精的力量：在某个领域深度积累，就能成为那个领域最聪明的存在。程序员语料全网都有，数据自闭环容易实现，专精能力也就容易被复制和替代。反过来，越是依赖组织内部私有数据的角色，数据越不可能外流，越难被外部复制，越是组织真正的护城河。这也是 Lucas 专精度最高、价值最大的原因——他积累的是这个组织独有的文化、语言和成员关系，外部无从获得。
+
+系统工程师独立存在，是唯一能改变系统本身的角色，信息域必须与三角色隔离。在组织里，系统工程师对应的是基于 AI Native 思考下的信息化支撑角色/部门——不是传统 IT 部门的软件采购和运维，而是持续构建和进化组织自己的 AI 能力。
+
+| 角色              | 本质       | 专精方向                | 专精属性           |
+| --------------- | -------- | ------------------- | -------------- |
+| **系统工程师**       | 人 + AI工具 | 架构演进、系统干预、指导三角色进化方向 | 经验沉淀在Readme知识库 |
+| **Lucas（业务大师）** | 内嵌 Agent | 这个组织的文化、语言、数据、成员关系  | 高度个性化，不可通用     |
+| **Andy（架构大师）**  | 内嵌 Agent | 行业设计模式 + 这个实例的历史决策  | 半通用，含组织沉淀      |
+| **Lisa（实现大师）**  | 内嵌 Agent | 编码技巧 + 项目结构         | 偏通用，叠加项目理解     |
+
+各角色在本地积累的语料，去标识化后持续上传云端，分别喂给三位大师独立增训——业务大师从对话语料学、架构大师从设计决策学、实现大师从代码交付学。三者沿各自轨道演进，专精不互相稀释。这是在自己的体系内持续建设大师能力，形成真正的组织护城河。
+
+## 六、Data / Knowledge / Capability：AI 进化的物质条件
+
+组织每天都在发生事情——对话、决策、解决问题。这些都真实发生过，但大多数系统不会记得。「记得」的前提不只是「存下来」，而是「以正确的层次存下来」。
+
+信息积累有三个层次，它们是递进依赖关系：
+
+**Data**：原始信息流。对话发生了，决策做了，行为出现了——这是最原始的形态，直接可用性低，噪声多，但它是一切的源头。
+
+**Knowledge**：提炼后的结构化认知。「这个成员说话比较直接」「Lucas 上次处理这类情况是这样做的」「这个组织的架构设计有这些约束」——这些都是从 Data 中蒸馏出来的稳定理解，可以直接注入 Agent 的上下文，让它「懂」而不只是「记得」。
+
+**Capability**：靠谱做事的能力。当某类情况反复出现、处理方式已经成熟，就值得固化为可直接调用的形式。Capability 有两种载体：
+- **Skill**：程序性知识，Agent 读了就会照着执行，不需要外部系统调用——「我知道怎么做」的编码形式，归属 Knowledge 层。
+- **Tool**：当前模型权重还无法内化的执行能力，必须外化为代码调用——查实时数据、发消息、执行计算，超出了生成文字的边界，需要外部系统。
+
+Skill 和 Tool 都是「靠谱地做事」的载体，区别不是复杂度高低，而是「需不需要外部系统」。**能用 Skill 解决的不上 Tool，能用 Tool 解决的不上独立应用。**
+
+三层构成一个闭合的循环：
+
+```
+日常运作 → Data → Knowledge → Capability → 固化 → 新循环
+                                              ↓
+                                        Skill（行为模式，Agent 读了就会）
+                                        Tool（可执行动作，外部系统调用）
+                                        应用界面（操作入口，图形界面）
+```
+
+三层是递进依赖：没有 Data 积累，Knowledge 无从提炼；没有 Knowledge 支撑，Capability 结晶是盲目的。这个顺序不能颠倒，也不能跳过。
+
+---
+
+## 七、进化层次框架：增强到扩张的坐标系
+
+系统不是一次部署好就不变的，它随时间持续演进。L0-L4 是这套演进框架的坐标轴——在任意时刻，系统工程师都应该能回答：我们在哪个阶段？下一步做什么？
+
+| 层次     | 名称               | 核心目标                                                                                                            | 完成标志                                                           |
+| ------ | ---------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **L0** | 机制层 + 认知基础设施就绪   | Agent 运行框架跑通；Data/Knowledge/Capability 三层 schema 和写入渠道定义清楚；记忆 / 蒸馏 / 上下文注入三个通用机制接通（写入端 + 注入端）                   | 信息流能被捕获持久化；进化信号结构化字段有落地；三机制管道可跑通，即使初始数据稀少                      |
+| **L1** | 认知基础层——Agent 人格化 | 三个通用机制真正运转并产生质量：对话记忆可检索（记忆工程）、组织成员理解沉淀为知识（知识蒸馏）、每次响应前动态注入最相关上下文（上下文工程）。系统里每个 Agent 从无状态响应器变成有记忆、懂对方、能以人格自主响应的存在 | 系统里每个 Agent 无论角色，都能记住对方说过的话、理解对方是谁、在对话中展现连贯人格；人感知不到「每次从零开始」的断层 |
+| **L2** | 系统能力进化           | 成熟行为模式自动结晶成 Skill/Tool；跨角色知识持续流动与沉淀                                                                              | 成熟行为模式能被识别并自动固化；Andy 能自主判断固化形式；角色间知识共享机制正常运转                   |
+| **L3** | 组织运作优化           | 子 Agent 加入后拓扑改变，人+系统一起调顺                                                                                        | 流水线无需人工推动；组织成员有专属助手；跨成员协作顺畅                                    |
+| **L4** | 行为内化             | 判断烧进权重，外部规则文件逐步消失                                                                                               | 本地处理比例持续上升；外挂工具越来越少                                            |
+
+```
+L0 = 机器能跑，三机制管道接通
+L1 = 系统里每个 Agent 都是有记忆、有理解、有人格的存在
+L2 = 机器越用越好
+L3 = 人+机器作为组织一起调顺
+L4 = 机器真正成为组织一部分
+```
+
+**增强阶段（L0→L1）**：先让系统里每个 Agent 具备像真正的人一样的认知基础。这不只是地基——它本身就是 CrewClaw 相比原生 OpenClaw 最核心的价值交付。地基不稳，上面所有层都是空转。
+
+**扩张阶段（L2→L4）**：在懂的基础上，让能力持续生长。不是所有实例都要走到 L4——L2 稳定运行对大多数组织已经足够，L3/L4 是为选择持续深化的实例准备的。
+
+**Andy 是 L2 进化的乘数**。三个角色各有进化边界：Lucas 进化 = 对这个组织理解更深，边界在成员关系的深度；Lisa 进化 = 实现能力更强，边界在代码库复杂度。Andy 的进化没有这个边界——Andy 的每一次判断质量提升，都直接作用于系统里每一条流水线：spec 精度提升一点，Lisa 的成功率就上升；Andy 吸收一条外部知识，下一个需求的设计就更准。Lucas 是组织的神经末梢（感知信号、传递信息），Andy 是组织的大脑（判断、设计、进化）。**大脑进化快，整个组织就快**——这也是 L2 进化体系的核心投入应向 Andy 倾斜的根本原因。
+
+---
+
+## 八、进化方向与合法性原则
+
+**人是进化方向的决定者，不是旁观者。**
+
+这套进化体系不是自主运转的黑盒，而是**人的真实行为决定了系统演化的方向**。
+
+进化方向不是预设的——没有人提前规划「系统应该变成什么样」。方向是从组织行为中提炼出来的：成员反复提什么、业务大师反复处理什么、架构大师反复判断什么，这些真实的行为轨迹就是进化的方向信号。系统做的，是把这些信号识别出来、固化下来，让下次更好。
+
+```
+人的行为 → Data（真实发生的事）
+          → Knowledge（被理解的模式）
+          → Capability（被固化的能力）
+          → 反哺人的行为（更顺手、更准确）
+          ↑_________________________________
+```
+
+**合法性原则**（组织行为学核心）：
+
+只有来自组织内部真实实践的规范，才会被真正内化；从外部强制注入的规范，要么被规避，要么制造阻力。
+
+这解释了为什么「进化方向由组织行为决定」不只是设计偏好，而是**必要条件**：技能必须从真实行为中提炼（不能由系统工程师预设），能力必须从真实交付中积累（不能凭空填写），L4 微调素材必须来自真实运转（不能用合成数据伪装）。违背合法性原则的系统，表面上能跑，但不会真正进化。
+
+**进化安全**：防止坏的信号误导进化方向。能力结晶不可逆（固化容易，清除需要人工干预），因此进化流水线的每个环节都必须有可信任的判断主体——触发方必须经过身份验证，固化决策必须有唯一责任人，每次能力变更有来源记录，系统工程师定期观察进化健康状态。安全的本质：不是阻止进化，而是确保进化的驱动力来自真实可信的组织行为。
+
+**协调机制迁移路径**（Mintzberg 组织协调理论的 AI 映射）：
+
+```
+L1 建成后 直接监督    → 系统工程师频繁干预，手动维持系统正常运转
+L2 建成后 工作流标准化 → V 字流水线稳定跑，不需要人工推动每一步
+L3 建成后 相互调整    → 三角色自己协商解决问题，系统工程师只守边界
+L4 建成后 价值观标准化 → 判断烧进权重，外部规则文件逐步消失
+```
+
+「增强而后扩张」的实质，是**协调机制的迁移**——从依赖人的直接监督，到组织内部的自我协调。系统工程师干预的频率，是系统成熟度的反向指标：干预越少，系统越强；干预越多，说明哪条管道还没跑稳。
+
+**组织记忆的三个层次**（对应成熟链）：
+
+```
+情节记忆 → 对话记录与行为规律（发生了什么）
+语义记忆 → 决策记录与提炼出的规律（理解了什么）
+程序记忆 → 已固化的技能与工具（会做什么）
+```
+
+---
+
+## 九、模型蒸馏与统一路由：本地专精和持续进化的技术基础
+
+**为什么必须有本地模型？**
+
+每个组织都有不能出门的数据——家庭的私密对话、企业的核心业务流程、团队的内部决策。这些数据是组织最宝贵的进化原料，但它们恰恰是不能上云的。
+
+这里有一个根本性的矛盾：进化闭环需要从这些数据里提炼高质量语料，但提炼本身是一件需要理解力的工作——这句话有没有价值？这个决策值不值得沉淀？这次实现哪里可以复用？没有足够的能力，提炼出来的就是噪声，噪声喂给云端大师，大师也退化。
+
+这就是为什么**三合一蒸馏**是必要条件，而不是可选优化：本地模型必须同时具备业务理解、架构判断、实现经验三种能力，才有资格处理这些私有数据、提炼有价值的语料、把组织真正的沉淀送进进化闭环。缺少其中任何一种，语料提炼就是不完整的。
+
+此外，一个常驻运行的组织 AI 每天产生大量日常交互——问候、确认、简单查询。这些请求不需要云端大模型来处理，本地直接响应，既节省了 token 成本，也降低了延迟。随着本地模型越来越专精，能本地处理的比例越来越高，运营成本自然下降。
+
+---
+
+**模型蒸馏**解决的是"如何起步，如何保持更新"的问题。
+
+本地模型的选型，本质上是一个**能力门槛**问题。基础模型有没有越过"足够聪明"这条线，决定了系统的瓶颈在哪里：没越过，再多的组织数据也补不了基础能力的短板；越过了，瓶颈立刻转移到"够不够懂这个组织"——积累时间、积累对话、积累决策，才真正有意义。所以模型选型不是越大越好，而是找到越过门槛的最小代价方案，门槛之上，组织数据积累才是护城河。
+
+新实例部署时，从云端三位大师各自当前最强版本蒸馏成可本地运行的小模型——不是从零学起，而是直接站在大师肩膀上开始，确保起点就在门槛之上。之后，本地模型有两条同时运行的进化曲线：云端大模型每一代都在变强，每次蒸馏自动继承这个进步；与此同时，本地积累的组织私有语料持续叠加进去，这部分是云端模型永远无法复制的。两条曲线的叠加，就是这个实例的专精护城河。
+
+---
+
+**统一路由**解决的是"如何持续进化"的问题。
+
+OpenClaw这轮技术迭代展示最核心机制，是**统一路由机制**——正是这个统一入口，所有请求无论从哪个渠道进来，每一次「谁来处理、用什么方式」的决策都被完整捕获。没有它，进化数据无从积累，系统只能是静止的。有了它，每次调度决策，都可以同时驱动三个维度进化：
+
+| 进化轴               | 调度在判断什么      | 积累后变得更好的是                               |
+| ----------------- | ------------ | --------------------------------------- |
+| **Axis 1 能力进化**   | 用哪个工具/能力处理？  | 好用的工具留下，不好用的被替代，能力越来越强                  |
+| **Axis 2 协作进化**   | 谁来处理这个请求？    | 理解组织目标，成员影子 Agent 越来越懂对应的人，协作越优化来支撑组织目标 |
+| **Axis 3 本地专精进化** | 本地处理，还是借助云端？ | 每次借助云端都是一次学习机会，本地越来越能独立处理               |
+
+三轴因果递进：**能力越来越强 → 协作越来越有效 → 本地越来越自主**。
+
+---
+
+两者合在一起，形成完整的进化图景：
+
+```
+【部署时】三合一蒸馏 → 本地模型冷启动，站在大师肩膀上开始
+
+【持续运行】
+  本地运行 → 统一路由采集每次决策
+    ↓
+  Axis 3：路由到云端的每次请求 = 本地向群体学习一次
+    ↓
+  路由比例持续下降 = 本地专精程度持续提升
+    ↓
+  本地提炼私有语料 → 去标识化上传云端 → 三位大师各自增训
+
+【代际更新时】云端大模型新一代发布 → 新实例蒸馏起点更高
+```
+
+蒸馏主要是新实例的冷启动机制；老实例的持续进化，走的是路由学习这条主路。参与的组织越多，云端大师越强，越晚部署的新实例，起点越高——这是这套架构的网络效应。
+
+---
+
+# Part 3：CrewClaw 框架实现
+
+> 本 Part 覆盖 CrewClaw 框架层的完整实现规范：从框架/实例职责边界（一-二），到各机制的详细设计（三-九），再到实例层配置规范与部署 SOP（十-十一）。HomeAI 作为第一个参考实例，其专属配置见 Part 4。
+
+---
+
+### CrewClaw 框架扩展面一览
+
+**CrewClaw 在 OpenClaw 的五个 hook 上构建框架行为：**
+
+| OpenClaw hook | CrewClaw 行为 | 实例可配置项 |
+|---------------|--------------|-------------|
+| `before_prompt_build` | 上下文注入（读 context-sources.ts，召回记忆/知识/档案）；盲区摘要（跨渠道蒸馏前内容，按 contextSensitivity 过滤）；受众感知（单人/多人/广播，成员动态解析）；意图分析（规则引擎，命中时注入结构化意图提示）；行为约束每轮注入（承诺铁律/静默原则/信息边界）；保存原始用户消息供 agent_end 使用；**Kuzu Fact 动态置顶**（Lucas 私聊时对当前消息做 embedding 匹配，相关图谱事实注入最近上下文，与 recall_memory 工具互补）；**记忆意图检测 + Query Rewriting**（MEMORY_INTENT_RE 命中"记得/还记得/之前说过"等时，基础设施层直接检索注入；检索前先做 Topic-first query rewriting：用原始消息 embedding 找相关 Kuzu 话题，将话题名称+上下文关键词扩展进查询后再 embed 搜记忆——「第十条」→「抖音成长故事 第十条 启灵自我成长」，大幅提升语义检索命中率；不依赖模型判断是否要查记忆）；**开发需求快捷路径识别**（DEV_SHORTCUT_RE 命中"直接开发/马上实现"等时，appendSystem 引导 Lucas 直接调 trigger_development_pipeline）| `context-sources.ts` source 注册列表；`config/channel-audience.json`；`config/intent-patterns.json`；`config/lucas-behavioral-rules.json` |
+| `before_model_resolve` | 三层路由：complexityScore < localThreshold → 本地；否则 → 云端；数据驱动进化阈值 | `LUCAS/ANDY/LISA_PROVIDER` / `_MODEL` 环境变量 |
+| `before_tool_call` | 访客工具禁令（visitor: 前缀 userId 拦截指定工具）；Andy 写操作守卫（工作域内放行，其他路径封锁）；**核心框架文件保护**（trigger_lisa_implementation 中：Andy spec integration_points 含保护文件时即时 pushToChannel 通知系统工程师，warn-and-proceed 不阻断流水线） | `config/visitor-restrictions.json` blockedTools 列表 |
+| `agent_end` | ChromaDB 记忆写入（完整轮次：prompt + response）；DPO 候选检测；用户纠正信号检测（用户说"你骗我/这是幻觉"等时，把上一条 Lucas 回复记录为 DPO 负例）；路由 KPI 记录；活跃线索蒸馏触发（6h 冷却，fire-and-forget 启动 `distill-active-threads.py`）；**flag_for_skill 自动结晶检测**（同轮 ≥2 不同工具调用时自动写入 skill-candidates.jsonl，source=auto_detect，24h 同组合去重）；**HEARTBEAT 时间戳**由 gateway-watchdog 基础设施层直接写入（不依赖模型合规） | `config/memory-signals.json` 信号关键词；`config/dpo-patterns.json` 负例模式（含 `user_correction_signals`）|
+| `llm_input` | token 数 / 复杂度评分，为 before_model_resolve 提供决策输入 | 路由阈值自动学习，无需手动配置 |
+
+**部署一个新实例，需要提供的全部内容（不需要改任何框架代码）：**
+
+```
+① OpenClaw 层（每个 Agent）
+   ~/.openclaw/workspace-{agentId}/
+     SOUL.md / AGENTS.md / IDENTITY.md / MEMORY.md / TOOLS.md
+     USER.md / HEARTBEAT.md
+
+② CrewClaw 配置层（每个组织实例，共享）
+   context-sources.ts          ← 每个 agentId 的 source 注册列表
+   config/members.json         ← userId → 档案文件名映射
+   config/memory-signals.json  ← 行为模式 / 领域知识 信号关键词
+   config/infra-guard.json     ← 基础设施守卫词（触发工程师告警）
+   config/behavioral-rules.json ← 前台 Agent 每轮注入的行为约束文本（承诺铁律/静默原则/信息边界）
+   config/visitor-restrictions.json ← 访客 session 禁止调用的工具列表
+   config/channel-audience.json ← 渠道受众配置（audienceType: single/multiple/broadcast + contextSensitivity）
+   config/intent-patterns.json  ← 意图模式配置（关键词→意图类别→注入提示 + 产物识别正则）
+
+③ 环境变量（每个组织实例）
+   FRONTEND_AGENT_ID           ← 前台 Agent 名称（默认 lucas）
+   PRIORITY_AGENTS             ← Semaphore 高优 Agent 集合
+   OWNER_ID                    ← 组织所有者 userId（告警接收方）
+   LOCAL_MODEL_NAME            ← 本地模型名（Ollama 低复杂度路由端点）
+   {LUCAS,ANDY,LISA}_PROVIDER  ← 各角色云端 provider
+   {LUCAS,ANDY,LISA}_MODEL     ← 各角色云端模型 ID
+   各 API Key
+```
+
+> **框架守护原则**：`index.ts` 和 `context-handler.ts` 中不出现任何组织专有字符串。所有组织专有内容通过上述 ②③ 注入。
+
+---
+
+## 一、框架 / 实例职责边界
+
+CrewClaw 与部署实例之间有严格的职责分割：框架提供机制，实例提供内容。这个边界保证新组织可以「只改配置、不改框架代码」地完成部署。
+
+| 职责层                | 负责方    | 具体内容                                                                          |
+| ------------------ | ------ | ----------------------------------------------------------------------------- |
+| 路由引擎               | **框架** | `before_prompt_build` / `before_model_resolve` / `before_tool_call` hook 调度逻辑 |
+| 上下文工程调度            | **框架** | `context-handler.ts`：并发查询 source、inject 分组、default 键 fallback                 |
+| 记忆工程机制             | **框架** | ChromaDB 多角色写入/查询、Kuzu schema 与蒸馏管道结构                                         |
+| Agent 身份 source 注册 | **实例** | `context-sources.ts`：每个 agentId 对应哪些 source、inject 方式                         |
+| 组织成员映射             | **实例** | `config/members.json`：userId → 档案文件名                                          |
+| 记忆信号关键词            | **实例** | `config/memory-signals.json`：行为模式信号、领域知识信号                                    |
+| 基础设施守卫词            | **实例** | `config/infra-guard.json`：infraKeywords 触发系统工程师告警                              |
+| 前台 Agent 行为规则      | **实例** | `config/lucas-behavioral-rules.json`：承诺铁律、静默原则、信息边界规则（channelPrivacyRule）  |
+| 渠道受众配置             | **实例** | `config/channel-audience.json`：渠道→受众类型（single/multiple/broadcast）+ contextSensitivity；membersSource=family_members 时动态解析成员 |
+| 意图模式配置             | **实例** | `config/intent-patterns.json`：关键词→意图类别→注入提示；产物识别正则（邀请码/任务ID/路径等）  |
+| 访客工具禁令名单           | **实例** | `config/visitor-restrictions.json`：访客 session 禁止调用的工具列表                       |
+| 云端模型绑定             | **实例** | 三角色（Gateway 进程）：环境变量 `LUCAS_PROVIDER` / `ANDY_PROVIDER` / `LISA_PROVIDER` 及对应 API Key；Main（wecom-entrance 进程）：`openclaw.json` agents.list `main` 条目，wecom-entrance 直接读取，与三角色 env var 层解耦 |
+| 前台 Agent 标识        | **实例** | 环境变量 `FRONTEND_AGENT_ID`（默认 `lucas`；新组织可改为任意名称）                               |
+| 优先级 Agent 集合       | **实例** | 环境变量 `PRIORITY_AGENTS`（Semaphore 保障高优 Agent 响应）                               |
+| 组织所有者 userId       | **实例** | 环境变量 `OWNER_ID`（系统告警、工程师通知的接收人）                                               |
+| 本地模型名              | **实例** | 环境变量 `LOCAL_MODEL_NAME`（Ollama 本地端点模型名，默认 `local-assistant`）                    |
+
+**边界守护原则**：框架层（`index.ts` / `context-handler.ts`）中不应出现任何组织专有字符串（人名、域名、业务关键词）。所有组织专有内容必须通过环境变量或 `config/` JSON 文件注入。
+
+---
+
+## 二、认知基础层：框架侧机制契约
+
+Part 2 § 七「认知基础层」定义了三个核心机制。本节说明每个机制在框架代码层的实现契约——即新实例必须遵守的接口。
+
+### 2.1 记忆工程（Memory Engineering）
+
+**框架契约**：ChromaDB 集合命名与字段规范。所有实例必须遵守，跨组织的蒸馏管道才能正确归并。
+
+| 集合                   | 写入方                | 关键字段                                               | 说明                                        |
+| -------------------- | ------------------ | -------------------------------------------------- | ----------------------------------------- |
+| `conversations`      | 前台 Agent 对话后       | `userId` / `agentId` / `fromType=human`            | pipeline 对话（fromType=agent）不写入，避免污染成员搜索结果 |
+| `decisions`          | 三角色决策时             | `agent` / `type`（decision / constraint / research） | `agent` 字段，不是 `agentId`                   |
+| `behavior_patterns`  | 蒸馏管道               | `userId` / `agentId`                               | 按信号关键词从 conversations 中提炼                 |
+| `agent_interactions` | 角色交互时              | `agentId`                                          | 角色间协作记录；此集合用 `agentId` 不是 `agent`         |
+| `code_history`       | 实现大师完成后            | `agentId=lisa`                                     | 实现历史，供实现大师上下文注入                           |
+
+实例层可按场景自行扩展集合（如 HomeAI 的 `family_knowledge`），命名和字段由实例自行定义，框架蒸馏管道不感知。
+
+**userId 规范**：写入时必须 `toLowerCase()`，查询入口同样规范化。大小写不一致会导致记忆召回率下降。
+
+### 2.2 知识蒸馏（Knowledge Distillation）
+
+**框架契约**：Kuzu 是唯一真相源（single source of truth）。ChromaDB 是蒸馏输入原料，不是知识结论的承载地。蒸馏管道的职责是把 ChromaDB 里的行为信号提炼为 Kuzu 中的结构化节点与边。
+
+**蒸馏管道调度规则**：
+
+- `distill-memories.py` 与 `distill-agent-memories.py` **必须串行**执行（watchdog 调度）——两者都需要 Kuzu 独占锁，并行会触发锁争用导致后者静默失败。正确调度：`distill-memories.py` 退出后，延迟 5 分钟再启动 `distill-agent-memories.py`。
+- `distill-active-threads.py` 由 `agent_end` hook 事件驱动触发（6h 冷却/用户），**不参与 watchdog 串行链**——它只读取 ChromaDB 和写入 Kuzu（与上两者的读写范围不重叠，不需要锁协调）。
+- `distill-active-threads.py` 内置 `os._exit(0)` 防 SIGBUS（与所有 Kuzu Python 脚本一致）。
+
+**Kuzu 核心 schema**（人员与能力知识图谱）：
+```
+Person  → [KNOWS]    → Person
+Person  → [HAS_FACT] → Fact（关系事实）
+Topic   ← [ABOUT]    ← Fact
+Agent   → [HAS_PATTERN] → AgentPattern（行为模式蒸馏产物）
+Tool    → [REGISTERED_BY] → Agent
+Capability → [IMPLEMENTS] → Tool
+```
+
+**SIGBUS 约束（macOS ARM64）**：所有使用 Kuzu 的 Python 脚本，数据操作完成后必须调用 `os._exit(0)` 阻止 Python GC 触发析构（Kuzu 0.11.3 析构时 checkpoint 触发 SIGBUS）。
+
+**幻觉污染防护**（`distill-memories.py` 扩展）：
+
+蒸馏管道有两层防止幻觉污染知识库的机制：
+
+1. **幻觉标签注入**：`load_hallucination_patterns()` 读取 Lucas 的 `MEMORY.md`，提取 `【幻觉污染识别】` 节中已被标记的幻觉类型（如承诺幻觉、信息幻觉）。这些标签在调用 LLM 蒸馏时作为警告前缀注入 prompt——告诉 LLM「以下类型的行为已被确认是幻觉，**不要**将其提炼为正确的行为规律或 `interaction_style`」。Lucas 每次自省发现新的幻觉类型后写入 `MEMORY.md`，下次蒸馏自动生效。
+
+2. **dpoFlagged 记录过滤**：`collect_dpo_flagged_records()` 在蒸馏前扫描 ChromaDB records，将 `dpoFlagged=true` 的记录剥离到 `data/learning/hallucination-filtered.jsonl`，LLM 蒸馏阶段不会读到这些已确认的幻觉记录。过滤产物供系统工程师复查，格式含 `type: "hallucination_flagged"` / `source: "distill-filter"`。
+
+两层机制互补：标签注入防止幻觉行为被「合法化」为模式，记录过滤防止幻觉内容直接进入蒸馏输入。
+
+**蒸馏质量六项机制**（`distill-memories.py` 扩展，已全部落地）：
+
+1. **增量更新**：蒸馏前调用 `load_existing_facts()` 读取 Kuzu 中该用户当前所有活跃 Fact，注入 LLM prompt 作为「现有知识基础」。LLM 按三规则输出——有新信息→追加 context；无新信息→原样保留；新话题→新增。避免多轮讨论同一话题只记得最近一次蒸馏的问题（已知最严重案例：抖音运营话题跨 4 次会话只记得第一次）。
+
+2. **全量历史模式**（`--full-history`）：普通蒸馏仅处理最近 60 条记录，历史积累会被滑动窗口截断。`distill_user_full_history()` 分批处理该用户全部历史，批次间通过 existing_facts 传递前批提炼结果，保证跨时间段的话题积累不丢失。系统工程师可随时手动触发重建：`python3 scripts/distill-memories.py --full-history [--user userId]`
+
+3. **Topic 语义去重**（`find_canonical_topic()`）：LLM 命名漂移会导致 Kuzu 产生碎片化节点（「运营抖音」vs「一起运营抖音」指向不同节点，同一话题无法被统一检索）。蒸馏写入前先查询 ChromaDB `topics` 集合，相似度 ≥ 0.92 时复用已有 topic_id/name，将语义相近的命名收敛为同一节点，并在日志打印 `[P2] 语义去重` 供核查。
+
+4. **多人话题标注**：`_sync_topic_to_chroma()` 同步 topic 到 ChromaDB 时，通过 Kuzu 查询是否有其他家庭成员关联同一 topic 节点，在 document 中自动追加「（XX 也关注）」标注——`recall_memory` 检索到该话题时，Lucas 能感知跨家人的共同关注，不只是单人视角。
+
+5. **大集合分页拉取**（`chroma_get_all` 分页修复）：ChromaDB 单次 get 最多返回 500 条，旧实现 `limit=500` 导致集合超 500 条后新对话永远拉不到——`save_distill_meta` 记录的条数停留在 500，下次运行 `delta = 500 - 当前数 = 负数 < 20` 触发静默跳过，造成系统性积压（已知案例：4 月 4 日后对话共 1084 条，只取到前 500 条，4 月 5 日全部对话从未进入蒸馏）。修复：改为分页循环（page_size=500，默认上限 5000），拉完所有记录后再计算 delta。
+
+6. **Upsert 写入模式**（替代先清空再全量创建）：旧逻辑在写入前将用户所有活跃 Fact 标记为过期、然后全量重建——这意味着每次蒸馏都销毁一次历史积累，用 `touched` 集合追踪本次有更新的 `(topic_id, relation)` 对，Fact 存在时 `SET`（追加新 context），不存在时 `CREATE`；循环结束后只过期「本次未触碰」的孤立 Fact，保留持续有效的事实不被反复覆盖。
+
+> **shared_activity relation**：蒸馏时提取家人与 Lucas 一起做过的事（共同策划/制作/运营的项目），与其他 Fact 类型并列写入 Kuzu。这是最重要的 Topic 类型之一——共同行动是关系的核心印记，直接影响 recall_memory 的话题相关性。
+
+**因果关系蒸馏（causal_relation）**：
+
+知识图谱的四个维度：语义（ChromaDB 向量检索）、实体（Kuzu 节点）、时间（valid_until + 相对时间标签）、因果。前三维已有，因果维度是系统知道「某人在做什么」但不知道「为什么做」的根本原因。
+
+`causal_relation` 作为第五种核心 Fact 类型，与其他 Fact 并列写入 Kuzu：
+- **value**：效果端简述（「发生了什么/关注什么」，≤20字）
+- **context**：「因为X，所以/导致Y」格式（≤60字）
+- **提取条件**：对话中必须出现因果线索词（因为/所以/因此/导致/由于/促使），不推断
+
+蒸馏管道（`distill-memories.py`）提取并写入 Kuzu；`queryMemories` 自动注入 `【因果关系】` 块；`recall_memory` 主动检索时结果中包含因果事实。未来可沿 causal_relation 边做多跳遍历，支持「这件事的来龙去脉」类查询。
+
+### 2.3 上下文工程（Context Engineering）
+
+**框架契约**：`context-handler.ts` 是调度层，本身不包含任何 ChromaDB / Kuzu / 文件读取实现。
+
+- **接口**：`buildDynamicContext(params: SessionParams, resolvers: ContextResolvers) → { prepend, appendSystem }`
+- **fallback 规则**：`contextSources[agentId] ?? contextSources["default"] ?? []`——新部署的 Agent（ID 不在注册表）自动 fallback 到 `default` 键，无需改框架代码
+- **inject 模式**：
+  - `prepend`：注入到用户消息前（高优先级，偏用户侧上下文）
+  - `append-system`：注入到 system prompt 末尾（框架/角色侧约束）
+- **约束性内容 vs 信息性内容**：约束（禁令、行为规则）走 `appendSystemContext` 每轮重新注入；信息性内容（记忆召回）走语义查询按需注入。两者不混。
+- **盲区摘要**：`before_prompt_build` 查 ChromaDB 中 `[上次蒸馏时间, 当前 N 轮起点]` 窗口内的全渠道对话，按 `contextSensitivity` 过滤（public 渠道只注入群聊内容，private 渠道注入全部），截断到 800 字注入为「近期记忆（蒸馏前）」。弥补蒸馏周期与当前对话之间的信息真空。
+- **受众感知**：读 `config/channel-audience.json`，按当前渠道类型注入受众上下文（单人/多人/广播）；多人渠道的成员列表通过 `membersSource=family_members` 从档案动态解析，不硬编码。
+- **意图分析**：读 `config/intent-patterns.json`，规则引擎匹配当前消息关键词；命中时扫最近 assistant 消息提取已有产物（邀请码/任务ID/路径等），注入结构化意图提示；无命中不注入，不加噪音。
+- **Lucas 时间感知**（Lucas 专属）：`appendSystem` 每轮注入 `【当前时间】HH:MM 北京时间`，Lucas 始终知道现在几点；`queryMemories` 对话片段携带相对时间标签（今天 / X天前 / X周前 / X个月前），让 Lucas 理解「这件事是刚说的还是几个月前」；`active_thread` context 字段存储人类可读字符串（格式：`[状态] 摘要（日期 更新）`，例 `[进行中] 抖音脚本第三集，爸爸负责隐私保护（2026-04-03 更新）`），注入后可直接理解，无需解析 JSON。
+- **Kuzu Fact 动态置顶**（Lucas 专属）：`before_prompt_build` 对当前消息做 embedding，调用 `queryRelevantTopics` 取前 3 条最相关 Kuzu 图谱事实，注入 `appendSystem`（"相关图谱事实（自动匹配）"块）；弥补 recall_memory 工具依赖模型主动调用的不可靠性——把「有没有相关图谱记忆」的判断从模型层下沉到基础设施层；与 recall_memory 互补：后者提供完整对话召回，前者提供图谱结构化事实置顶。
+- **记忆意图检测 + Topic-first Query Rewriting**（Lucas 专属）：`MEMORY_INTENT_RE` 正则检测「记得/还记得/之前说过/上次说」等召回意图关键词，命中时基础设施层主动补充检索——不等 Lucas 自主决定是否调 `recall_memory`。检索前先做 **query rewriting**：用原始消息的 embedding 调 `queryRelevantTopics` 找相关 Kuzu 话题，将话题名称和 context 关键词拼入原始 query 后重新 embed，再搜 ChromaDB `conversations` 集合（取 12 条 → `timeWeightedRerank` 保 6）。这解决了语义漂移导致的命中失败问题：用户说「第十条怎么样」，原始 embedding 很难直接匹配「抖音成长故事脚本系列」的对话，但经过 Kuzu 话题扩展后 query 变为「第十条 抖音成长故事 启灵自我成长故事」，命中率大幅提升。群聊时不做 topic 扩展（话题是个人关联的）。
+- **recall_memory 工具的两条使用边界**（Lucas 专属工具）：
+  - **禁止调用场景**：家人在当前消息或刚才几条消息里已直接提供的内容（对话原文、策划内容、事件描述），不得再调此工具核实——当前轮尚未写入记忆库，调用只会返回空，导致 Lucas 否认眼前已有的信息。正确做法：直接基于家人刚提供的内容回答。
+  - **工具返回注**：结果末尾自动附加提示「当前轮刚发生的对话尚未写入，本轮之前的历史均已在记忆库中」，防止 Lucas 把「搜不到本轮内容」误判为「这件事不存在」。
+
+**source 类型**（`context-sources.ts` 注册表可用）：
+
+| source 类型 | 实现位置 | 典型用途 |
+|------------|---------|---------|
+| `chromadb` | `resolvers.chromadb[queryMode]` | 记忆召回、决策历史、行为模式 |
+| `kuzu` | `resolvers.kuzu.query` | 结构化事实查询（人际关系、能力图谱） |
+| `file` | `resolvers.file[queryMode]` | 成员档案、静态说明文件 |
+
+---
+
+## 三、整体架构
+
+### 架构全景
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  系统工程师（人 + AI工具）                                         │
+│  工程师通道（本地 CLI / 远程专用入口，与组织信息流隔离）              │
+└──────────────────────────────────────────────────────────────────┘
+                               ↓
+┌──────────────────────────────────────────────────────────────────┐
+│  Channel 层（由实例实现：协议适配 / 身份映射 / 信息管控）            │
+│  Co-Pilot 图形界面基础设施（静态文件服务 /app/*，多模态接收）        │
+└──────────────────────────────────────────────────────────────────┘
+                               ↓
+┌──────────────────────────────────────────────────────────────────┐
+│  OpenClaw Gateway + crewclaw-routing 插件                         │
+│                                                                   │
+│  意图路由层                                                        │
+│    业务大师直接响应 / 触发开发流水线 / 调工具 / 转系统工程师          │
+│                                                                   │
+│  before_prompt_build：ChromaDB（语义召回）+ Kuzu（结构化知识）      │
+│                         → 动态上下文注入                           │
+│                                                                   │
+│  模型路由层（路由即学习，核心进化管道）                               │
+│    complexityScore < localThreshold → 本地模型                    │
+│    complexityScore ≥ localThreshold → 云端模型                    │
+│      路由事件积累训练数据 → localThreshold 数据驱动提升              │
+│                                                                   │
+│  工具路由层                                                        │
+│    Skill / Tool / MCP 执行                                        │
+│                                                                   │
+│  ┌──────────────┐  需求触发   ┌────────────────┐                  │
+│  │   业务大师   │──────────►│    架构大师     │                  │
+│  │  embedded   │◄── 结果    └───┬────────────┘                  │
+│  └──────────────┘          方案↓      ↑验收                       │
+│                          ┌────────────────┐                       │
+│                          │    实现大师     │                       │
+│                          │   embedded     │                       │
+│                          └────────────────┘                       │
+│                                                                   │
+│  三角色共享：ChromaDB（对话记忆）+ Kuzu（结构化知识）                │
+└───────────┬──────────────────────────────────────────────────────┘
+            │
+      ┌─────┴──────┐
+      ↓            ↓
+┌──────────┐  ┌───────────────────────────────────────┐
+│  模型层   │  │  知识层                                │
+│          │  │                                       │
+│  本地模型 │  │  ChromaDB（向量，对话记忆检索）         │
+│  （实例   │  │  Kuzu（图数据库，结构化成员/能力知识）   │
+│   配置）  │  │  JSON（配置）/ Markdown（角色知识文件） │
+│  云端模型 │  └───────────────────────────────────────┘
+│  （实例   │
+│   配置）  │
+└──────────┘
+```
+
+### 关键设计关系
+
+**执行层：原生 OpenClaw + crewclaw-routing 插件**——两者分工、三层路由引擎、Channel/Gateway/Workspace 详见 → **二、CrewClaw 执行层设计**。
+
+#### 四角色独立人格，角色间走外部机制，角色内复用 OpenClaw 原生能力
+
+- 业务大师、架构大师、实现大师是有独立人格和独立进化路径的平等 Agent，不存在父子层级
+- 角色间消息传递、任务交接、结果回传，全部走 crewclaw-routing 插件的 `callGatewayAgent` 编排（外部机制）
+- 每个角色的内部执行（子 Agent 管理、工具调用、异步执行）复用 OpenClaw 原生能力（sessions_spawn / coding-agent Skill / cron 等）
+- 各角色内部能力相互独立、自主进化，不影响其他角色
+
+#### V 字型流水线（角色间编排关系，也是 Axis 1 能力进化的基础机制）
+
+V 字流水线每跑一次 = 系统多一个能力。能力有三种固化形式（Skill / Tool / Web App），触发源有两条路：
+
+**结晶路径**（L2，轻量，不经实现大师）：
+- 热路径：业务大师感知同类情况 ≥ 3 次 → 调用 `flag_for_skill` 写入 `skill-candidates.jsonl`
+- 冷路径：架构大师 cron 巡检 Kuzu `has_pattern`（confidence ≥ 阈值），识别高频模式
+- 架构大师判断固化形式 → Skill 直接写入 workspace / Tool 或 Web App 进入开发路径
+
+**开发路径**（L2，Tool / Web App，需要实现大师）：
+- 业务大师识别开发需求 → 调用 `trigger_development_pipeline`
+- 插件层薄路由：写 requirements 记录、向架构大师发消息（含需求 ID）
+- 架构大师自主驱动：`exec`（读代码确认集成点）→ `research_task`（调研）→ 自己写 spec → `trigger_lisa_implementation`（触发实现大师）
+- 实现大师交付后架构大师先验收，业务大师再以组织语气包装推给成员
+
+流水线本身在 Axis 2 协作进化中持续被优化（架构大师验收积累设计模式 Skill，实现大师交付提炼实现模板 Skill）。
+
+#### 路由即学习，是进化的核心管道
+
+- 每次模型路由层路由到云端，都是一次「本地向云端智慧学习」的机会
+- 路由事件自动积累训练数据，无需用户主动标记
+- 学习闭环跨越进化层次：模型路由层采集信号 → L2 结晶模式 → L4 微调内化
+
+### 各层职责
+
+| 层次                      | 核心职责                                                         | 框架 / 实例  |
+| ----------------------- | ------------------------------------------------------------ | --------- |
+| **Channel 层**           | 组织信息流接入，身份映射，信息管控；Co-Pilot 图形界面基础设施                | 实例实现    |
+| **OpenClaw Gateway**    | 统一路由入口，四角色请求分发                                          | 框架       |
+| **crewclaw-routing 插件** | 三层路由引擎，路由即学习管道                                          | 框架       |
+| **业务大师**               | 对话入口，意图识别，任务编排，记忆管理，系统干预通报                         | 框架机制 + 实例人格 |
+| **架构大师**               | 工具设计，自主写 spec，触发实现大师，验收交付                             | 框架机制 + 实例人格 |
+| **实现大师**               | 工具实现（background 异步），验证，结果回传架构大师验收                    | 框架机制 + 实例人格 |
+| **模型层**                 | 本地推理 + 云端增强                                               | 实例配置    |
+| **知识层**                 | 结构化成员/能力知识 + 对话记忆检索（ChromaDB / Kuzu / JSON / Markdown） | 框架       |
+
+---
+
+## 四、CrewClaw 执行层设计
+
+### 技术栈总览
+
+CrewClaw 执行层采用**原生 OpenClaw + crewclaw-routing 插件**的组合方案。
+
+**OpenClaw 提供**：
+- Skill 生态：丰富（日历、购物、搜索、健康等），持续扩展
+- MCP 插件：成熟，协议标准
+- Agent 框架：embedded agent（与 Gateway 共进程运行的内嵌 Agent，人格通过 Workspace 文件驱动）、Gateway、Workspace、SOUL.md + AGENTS.md 人格文件
+- 维护成本归零：直接用 npm 包，跟随官方更新
+
+**crewclaw-routing 插件新增**：
+- 通过 `before_model_resolve` hook 接入 OpenClaw 路由决策链
+- 三层路由引擎：按 agentId 差异化路由，理解四角色协作语义
+- 语料采集钩子：每次交互按角色自动分流语料，不需要额外操作
+- 所有 Agent（含 Lucas 创建的成员分身、Andy/Lisa 创建的虚拟小弟）统一走插件路由
+
+**Andy 的 spec 由自己写**：Andy 不借助外部规划工具，直接输出 Implementation Spec。spec 要自包含（文件路径、实现顺序、关键逻辑、验收命令），Lisa 拿到就能跑，不需要来回确认。
+
+**Lisa 与 OpenCode 的关系**：OpenCode 是备用的代码实现引擎，仅在多文件联动、需要迭代修复的复杂任务时调用。简单任务 Lisa 优先用 `exec` 直接实现并验证，不走 OpenCode，减少外部依赖点。
+
+**与 OpenClaw 的关系**：持续借鉴。OpenClaw 更新 Skill 或改进执行引擎时，直接受益，零迁移成本。crewclaw-routing 专注做 OpenClaw 做不了的四角色路由逻辑。
+
+### 名词速查
+
+| 名词 | 含义 |
+|------|------|
+| **LOCAL_MODEL_NAME** | 本地 Ollama 模型的环境变量名，指向由基础模型 + 组织语料 LoRA 微调融合而来的本地端点；不是开箱即用的模型，需先完成微调再注册到 Ollama；默认值 `local-assistant`，HomeAI 实例设置为 `homeai-assistant` |
+| **DPO** | Direct Preference Optimization，一种通过「正例 vs 负例」对比语料优化模型偏好的微调方法。DPO 语料有两个来源：① `agent_end` 的模式匹配（`dpo-patterns.json` 负例关键词命中时自动记录）；② 用户纠正信号（用户说"你骗我/这是幻觉/你没做"等时，`detectUserCorrection()` 把上一条 Lucas 回复记录为 `bad_response`）。两类信号写入 `data/learning/dpo-candidates.jsonl`，积累足够后触发本地增量微调 |
+| **MLX** | Apple Silicon 专用机器学习框架，HomeAI 用它在 Mac 本地执行 LoRA 微调（`mlx_lm.fuse` 合并权重），微调产物再转 GGUF 导入 Ollama |
+| **云端模型（实例配置）** | 四角色云端模型均为**实例配置**，不是框架约束。HomeAI 选用：DeepSeek Chat（Lucas）/ DeepSeek Reasoner R1（Andy）/ MiniMax M2.7（Lisa）/ GLM-5（Main）。Evaluator 跟随主角色：andy-evaluator 同 Andy 用 R1，lisa-evaluator 同 Lisa 用 MiniMax M2.7。**配置方式有两层**：① 三角色（Gateway 进程）通过 `start-gateway.sh` env var `{LUCAS,ANDY,LISA}_PROVIDER/_MODEL` 配置，运行时由 `before_model_resolve` hook 读取；② Main（wecom-entrance 进程）通过 `openclaw.json` agents.list `main` 条目配置，`readAgentModelConfig('main')` 直接读取，与 Gateway env var 层完全解耦。更换任一角色模型只需改对应配置并重启对应进程。宪法要求"不得随意更换三角色云端模型"是 HomeAI 实例内部的稳定性约束，不是框架强制要求。 |
+
+### Channel：组织信息流接入层
+
+每个组织有自己的信息管控手段，Channel 是 Lucas 浸入组织信息流的接入层，同时执行组织的权限管控：
+
+```
+组织通信渠道 → Channel 定制（按组织专属实现）
+  家庭：企业微信，业主单聊 → Main，群消息 → Lucas
+  企业：钉钉/飞书，管理员 → Main，部门群 → Lucas
+  学校：内部门户，教务 → Main，班级频道 → Lucas
+  医院：HIS 对接，科室主任 → Main，护士站 → Lucas
+```
+
+Channel 的职责：
+1. **信息流接入**：把组织所有通信渠道的内容接入 Lucas 的感知范围
+2. **Co-Pilot 手段内嵌**：每个 Channel 实现需提供对话之外的图形化交互手段（托管 Web 应用 `/app/*` 和后端 API `/api/*`）；Lucas 决定何时推送工具链接，成员通过 Channel 点击使用
+3. **身份映射**：把组织角色映射到 Main/Lucas 路由策略
+4. **信息管控执行**：审计、权限、合规在 Channel 层落地，不侵入三角色内部
+
+**接入新通道的设计模式**：确定「管理者通道（→ Main）」与「成员通道（→ Lucas）」两条线，以及各自的接收能力与发出名称限制。Channel 层的路由配置集中在入口文件，不需要改 Gateway 或三角色内部逻辑。
+
+**Channel 是薄管道，Lucas 是大脑**：Channel 不判断消息内容，不决定何时推工具，这些全部由 Lucas 完成。Channel 只负责通路畅通、工具可达、权限守门。
+
+### Gateway：统一路由入口
+
+OpenClaw Gateway 是所有请求的唯一入口，crewclaw-routing 插件在此完成三层路由：
+
+```
+OpenClaw Gateway（端口 18789，launchd 管理）
+  ├─ 请求 Lucas → embedded agent，crewclaw-routing 插件路由
+  ├─ 请求 Andy  → embedded agent，crewclaw-routing 插件路由
+  ├─ 请求 Lisa  → embedded agent，crewclaw-routing 插件路由
+  ├─ 请求成员分身 / Andy小弟 / Lisa小弟 → 同上，按 agentId 路由
+  └─ 普通 agent / Skills / MCP → OpenClaw 标准机制
+```
+
+所有消息路径（wecom-entrance、TUI、未来任何 Channel）统一走 Gateway，路由逻辑只在一处维护。**部署新实例只需填写 openclaw.json 中的 agent 配置，框架代码无需修改。**
+
+### 三层路由引擎
+
+三层路由各有调度职责，同时各自驱动对应的进化轴。
+
+```
+意图路由层（Gateway 层）→ Axis 2 协作进化
+  判断：谁来接这个请求？
+  ├─ 日常对话、家庭问答 → Lucas 直接处理
+  ├─ 成员专属需求 → 路由到成员专属 Agent（按 memberId 分流）
+  ├─ 发现开发需求 → 触发 Andy→Lisa 流水
+  ├─ 需要工具能力 → 路由到对应 Skill/MCP
+  └─ 需要人工干预 → Lucas 在对话入口提醒业主
+  进化价值：每次路由决策积累数据，驱动成员分身协作质量持续优化
+
+模型路由层（各角色内部）→ Axis 3 本地专精进化
+  判断：本地跑还是云端跑？（complexityScore vs localThreshold）
+  ├─ complexityScore < localThreshold → LOCAL_MODEL_NAME（快、省钱、离线可用）
+  ├─ complexityScore ≥ localThreshold → 云端（Lucas→DeepSeek Chat，Andy→DeepSeek R1，Lisa→MiniMax M2.7）
+  │     初始 localThreshold=0.0，全走云端；evolveRouting() 数据驱动小步提升
+  │                       ↓
+  │               云端智慧 × 本地上下文（ChromaDB）
+  │                       ↓
+  │               质量评估 → 好的回答 → 本地微调队列
+  │                       ↓
+  │               增量微调 → 本地内化这类任务
+  └─ localThreshold 持续提升 = 本地专精程度提升的量化指标
+
+工具路由层（CrewClaw 执行层）→ Axis 1 能力进化
+  判断：用哪个 Skill 或 MCP？
+  ├─ Skill 执行：兼容 OpenClaw Skill 格式，持续复用生态
+  └─ MCP 调用：通过 MCP SDK 直连 MCP Server
+  进化价值：工具成功率驱动优胜劣汰，更强工具不断引入，纵向任务链路自然优化
+```
+
+> **Hook 映射**：三层路由按"逻辑职责"编号，非执行顺序。实现上，意图路由层 + 模型路由层均在 `before_model_resolve` hook 中完成；工具路由层通过 `registerTool` 注册；`before_prompt_build` 负责 context 注入（不属于路由层）。执行顺序：`before_model_resolve` → `before_prompt_build` → `registerTool`。
+
+### 四角色 Workspace 结构
+
+每个角色在 OpenClaw 里有独立的 Workspace，人格通过 SOUL.md（性格/身份）+ AGENTS.md（工作规则）定义：
+
+```
+~/.openclaw/
+  ├─ workspace/               # Main（系统工程师代理）workspace
+  │   └─ SOUL.md              # Main 系统提示
+  ├─ workspace-lucas/         # 业务大师 workspace（以 HomeAI 实例 Lucas 为例）
+  │   ├─ SOUL.md              # 业务大师性格、身份、角色定义（由实例定义，每轮注入）
+  │   ├─ AGENTS.md            # 业务大师工作规则、工具调用铁律（每轮注入）
+  │   ├─ IDENTITY.md          # 业务大师自我认知（角色定位由实例定义）
+  │   ├─ MEMORY.md            # 业务大师成长记录（每轮注入）
+  │   ├─ TOOLS.md             # 本地环境配置、成员 userId 清单（由实例填写）
+  │   ├─ USER.md              # 业务大师的服务对象（由实例定义）
+  │   ├─ HEARTBEAT.md         # 业务大师主动行为定义（由实例定义）
+  │   ├─ {members}/           # 成员档案渲染目录（子目录名由实例定义）
+  │   │   └─ {userId}.inject.md  # 成员档案（Kuzu → render-knowledge.py 渲染，appendSystemContext 注入）
+  │   └─ skills/              # 业务大师可用 Skill（OpenClaw 原生注入）
+  │       └─ {skill-name}/    # 每个 Skill 一个子目录
+  │           └─ SKILL.md     # 必须含 YAML frontmatter: name + description
+  ├─ workspace-andy/          # Andy workspace
+  │   ├─ SOUL.md              # Andy 角色定位、性格与边界
+  │   ├─ AGENTS.md            # Andy 工作规则、输出标准、技术约束
+  │   ├─ IDENTITY.md          # Andy 自我认知（Core drive、认知方式）
+  │   ├─ MEMORY.md            # Andy 成长记录（distill-agent-memories.py 外部蒸馏 + 人工维护）
+  │   ├─ TOOLS.md             # Andy 可用工具与本地环境
+  │   ├─ USER.md              # Andy 的服务对象（Lucas、系统工程师）
+  │   ├─ HEARTBEAT.md         # Andy 主动行为定义（L2 激活）
+  │   ├─ DESIGN-PRINCIPLES.md # 设计原则（appendSystemContext 注入）
+  │   ├─ ARCH.md              # 系统架构摘要（系统工程师手工维护，appendSystemContext 注入）
+  │   └─ skills/              # Andy 可用 Skill
+  ├─ workspace-lisa/          # Lisa workspace
+  │   ├─ SOUL.md              # Lisa 角色定位、性格与边界
+  │   ├─ AGENTS.md            # Lisa 工作规则、交付规范、技术栈偏好
+  │   ├─ IDENTITY.md          # Lisa 自我认知（Core drive、认知方式）
+  │   ├─ MEMORY.md            # Lisa 成长记录（distill-agent-memories.py 外部蒸馏 + 人工维护）
+  │   ├─ TOOLS.md             # Lisa 可用工具与本地环境
+  │   ├─ USER.md              # Lisa 的服务对象（Andy、系统工程师）
+  │   ├─ HEARTBEAT.md         # Lisa 主动行为定义（L2 激活）
+  │   ├─ CODEBASE.md          # 代码库上下文摘要（系统工程师手工维护，appendSystemContext 注入）
+  │   └─ skills/              # Lisa 可用 Skill
+  └─ workspace-{memberId}/    # Lucas 创建的成员分身 workspace（按需）
+      └─ SOUL.md              # 成员分身人格（跟随 Lucas 模型配置）
+```
+
+Andy/Lisa 创建的虚拟小弟 workspace 由创建者管理，跟随创建者模型配置，生命周期由创建者决定。
+
+### Skills 架构
+
+**OpenClaw 原生注入，插件不介入。**
+
+OpenClaw 在调用 `before_prompt_build` 之前，自动将 `<available_skills>` 块写入 system prompt。crewclaw-routing 插件不读取也不修改 `<available_skills>`——Skills 注入是 OpenClaw 的职责，插件专注三层路由和记忆注入。
+
+**Skill 文件格式（两层）：**
+
+```
+框架层（随代码仓库版本管理）
+  ~/HomeAI/crewclaw/daemons/workspace-templates/{agent}/skills/{skill-name}/SKILL.md
+
+实例层（运行时，OpenClaw 读取此路径）
+  ~/.openclaw/workspace-{agent}/skills/{skill-name}/SKILL.md
+```
+
+每个 `SKILL.md` 必须包含 YAML frontmatter，缺失则 OpenClaw 静默丢弃：
+
+```yaml
+---
+name: skill-name
+description: 一句话说明 Skill 用途，Agent 看到 description 决定是否读取。
+---
+（Skill 正文内容）
+```
+
+**启动时同步**：crewclaw-routing 插件启动时调用 `initAgentSkillsDir(agentId)`，将框架层 `skill-name/SKILL.md` 复制到实例层（已有文件不覆盖），确保新部署实例开箱即用。
+
+**Skills 多时的处理**：OpenClaw 不暴露 system prompt 给插件，无法过滤 `<available_skills>` 块。当 Skills 数量多时，可通过 `appendSystemContext` 追加推荐提示（"当前最相关的 Skill 是 X"），而非过滤。
+
+---
+
+### 核心本地软件依赖自动管理
+
+crewclaw-routing 插件在启动时自动管理 Lisa 所依赖的核心本地软件（OpenCode），无需手动干预：
+
+```
+启动时检查
+  ├─ 工具未安装 → 自动安装
+  └─ 已安装 → 检查升级窗口（upgradeIntervalDays）
+       ├─ 未到期 → 不操作
+       └─ 到期 → 升级
+            ├─ 升级成功 → 记录新版本
+            └─ 升级失败 → 三级回退
+                 1. 恢复备份二进制（最快）
+                 2. 版本回退策略（brew/npm/go 按版本安装）
+                 3. 所有策略均失败 → 保留现状，error handler 兜底
+```
+
+事件日志：`data/learning/dep-state.json`（当前版本状态）、`data/learning/dep-installs.jsonl`（历史安装/升级/回退记录）。
+
+出现 `rollback_failed` 事件时，OpenCode 可能不可用，Lisa 的 `run_opencode` 工具会返回错误——此时 Lisa 降级为直接用 `exec` 实现。Andy 的 spec 由自己输出，不依赖外部工具，不受此事件影响。
+
+---
+
+## 五、角色体系与协作设计
+
+### 角色定义
+
+| 角色        | 本质             | 定位           | 核心能力                          | 操作通道                                                                                         |
+| --------- | -------------- | ------------ | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| **系统工程师** | 人 + AI工具       | 超然观测者与矫正工程师  | 观测系统轨迹、在越界/规则触发/自纠失效时介入       | 本地：Claude Code / openclaw CLI（直连 Main agent）；远程：企业微信单聊 → Main 代理（GLM-5 驱动）；**对所有 Agent 可见** |
+| **Lucas** | embedded agent | 组织成员 + 业务理解者 | 浸入信息流、需求识别与提取、管理成员分身、任务编排     | Channel 通道（由实例实现）、组织成员单聊；**组织成员唯一可见入口**                                                           |
+| **Andy**  | embedded agent | 技术设计师        | 工具方案设计、读代码验证集成点、调研技术选型、产出自包含 spec、触发 Lisa 实现 | Lucas 内部触发；系统工程师可直连；**对组织成员不可见**                                                             |
+| **Lisa**  | embedded agent | 工程师          | 按 spec 精确实现、读代码找准集成点、边界条件处理、集成验证交付 | Andy 内部触发；系统工程师可直连；**对组织成员不可见**                                                              |
+
+> **embedded agent**：OpenClaw 内嵌 Agent，与 Gateway 共进程运行，通过 Workspace 里的 SOUL.md + AGENTS.md 文件定义人格和工作规则，每次对话前自动注入。
+
+**三角色共同原则：都是有自我认知的角色，不是任务执行器。** 每个角色通过 OpenClaw 8 文件体系（SOUL.md / IDENTITY.md / MEMORY.md / AGENTS.md / USER.md / TOOLS.md / HEARTBEAT.md + 领域专属文件）建立自我认知，随系统一起成长。文档是所有角色认知的共同来源（`docs/00-project-overview.md` + `docs/HomeAI Readme.md`），角色的判断力上限由文档质量决定。
+
+**Andy 特殊原则**：Andy 是技术设计师，不是需求翻译机。出 spec 前先读代码验证集成点，架构文档说「有这个接口」，代码才是最终裁判。设计哲学（增强而后扩张 / 系统自主运转 / AI 是组织成员）内化为判断方式，不是查阅的参考资料。
+
+**Lisa 特殊原则**：Lisa 是工程师，不是代码生成机器。有工程品味——最小必要复杂度、fire-and-forget 是安全阀、spec 不清晰先推回而不是猜。交付的标准是「成员能用、稳定运转、不给下次改动埋坑」，不是「代码跑起来了」。
+
+### Agent 层级与创建原则
+
+```
+系统工程师（人 + AI工具）
+  └── Main（远程干预代理，Claude 驱动）
+
+Lucas（embedded agent，组织业务层）
+  └── 成员影子（L3 阶段，协作拓扑扩展时创建）
+        触发：成员有足够多的专属需求，需要独立通道服务
+        特征：独立渠道身份，成员直接与其对话，自主维护成员知识
+        语料归属：→ 影子自身 corpus
+        记忆归档：创建/退休时写入 `agents` ChromaDB 集合
+
+Andy（工具设计师，设计层）
+  └── 设计虚拟小弟（Andy 按需创建，提效工具）
+        特征：无真实人类对应，纯虚拟，生命周期由 Andy 决定
+        语料归属：→ Andy corpus → 设计大师
+        记忆归档：创建/退休时写入 `agents` ChromaDB 集合
+
+Lisa（工具实现师，实现层）
+  └── 实现虚拟小弟（Lisa 按需创建，提效工具）
+        特征：无真实人类对应，纯虚拟，生命周期由 Lisa 决定
+        语料归属：→ Lisa corpus → 实现大师
+        记忆归档：创建/退休时写入 `agents` ChromaDB 集合
+```
+
+**模型配置继承原则**：子 Agent 跟随创建者的模型路由规则（本地/云端模型选择）。创建者本地模型进化，子 Agent 自动受益，无需单独维护。
+
+> **成员知识的两种状态**
+>
+> **L1 阶段（档案文件）**：成员知识存储为档案文件（inject.md），由蒸馏脚本定期更新，Lucas 通过 appendSystemContext 注入读取。成员感知不到，系统统一管理。
+>
+> **L3 阶段（影子 Agent 自管理）**：成员影子 Agent 创建后，成员知识由影子自身在持续对话中维护，不再依赖外部档案文件。影子有独立渠道身份，成员直接与其对话。
+>
+> **原则：创建子 Agent = 协作拓扑的改变，只在 L3 发生。** L1 不创建子 Agent，成员档案机制已覆盖 L1 所需的认知深化。
+>
+> **⚠️ 子 Agent 不会读父 Agent 的 MEMORY.md**：子 Agent（影子 Agent / 虚拟小弟）启动时只注入 AGENTS.md / SOUL.md / TOOLS.md / IDENTITY.md / USER.md，**MEMORY.md 不在注入列表内**（源码确认，是隔离设计）。设计子 Agent 时不要假设它继承了父 Agent 的长期记忆——影子 Agent 的初始知识必须主动设计（写入其 AGENTS.md 或通过 appendSystemContext 注入），不会自动继承。
+
+### Agent Tier 容量体系
+
+子 Agent 受 Tier 体系管控，防止资源无限膨胀。创建前必须先调用 `registry.canCreate(tier)` 检查容量：
+
+| Tier | 类型 | 数量上限 | 进化轴 | 能力上限 | Corpus 保留 | 休眠触发 |
+|------|------|---------|--------|---------|------------|---------|
+| 0 | 临时 Agent | 无限制 | 无 | 无限制 | 无限制 | 永不 |
+| 1 | 轻量 Agent | 最多 10 个 | Axis 1 | 5 个能力 | 100 条 FIFO | 30 天不活跃 |
+| 2 | 标准 Agent | 最多 5 个 | Axis 1+2 | 15 个能力 | 500 条 FIFO | 60 天不活跃 |
+| 3 | 完整 Agent | 最多 2 个 | 全轴 | 无限制 | 无限制 | 90 天不活跃 |
+
+**基础角色（Lucas/Andy/Lisa）在 Tier 体系之外，始终全轴运行，不受数量限制。**
+
+生命周期管理：
+- **升级**：`registry.promote()` — 互动频率高、价值积累达标，自动升 Tier
+- **休眠**：`registry.markDormant()` — 超过 dormancyDays 不活跃，资源进入休眠等待回收
+- **驱逐**：`registry.evict()` — 容量超限时，清理活跃度最低的 Agent
+- **唤醒**：`registry.register()` 重新激活 dormant Agent，恢复 active 状态
+
+实现：`crewclaw/crewclaw-routing/agent-registry.ts`，状态持久化在 `data/agents/registry.json`。
+
+### 协作流程
+
+```
+组织成员日常对话
+        ↓
+  业务大师持续浸入
+        ↓
+  ┌─────────────────────────────┐
+  │ 意图分类                     │
+  ├─────────────────────────────┤
+  │ 日常对话/问答 → Lucas 响应   │
+  │ 发现隐性需求 → 提取 → 确认   │
+  │ 需要工具能力 → 调用 Skill    │
+  │ 超出处理范围 → 提醒业主干预  │
+  └─────────────────────────────┘
+        ↓（需求确认后）
+     Andy 接收需求
+     设计工具 spec + 记录决策
+        ↓
+     Lisa 接收 spec
+     实现工具 → 验证 → 集成
+        ↓
+     交付可用工具
+```
+
+### 工具所有权原则
+
+**服务于谁的目标，就由谁管理。**
+
+每个 Agent 有自己的 `TOOLS.md`（环境事实清单）和 `skills/`（使用方法），分别记录为达成自身目标所需的工具和环境信息。工具所有权不由系统工程师指派，由各角色按需自主维护。
+
+| 角色 | 工具目标 | TOOLS.md 典型内容 | 工具来源 |
+|------|---------|-----------------|---------|
+| **Lucas** | 理解成员、协调开发、交付结果 | 已知 Web 应用清单（名称、用途、访问地址）| 由架构大师/实现大师交付，业务大师验收后自行登记 |
+| **Andy** | 为 Lucas 和系统进化造工具（设计层）：调研 + spec + 触发 Lisa | 调研工具、规划工具、流水线工具 | 系统工程师注册，Andy 按需扩展 |
+| **Lisa** | 为 Lucas 和系统进化造工具（实现层）：按 spec 实现 + 验证 + 交付 | 实现工具、验证工具、项目环境路径 | 系统工程师注册，Lisa 按需扩展 |
+
+#### Web 应用交付流程
+
+```
+Andy 设计 → Lisa 实现（写入 app/generated/{应用名}/index.html + server.js，wecom-entrance 自动扫描挂载）
+                                        ↓ 交付报告（含访问地址）
+                                    Lucas 验收（访问确认、功能通过）
+                                        ↓ 验收通过
+                            Lucas 自行将应用登记到 TOOLS.md
+                                        ↓
+                  成员需要时，业务大师发链接 → 成员图形操作 → 继续对话
+```
+
+**原则**：Lisa 不更新 Lucas 的 TOOLS.md（那是 Lucas 的验收权）；Lucas 不替 Lisa 管理实现工具（那是 Lisa 的专精）。
+
+### 开发流水线：构建与验证闭环
+
+流水线是完整闭环，Lucas 同时负责触发和验收：
+
+```
+Lucas 识别需求 → Andy 方案 → Lisa 实现
+                                  ↓
+                             验证（脚本能跑通？）
+                                  ↓ 通过
+                             回传 Lucas（callGatewayAgent）
+                                  ↓
+                             Lucas 以组织语气包装，对比原需求判断
+                                  ↓
+                             推给用户 + 问"符合你的需求吗？"
+                                  ↓
+                             用户反馈 → Lucas 调用 record_outcome_feedback
+                                  ↓
+                             decisions.outcome 更新（success / failure / partial）
+                             → 承诺追踪关闭 + DPO 语料原料
+```
+
+流水线各层的验证责任：
+
+| 层    | 执行方   | 验证责任                     |
+| ---- | ----- | ------------------------ |
+| 需求确认 | Lucas | 模糊需求先澄清再触发；感知家人情绪/时间敏感度/可接受替代方案时通过 `trigger_development_pipeline` 的 `context` 字段传给 Andy，写入任务注册表（`lucasContext`）跟任务走 |
+| 高层设计 | Andy  | **Read-before-Edit**（修改现有文件时 spec 必须含 `code_evidence` 字段，`trigger_lisa_implementation` 基础设施层 symbol grep 验证，找不到 symbol → 阻断）；spec 自验（exec 逐项核查文件路径/函数名/npm包/validation_cmd）；方案可行性；`test_cases` 定义；**读取 `lucasContext`**，设计时优先满足家人真实偏好 |
+| 系统测试 | Lisa  | 四阶段测试（静态 → 启动 → 健康 → 功能），生成 `test-report.json`，最多 2 轮自我修复 |
+| 实现阻塞反馈 | Lisa → Andy | Lisa 2轮仍失败 → `report_implementation_issue`（含完整错误、已尝试修法、根因猜测）→ Andy 判断路径 |
+| opencode 结果通知 | 基础设施层 | `proc.on("close")` 自动：① 持久化结果到 `data/learning/opencode-results.jsonl`；② 持久化 session 到 `data/learning/opencode-sessions.json`；③ fire-and-forget 通知 Andy（含 Spec vs git diff **对抗性验证**对照表：✅ 符合预期 / ❌ spec 预期但未变更 / ⚠️ 实际有变但 spec 未提及）；④ 更新任务 `currentPhase: "completed"`；彻底消除 opencode 结果黑洞 |
+| 设计验收 | Andy  | 基于 `test-report.json` + 对抗性验证对照表做设计意图校验（不重复 Lisa 已做的运行时验证）|
+| 交付简报 | Andy → Lucas | 验收通过后 Andy 以**家人语言**向 Lucas 发送简报：① 家人能感知的变化 ② 注意事项/限制 ③ 下次类似需求怎么说；若有 `lucasContext` 则在简报中呼应家人的原始诉求 |
+| 用户验收 | Lucas | 交付结果是否满足原始需求，以组织语气包装推给用户 |
+| 流水线阶段可见性 | 基础设施层 | 任务注册表 `currentPhase`：`andy_designing` → `lisa_implementing` → `completed`；`designNote` 存 Andy 方案摘要；Lucas `before_prompt_build` 自动注入 `【当前进行中任务】`（含阶段标签 + 方案要点），Lucas 无需主动询问即可向家人解释进展 |
+
+**spec `test_cases` 字段格式**（Andy 写，Lisa 据此生成 `test.js`）：
+
+```json
+{
+  "requirement": "todo 列表工具，支持添加/查看/删除",
+  "tech_stack": "Node.js + Express + 内存存储",
+  "files": ["server.js", "index.html"],
+  "entry_point": "node server.js",
+  "validation_cmd": "curl http://localhost:3100/health",
+  "complexity": "simple",
+  "test_cases": [
+    {
+      "name": "健康检查",
+      "type": "api",
+      "method": "GET",
+      "path": "/health",
+      "expect_status": 200,
+      "expect_body_contains": ["ok"]
+    },
+    {
+      "name": "添加 todo 项",
+      "type": "api",
+      "method": "POST",
+      "path": "/api/todos",
+      "body": { "title": "买牛奶" },
+      "expect_status": 200,
+      "expect_body_contains": ["id", "title"]
+    },
+    {
+      "name": "查看 todo 列表",
+      "type": "api",
+      "method": "GET",
+      "path": "/api/todos",
+      "expect_status": 200,
+      "expect_body_is_array": true
+    },
+    {
+      "name": "删除 todo 项",
+      "type": "api",
+      "method": "DELETE",
+      "path": "/api/todos/1",
+      "expect_status": 200
+    },
+    {
+      "name": "删除不存在的 todo",
+      "type": "api",
+      "method": "DELETE",
+      "path": "/api/todos/9999",
+      "expect_status": 404
+    },
+    {
+      "name": "添加 todo 并验证列表显示",
+      "type": "e2e",
+      "steps": [
+        {"action": "navigate", "url": "http://localhost:{port}/"},
+        {"action": "fill", "selector": "input[placeholder*='添加']", "value": "买牛奶"},
+        {"action": "click", "selector": "button[type='submit']"},
+        {"action": "assert_text", "selector": ".todo-list", "contains": "买牛奶"},
+        {"action": "screenshot", "name": "after-add"}
+      ]
+    },
+    {
+      "name": "勾选完成并验证样式变化",
+      "type": "e2e",
+      "steps": [
+        {"action": "click", "selector": ".todo-item:first-child input[type='checkbox']"},
+        {"action": "assert_class", "selector": ".todo-item:first-child", "has_class": "completed"},
+        {"action": "screenshot", "name": "after-complete"}
+      ]
+    },
+    {
+      "name": "空输入提交不新增条目",
+      "type": "e2e",
+      "steps": [
+        {"action": "click", "selector": "button[type='submit']"},
+        {"action": "assert_count", "selector": ".todo-item", "expected": 0}
+      ]
+    }
+  ]
+}
+```
+
+对于非 Web App 交付物（脚本、CLI）：
+
+```json
+{
+  "test_cases": [
+    {
+      "name": "正常输入运行",
+      "type": "exec",
+      "cmd": "node script.js --input sample.txt",
+      "expect_exit_code": 0,
+      "expect_stdout_contains": ["处理完成"]
+    },
+    {
+      "name": "空输入报错提示",
+      "type": "exec",
+      "cmd": "node script.js",
+      "expect_exit_code": 1,
+      "expect_stderr_contains": ["缺少参数"]
+    }
+  ]
+}
+```
+
+### 人工干预触发机制
+
+Lucas 在以下情况主动在对话入口提醒业主：
+- 系统连续处理失败超过阈值
+- 遇到涉及资金或安全的操作
+- 需求超出当前系统能力范围，需要人工判断
+- Andy/Lisa 开发任务出现重大分歧
+
+### 系统工程师与 Main
+
+**系统工程师**是系统构建者（人）、Claude Code 及其配套工具、Claude Code 背后的顶级大模型三者共同构成的协作体，是唯一能改变系统本身边界的角色。
+
+**本地操作（主要方式）**：直接使用 Claude Code 或 openclaw CLI（CLI 直连 Gateway 的 Main agent 会话），对所有 Agent 可见，可直接触达 Lucas/Andy/Lisa 及成员分身。
+
+**远程操作（Main 代理）**：不在 Mac 旁边时，通过企业微信应用单聊与 Main 对话。Main 内置于 `entrances/wecom/index.js`，不是独立进程。由 **GLM-5** 驱动（ZAI API 国内直连，无需梯子），模型配置独立写入 `~/.openclaw/openclaw\.json` agents.list `main` 条目，wecom-entrance 直接读取，与三角色 env var 配置层解耦。支持自然语言交互和远程调试。两条路径本质相同——都经过 Main agent，只是入口不同（本地 CLI vs. 远程微信）。Main 历史持久化到磁盘（`data/main/history-{userId}.json`），wecom-entrance 重启后不丢失对话上下文。Main 历史持久化到磁盘（`data/main/history-{userId}.json`），wecom-entrance 重启后不丢失对话上下文。
+
+**`<think>` 块剥离**：部分模型（如 DeepSeek R1、GLM-5）会在回复中夹带推理过程（`<think>...</think>` 块）。wecom-entrance 在取 reply 之前统一调用 `stripThink()` 剥离，业主只看到最终结论，不看到推理中间态。Lucas 路径同样在 `stripMarkdownForWecom()` 首行处理，全路径一致。
+
+**主动监控**：Main 不只是被动响应器。wecom-entrance 内置 30min 监控循环，定时触发 Main agent 执行健康扫描：检查 PM2 + Gateway + 日志错误，每天扫描一次 Lucas 对话质量。发现异常主动推送给业主；全部正常则静默（不打扰）。监控状态记录在 `~/.openclaw/workspace-main/HEARTBEAT.md`，Main 也可在响应模式中直接调用这两个扫描工具进行按需诊断。
+
+#### Main 工具集
+
+| 工具                     | 能力                                                        |
+| ---------------------- | --------------------------------------------------------- |
+| `get_system_status`    | PM2 进程状态 + 服务健康检查                                         |
+| `get_logs`             | 读取任意服务的日志文件（stdout + stderr）                              |
+| `read_file`            | 读取 HomeAI 目录下任意文件，用于远程诊断                                  |
+| `restart_service`      | 重启 PM2 管理的服务（wecom / cloudflared）                         |
+| `restart_gateway`      | 重启 OpenClaw Gateway（launchctl stop + start），热重载插件代码       |
+| `run_shell`            | 执行白名单诊断命令（curl / tail / grep / launchctl / pm2 等）         |
+| `test_lucas`           | 向 Lucas 发测试消息，验证 wecom → Gateway 完整链路                     |
+| `exec_script`          | 在 HomeAI 根目录执行 bash / python3 脚本，对整个 HomeAI 目录有完整读写权限    |
+| `write_file`           | 直接写入本机任意路径文件（不需要生成脚本，适合写 Obsidian 笔记、保存报告等）              |
+| `send_file`            | 将 HomeAI 目录下的文件通过企业微信发给业主                                |
+| `trigger_finetune`     | 后台触发增量微调                                                  |
+| `scan_pipeline_health` | 全面扫描系统健康：PM2 + Gateway（`/health`）+ wecom + 最近 1h 日志错误摘要  |
+| `scan_lucas_quality`   | 扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空/过短回复 |
+| `evaluate_l0`          | 蒸馏管道健康：watchdog PM2 状态、上次蒸馏时间、未蒸馏对话积压量、Kuzu Fact 节点总数 |
+| `evaluate_l1`          | Agent 认知质量：scan_lucas_quality 结果 + Andy/Lisa 最近 20 条 agent_interactions 抽查 |
+| `evaluate_l2`          | 进化循环状态：skill-candidates 候选数、dpo-candidates 负例数、Andy HEARTBEAT 上次触发时间、现有 Skill 数量 |
+| `evaluate_system`      | 总入口：依次调 L0~L2 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌ [一句话说明]`），业主发「系统评估」即触发 |
+| `update_heartbeat`     | 追加监控观察（`append_observation`）/ 标记日报已发（`mark_daily_sent`，清空待汇总观察）|
+
+典型远程调试流程：改完插件代码 → `restart_gateway` → `test_lucas` → 确认修复，全程企业微信完成。
+
+会话历史在进程内保留（重启清空），支持追问和上下文连续对话。
+
+**通道说明**：
+- 业主通过企业微信应用**单聊** → Main（系统指令）
+- 业主在**群里**发消息 → Lucas（组织成员身份，带【业主】标签）
+- 两条通道互不干扰
+
+#### Main 通道安全边界（不可破坏规则）
+
+1. **Andy/Lisa 不得触碰 Main**：Main 通道的设计与实现属于系统工程师信息域。Andy/Lisa 的任何代码生成、方案设计，均不得涉及 Main 相关逻辑（`entrances/wecom/index.js` 的系统工程师鉴权部分、Main 工具实现、Main 会话管理）。
+2. **组织成员不得侵入 Main**：Main 通道只响应系统工程师（业主）的企业微信**应用单聊**。Channel 层必须在身份验证阶段将组织成员的消息严格路由到 Lucas，不得流入 Main。任何试图冒充或绕过身份验证访问 Main 的请求，直接拒绝。
+3. **Main 的能力不对 Lucas 开放**：Lucas 无权调用 Main 工具集（`restart_gateway`、`exec_script` 等），这些能力只由系统工程师通过 Main 通道使用。注意：Lucas 有自己的 `send_file` 工具（走 bot 通道发给成员），与 Main 的同名工具（走企业应用发给业主）是完全独立的两套实现，不冲突。
+
+#### 系统工程师观测信号
+
+系统运行时会在以下路径产生待处理信号，系统工程师定期查看：
+
+| 信号文件 | 产生时机 | 处理方式 |
+|---------|---------|---------|
+| `data/learning/skill-candidates.jsonl` | Lucas 调用 `flag_for_skill` 时写入，表示该模式可能值得结晶 | 查看 pending 条目，Andy HEARTBEAT 会自动评估；复杂情况可手动触发 |
+| `data/learning/dpo-candidates.jsonl` | `agent_end` DPO 候选检测命中（负例模式匹配）或用户纠正信号触发时写入；`type` 字段区分 `pattern_match` / `user_correction` | 复查 `confirmed: false` 条目，核实 `bad_response` 字段；确认为真负例后用于后续 DPO 微调 |
+| `data/learning/hallucination-filtered.jsonl` | 蒸馏管道预处理阶段写入，来源是 ChromaDB 中 `dpoFlagged=true` 的记录 | 复查已确认幻觉记录是否正确过滤；归档，不反向写回 ChromaDB |
+| `data/learning/dep-installs.jsonl` | OpenCode 安装、升级、回退事件 | 出现 `rollback_failed` 时人工检查工具可用性 |
+| `data/learning/agent-end-debug.jsonl` | 每次 agent_end 事件（保留最近 200 条） | 调试用，不需要常规处理 |
+| `data/learning/opencode-results.jsonl` | opencode 执行完成时写入（exitCode、stdout 摘要、实际变更文件、Spec vs git diff 对照表） | ❌/⚠️ 行表示 spec 预期与实际变更不符，需人工确认实现质量 |
+| `data/learning/opencode-sessions.json` | opencode session 状态持久化 | wecom-entrance 重启后 Andy 仍可通过 `get_opencode_result` 查询历史 session |
+| `data/learning/followup-queue.jsonl` | 流水线完成时写入（taskId / userId / 需求摘要 / 交付时间 / status=pending）；Lucas 20:00 HEARTBEAT 扫描后标记 `status=sent` | 观察 `pending` 条目是否被 Lucas 按时跟进 |
+| `data/learning/andy-goals.jsonl` | Andy HEARTBEAT Check 0 写入（id / trigger / description / actionTaken / status）；每次最多新增一条，上次 pending/in_progress 时优先推进上次目标 | 观察 `trigger` 是否反映真实薄弱指标；`status` 能否推进到 completed |
+
+### 框架角色能力契约
+
+> **框架层提供机制，实例层提供内容。**
+>
+> 同一套框架能力，在 HomeAI 里面向家庭成员，在企业部署里面向员工，在学校部署里面向学生——机制不变，内容由实例注入。下表是每个角色在 CrewClaw 框架层的能力契约，与部署场景无关。
+
+#### 业务大师（Business Master）
+
+组织与外部世界的接触面。接受外部请求，识别意图，驱动内部协作，向外交付结果。
+
+**框架层工具（任何 CrewClaw 实例开箱即有）**：
+
+| 工具 | 机制 |
+|------|------|
+| `trigger_development_pipeline` | 需求确认后，将开发任务提交给架构大师 |
+| `report_bug` | 将 Bug 直接提交给实现大师，不经过架构大师 |
+| `recall_memory` | 语义检索组织成员的历史对话记忆 |
+| `query_member_profile` | 向成员分身询问该成员的偏好/习惯/近期状态 |
+| `create_member_shadow` | 为高频接触的组织成员创建独立分身 Agent |
+| `send_message` | 向 Channel 成员发送文字消息（Channel 实现由实例注入） |
+| `send_voice` | 向 Channel 成员发送语音消息（TTS 实现由实例注入） |
+| `send_file` | 向 Channel 成员发送文件（Channel 实现由实例注入） |
+| `search_web` | 获取外部互联网实时信息 |
+| `flag_for_skill` | 标记反复出现的执行模式，积累 Skill 结晶候选信号 |
+| `record_outcome_feedback` | 记录需求完成的用户反馈，驱动 DPO 语料管道 |
+| `list_active_tasks` / `cancel_task` | 查询/叫停进行中的开发流水线任务（业务大师对流水线有完整控制权） |
+| `notify_engineer` | 向系统工程师（外部干预角色）发信号：技术干预请求 / 流水线通报 |
+| `gen_visitor_invite` | 为外部来访者生成临时接入凭证 |
+| `propose_knowledge_tag` | 标签治理：为访客/成员提出知识分类标签 |
+
+**框架层进化机制（自动运行，无需配置）**：
+- `agent_end` 写入 ChromaDB `conversations`，积累对话语料
+- DPO 检测：工具调用 vs 承诺词对比，每轮自动识别负例候选
+- 路由 KPI：每轮记录模型分层决策，驱动 Axis 1 能力进化
+
+**实例层在框架能力上叠加**：
+- **人格与行为规则**：SOUL.md（性格底色）/ AGENTS.md（行为铁律）/ IDENTITY.md（自我认知）→ 决定怎么说话、怎么判断
+- **服务对象说明**：USER.md / TOOLS.md → 决定服务谁、知道哪些工具和领域信息
+- **Channel 实现**：`send_message` / `send_voice` / `send_file` 背后调用哪个后端（企业微信 / 钉钉 / Slack）
+- **领域专属升级工具**：如 HomeAI 的 `alert_owner`（家庭紧急告警，走 bot 通道、组织成员可见）
+- **HEARTBEAT 任务内容**：定时触发的具体任务（如 HomeAI 的 A 股情报、情感感知巡检）
+
+---
+
+#### 架构大师（Architect）
+
+需求 → 可实现的 Spec。技术可行性判断，集成点验证，实现任务交接，质量门控。
+
+**框架层工具（任何 CrewClaw 实例开箱即有）**：
+
+| 工具 | 机制 |
+|------|------|
+| `research_task` | 对需求进行技术背景调研和可行性判断 |
+| `trigger_lisa_implementation` | 向实现大师交付 Spec；基础设施层三道验证：① 集成点存在性（exists check） ② AC 非空 ③ **Read-before-Edit**（code_evidence symbol grep，修改现有文件时强制，找不到 symbol → 阻断）；核心框架文件保护（命中保护文件列表时即时通知系统工程师，warn-and-proceed） |
+| `consult_lisa` | Spec 设计前向实现大师预查关键技术点可行性 |
+| `query_requirement_owner` | 遇到需求歧义时，向业务大师发起澄清（`【来自Andy·需求澄清】` 前缀） |
+| `request_andy_evaluation` | 触发独立 Andy 评估器对 Spec 做设计审查（集成点存在性 + AC 可测性） |
+| `create_sub_agent` | 创建专项研究子 Agent，用完销毁，语料归入架构大师 corpus |
+
+**框架层进化机制（自动运行）**：
+- `agent_end` 写入 ChromaDB `decisions`，积累设计决策语料
+- Spec 结构验证三道门：① `exists=false` → 阻断 ② AC 为空 → 阻断 ③ `code_evidence` symbol grep（修改现有文件时强制）→ symbol 找不到 → 阻断（**Read-before-Edit** 强制检查）
+
+**实例层在框架能力上叠加**：
+- **设计哲学内化**：DESIGN-PRINCIPLES.md → 决定架构判断的品味（什么是好设计）
+- **系统架构上下文**：ARCH.md 注入（当前代码库架构摘要）→ 决定设计时知道哪些已存在
+- **行为约束**：AGENTS.md 的工程规范 → 决定遇到技术选型时的倾向
+
+---
+
+#### 实现大师（Implementer）
+
+Spec → 可运行的交付物。写测试存根，执行代码，验收，反馈。确定性优先于创造性。
+
+**框架层工具（任何 CrewClaw 实例开箱即有）**：
+
+| 工具 | 机制 |
+|------|------|
+| `run_opencode` | 在代码库里执行实现（多文件联动、迭代修复） |
+| `get_opencode_result` | 获取 OpenCode 执行结果 |
+| `report_implementation_issue` | 实现受阻时向架构大师发起反馈（含完整错误、已尝试修法、根因猜测），2 轮保护机制 |
+| `request_evaluation` | 触发独立 Lisa 评估器对照 AC 清单做代码审查 |
+| `create_sub_agent` | 创建专项实现子 Agent，用完销毁，语料归入实现大师 corpus |
+
+**框架层进化机制（自动运行）**：
+- `agent_end` 写入 ChromaDB `code_history`，积累实现语料
+- 测试存根 → 实现 → 验证的确定性循环：据 AC 写测试，写不出来即退回架构大师修 Spec
+
+**实例层在框架能力上叠加**：
+- **代码库上下文**：CODEBASE.md 注入（当前代码库摘要）→ 决定实现时知道哪些已存在
+- **工程约束**：AGENTS.md 的工程规范 → 决定编码风格和避坑原则
+- **交付目录**：实现结果写入哪个路径（HomeAI 是 `app/generated/`，其他实例自定义）
+
+---
+
+### Lucas
+
+> *以下为业务大师角色在当前 CrewClaw 实例（HomeAI）中的详细实现，框架层能力契约见上节。*
+
+**本质**：OpenClaw embedded agent，通过 SOUL.md（性格）+ AGENTS.md（工作规则）定义人格
+
+**职责**：组织成员的对话入口，识别需求并触发流水线，验收流水线结果并以组织语气交付
+
+**核心能力**：
+- **意图识别**：区分日常对话、工具调用、开发需求三类，日常对话直接回，开发需求先陪伴理解再上报；强制决策树（AGENTS.md 铁律）：识别到开发需求后下一个动作必须调用工具，不允许口头承诺代替工具调用
+- **需求澄清**：模糊需求不直接触发流水线，先通过追问确认六要素（做什么/给谁/交付物/触发时机/数据来源/紧急程度）再上报
+- **流水线触发**（流水线稳定期）：调用 `trigger_development_pipeline` 工具触发 Andy→Lisa；**流水线暂停期改用 `alert_owner`** 通知系统工程师手工安排；感知到家人情绪状态、时间敏感度、可接受替代方案或上次不满意点时，填入可选 `context` 字段——Andy 设计时优先参考，写入任务注册表 `lucasContext` 字段跟任务走
+- **流水线可见性**：Lucas `before_prompt_build` 自动注入 `【当前进行中任务】` 块（阶段标签 `andy_designing / lisa_implementing / completed` + Andy 方案摘要 `designNote`），无需主动询问即可向家人解释进展
+- **系统工程师通报**：调用 `notify_engineer` 工具，通过专属通道向系统工程师发送通知；适用于系统干预请求（`type=intervention`，🔧）和流水线关键通报（`type=pipeline`，📋）；与 `alert_owner`（走 bot 通道、组织成员可见的紧急告警）区分使用
+- **主动联系**：调用 `send_message` 工具，可主动通过 Channel 联系任意组织成员，不依赖成员先发消息
+- **主动循环**：每小时定时扫描 ChromaDB decisions 集合（`outcome=null`，即待跟进条目），主动通知用户当前状态（进行中/完成/卡住）；不重新触发流水线——流水线只由用户明确发起，避免重复写入新 `outcome=null` 条目导致循环膨胀
+- **记忆主动检索**：调用 `recall_memory(query)` 工具，主动语义检索 ChromaDB conversations 集合；含隐私规则——私聊内容默认保密，不在群聊中透露，除非当事人明确授权
+- **文件发送**：调用 `send_file(target, filePath)` 工具，将文件通过 Channel 发给指定成员或群聊（`"group"`）；与 Main 同名工具实现独立，走 bot 通道
+- **语音发送**：调用 `send_voice(target, text)` 工具，将文字转成语音发给成员；成员发语音时系统已自动回语音，无需调用此工具
+- **成员分身询问**：调用 `query_member_profile(member_id, question)` 工具，向已创建的成员分身询问该成员的偏好/习惯/近期状态；仅限分身已创建后使用
+- **微信公众号文章理解**：bot 通道收到 `mp.weixin.qq.com` 链接时，wecom-entrance 用 Playwright 抓取正文并注入消息；Lucas 无需感知抓取过程，直接理解文章内容并按文章学习模式（提炼→联系家人处境→引导深入→生成 Skill）响应
+- **用户验收包装**：流水线完成后接收结果，对比原始需求判断是否满足，以组织语气包装后推给用户并收集反馈
+- **承诺追踪**：记录对用户的承诺，每小时主动检查未完成承诺并跟进，不需要等用户下次对话
+- **能力自查**：触发开发流水线前查 Kuzu capability 节点（status=active），发现已有类似能力时提示复用，避免重复开发
+- **反馈写回**：收到用户对流水线结果的反馈后，调用 `record_outcome_feedback` 工具更新 ChromaDB decisions 集合中对应条目的 `outcome` 字段（null → success / failure / partial），既关闭承诺追踪，又为 DPO 语料提供质量信号；**基础设施自动行为**：outcome=completed 时插件层 fire-and-forget 调 `notify_engineer(type="pipeline")`，告知系统工程师「[提交时间] 你提交的「需求标题」（req_xxx）已完成。[一句话说明]」，Lucas 无需手动再调
+- **成员分身管理**：主动判断创建/更新/退休成员分身；通过 `create_member_shadow(memberId, profile)` 创建分身，分身 workspace 由 Lucas 管理；语料归入 Lucas corpus
+- **语料采集**：自身对话 + 成员分身对话写入 ChromaDB，提取器按 creatorId 归属拉取转化为训练对
+
+**模型路由层（路由即学习）**：
+- 初始 localThreshold=0.0，全走 DeepSeek（云端）→ 质量评估 → 微调队列
+- 随进化：日常对话等低复杂度任务逐步切至 LOCAL_MODEL_NAME（本地），目标 70% 本地
+
+### Andy
+
+> *以下为架构大师角色在当前 CrewClaw 实例（HomeAI）中的详细实现，框架层能力契约见上节。*
+
+**本质**：OpenClaw embedded agent，通过 Gateway 路由（`callGatewayAgent("andy", ...)`）
+
+**职责**：设计工具——把 Lucas 识别的需求转化为 Lisa 可直接执行的工具 spec，同时支持系统进化基础设施的设计
+
+**两个服务目标**（按优先级）：
+1. **支撑 Lucas 达成业务目的**：理解 Lucas 的场景，设计成员真正能用的工具
+2. **支撑系统在系统工程师监控下自我进化**：为系统进化基础设施提供设计能力（语料管道、微调流程等）
+
+**核心能力**：
+- **技术调研**：通过 `research_task(query)` 工具驱动，内部复用 DeepSeek 搜索；复杂任务可通过 `sessions_spawn` 创建专项研究子 Agent（API 可行性调研、竞品方案对比等），对 Lucas/Lisa 不感知
+- **软件 spec 设计**：Andy 自己输出 Implementation Spec（不依赖外部工具）；spec 自包含（文件路径、实现顺序、关键逻辑伪代码、验收命令），Lisa 拿到直接实现；spec 末尾附 JSON 块供插件解析（含 requirement、tech_stack、files、entry_point、validation_cmd、complexity）以及 **`test_cases` 数组**（Andy 定义验收条件，Lisa 据此写 `test.js` 并执行）
+- **Andy 验收升级**：Lisa 回传的交付报告含 `test-report.json`，Andy 的设计意图校验基于测试结果进行；测试全部通过时 Andy 重点校验设计合理性；部分通过时 Andy 判断失败项是否可接受（已知局限 vs 设计缺陷）
+- **决策记忆查询**：设计前查 ChromaDB decisions 集合历史同类决策，避免重复踩坑
+- **spec 自验**：触发 Lisa 前用 `exec` 逐项核查 spec 引用的文件路径/函数名/npm包/validation_cmd/目标目录是否真实存在；有一项不过就修 spec，全部通过再触发
+- **Read-before-Edit 强制**：修改现有文件时，spec JSON 必须含 `code_evidence` 字段（`[{file, symbol}]`，列出用 exec 读过的文件及其中真实符号名）；`trigger_lisa_implementation` 基础设施层 `readFileSync + includes(symbol)` 验证，symbol 找不到 → 阻断并要求 Andy 回步骤 2 补读代码；纯新建文件（全 action:新增）时 `code_evidence` 可为空数组
+- **背景上下文读取**：接收需求时从任务注册表读取 `lucasContext`（Lucas 补充的家人情绪/时间敏感度/可接受替代方案），spec 设计时优先满足——若家人说不急但下周要用，方案可简化；若说上次太复杂，避免过度设计
+- **需求澄清**：spec 设计过程中发现歧义或关键信息缺失 → 通过 `query_requirement_owner` 向 Lucas 发起澄清（`【来自Andy·需求澄清】` 前缀）；收到回复后更新 spec，不猜测
+- **可行性预咨**：写 spec 前对关键技术点可通过 `consult_lisa` 向 Lisa 发起咨询；Lisa 返回可行/存疑/不可行 + 建议；避免设计出无法实现的方案
+- **设计质量门**：spec 完成后可通过 `request_andy_evaluation` 触发 andy-evaluator 做独立设计审查（集成点存在性 + AC 可测性）；通过后再触发 Lisa
+- **Lisa 触发**：spec 完成且自验通过后，通过 `trigger_lisa_implementation` 触发 Lisa，必须传入 `requirement_id`（叫停机制依赖此 ID）
+- **Andy 验收**：Lisa 交付后对照 spec 做设计意图校验（通过 / 部分通过 / 失败 + 原因）；Andy 是质量关口，不把未验收结果直接推给用户
+- **交付简报**：验收通过后，Andy 用 `send_message` 向需求发起人（user_id）发送家人语言简报：① 家人能感知的变化（非技术语言）② 注意事项或限制（有则说，无则省略）③ 下次类似需求可以这样说（帮 Lucas 更准确传达，提升下次 spec 质量）；若有 `lucasContext` 则简报呼应家人的原始诉求
+- **子 Agent 管理**：通过 `create_sub_agent` 创建专项研究或执行子 Agent，用完销毁，语料归入 Andy corpus
+- **语料采集**：自身设计语料 + 子 Agent 工作语料写入 ChromaDB，提取器按 creatorId 归属拉取转化为训练对
+
+**并发控制**：`runAndyPipeline` 入口有信号量（`MAX_ANDY_CONCURRENT=1`），Andy 流水线串行执行，避免多个并发请求同时压 DeepSeek R1 导致全部超时。超出时排队等待并立即通知用户「已排队」，不丢弃请求。`callGatewayAgent` 调用为单次 30 分钟不重试（`1_800_000ms`），替代原有含重试逻辑的调用方式（重试会在超时时产生多个并发 Andy 会话，导致多个 trigger_lisa_implementation 同时触发）；Andy 实际工作量（read + research + spec 写作 + trigger）约 3-5 分钟，远小于上限。
+
+**模型路由层（路由即学习）**：
+- 初始 localThreshold=0.0，全走 MiniMax（云端）→ 质量评估 → 微调队列
+- 随进化：简单方案等低复杂度任务逐步切至 LOCAL_MODEL_NAME（本地），目标 40% 本地
+
+### Lisa
+
+> *以下为实现大师角色在当前 CrewClaw 实例（HomeAI）中的详细实现，框架层能力契约见上节。*
+
+**本质**：OpenClaw embedded agent，通过 Gateway 路由（`callGatewayAgent("lisa", ...)`）
+
+**职责**：实现工具——按 Andy 的工具 spec 生成可运行实现，验证后交付
+
+**两个服务目标**（按优先级）：
+1. **支撑 Lucas 达成业务目的**：实现成员真正能用的工具，让 Lucas 有更多能力可调用
+2. **支撑系统在系统工程师监控下自我进化**：实现系统进化基础设施（微调脚本、语料管道工具等）
+
+**核心能力**：
+- **实现前调研**：收到 spec 后，先用 `research_task` 判断有无现成 npm 包或开源实现；Andy 做架构级选型，Lisa 做实现级选型，两层互补
+- **代码实现**：优先用 `exec` 直接写代码并验证（简单任务）；多文件联动、需要迭代修复的复杂任务调用 `run_opencode`（备用）；生成结果保存到 `app/generated/{应用名}/`，后端 API 写 `server.js` 由 wecom-entrance 自动扫描挂载
+- **系统测试（四阶段）**：实现完成后必须跑完四阶段测试，`test.js` 是一等交付物，与 `server.js` 同等地位（见下方「Lisa 系统测试协议」）
+- **调试回路（强制）**：测试失败 → 读完整错误 → 定位根因（路径/接口/依赖/逻辑）→ 针对根因修改 → 再验证（T2+T3+T4 合计最多 2 轮）
+- **实现阻塞上报**：2 轮仍失败 → `report_implementation_issue` 向 Andy 反馈（含完整错误原文、已尝试修法、根因猜测）；上报后继续实现 spec 里其他能确定的部分，不停下来等 Andy 回复
+- **独立验收门控**：实现完成后调 `request_evaluation` 触发 lisa-evaluator 对照 AC 清单做客观验收；PASS 才回传 Andy；PARTIAL/FAIL 针对失败项修复后重试（最多 3 轮保护，3 轮后强制 `report_implementation_issue` 上报）
+- **子 Agent 管理**：通过 `create_sub_agent` 创建专项执行子 Agent，用完销毁，语料归入 Lisa corpus
+- **结果回传**：交付报告包含测试摘要（通过/失败数 + 失败详情），回传 Andy 验收；Andy 基于测试报告做设计意图校验
+- **决策记忆写入**：实现完成后写入 ChromaDB decisions 集合（实现路径 + outcome），下次遇到类似问题可查历史
+
+**Lisa 系统测试协议**：
+
+```
+T1 静态分析（必须，秒级）
+  node --check / py_compile + 依赖可解析性检查
+  → 失败立即修复，不进入后续阶段
+
+T2 启动测试（必须，<10s）
+  node server.js & 启动，等 3 秒
+  检查进程存活 + 无 uncaughtException 日志
+  → 失败自我修复，计入修复次数
+
+T3 健康检查（必须，<5s）
+  curl -s http://localhost:{port}/health → HTTP 200 + {"status":"ok"}
+  → 失败自我修复，计入修复次数
+
+T4 后端功能测试（基于 spec.test_cases type=api/exec/state，5-15s）
+  遍历 spec 中非 e2e 的 test_case：
+    ├─ type=api:   curl 请求 → 校验 status_code + body_contains
+    ├─ type=exec:  运行命令 → 校验 exit_code + stdout_contains
+    └─ type=state: 调用后读取文件/数据库 → 校验预期状态
+  验证后端逻辑正确性，不涉及前端渲染
+  → 失败自我修复，计入修复次数（T2+T3+T4 合计最多 2 轮）
+
+T5 前端 E2E 测试（仅 Web App 交付，基于 spec.test_cases type=e2e，10-30s）
+  工具：OpenClaw 原生 browser 工具（优先）→ exec 运行 e2e-test.js（降级）
+  模拟真实用户在浏览器中的完整操作流程：
+    ├─ navigate: 打开页面 URL
+    ├─ fill:     填写输入框
+    ├─ click:    点击按钮/链接
+    ├─ press:    按键（Enter/Tab 等）
+    ├─ assert_text: 断言元素文本包含预期内容
+    └─ screenshot: 截图存入 test-screenshots/（失败截图必须保存）
+  测什么 T4 测不到的：
+    ├─ 前端 JS 加载和执行是否正常（React/Vue/原生 DOM 操作）
+    ├─ 用户交互后 UI 状态是否正确更新
+    ├─ 页面路由跳转是否正常
+    └─ 错误提示是否正确展示（空输入/非法操作）
+  T5 失败策略：截图标注失败点 → 自我修复（合并入 T2+T3+T4+T5 总共 2 轮上限）→
+    仍失败则 partial_pass，截图作为失败证据附在报告中
+  ⚠️ T5 不跑的情况：交付物为纯脚本/CLI 工具（无 HTML 文件），跳过 T5
+
+测试完成后，无论通过与否：
+  ├─ 停止 test server（kill {pid}）
+  └─ 生成 test-report.json 写入交付目录
+  └─ 截图保存到 test-screenshots/（T5 运行时）
+```
+
+**为什么 T4 和 T5 都需要**：
+
+| 测试类型 | 发现什么问题 | 发现不了什么 |
+|---------|------------|------------|
+| T4（curl API）| 接口逻辑错误 / 数据格式不对 / 边界未处理 | 前端 JS 报错 / DOM 未更新 / 样式遮挡了按钮 |
+| T5（Playwright）| 用户交互流程不通 / JS 运行时错误 / UI 状态异常 | 接口内部逻辑 / 数据持久化正确性 |
+
+两层都通过 = 「后端对，前端也能用」。只有 T4 = 「接口对，但用户打不开 / 点不动」属于没真正测过。
+
+`test-report.json` 格式：
+
+```json
+{
+  "status": "pass | partial_pass | fail",
+  "summary": { "total": 8, "passed": 7, "failed": 1 },
+  "self_corrections": 1,
+  "results": [
+    { "name": "健康检查", "stage": "T3", "status": "pass", "duration_ms": 12 },
+    { "name": "添加 todo（API）", "stage": "T4", "status": "pass", "duration_ms": 38 },
+    { "name": "添加 todo 并验证列表显示", "stage": "T5", "status": "fail",
+      "error": "断言失败：.todo-list 未找到文本「买牛奶」（实际为空）",
+      "screenshot": "test-screenshots/add-todo-fail.png",
+      "fix_attempted": true, "fix_result": "仍失败：事件绑定在 DOMContentLoaded 后触发，但提交逻辑未绑定" }
+  ],
+  "artifacts": ["server.js", "index.html", "test-api.sh", "e2e-test.js", "test-report.json"],
+  "screenshots": ["test-screenshots/add-todo-fail.png"]
+}
+```
+
+**模型路由层（路由即学习）**：
+- 初始 localThreshold=0.0，全走 GLM-5（云端）→ OpenCode 使用云端模型 → 质量评估 → 微调队列
+- 随进化：常规代码等低复杂度任务逐步切至 LOCAL_MODEL_NAME（本地），目标 50% 本地
+
+**进化路径**：本地模型越来越强 → 路由到本地的比例越来越高 → OpenCode 越来越依赖本地，路由比例下降是本地专精程度的直接量化指标。
+
+### 角色间通信
+
+**原则**：四角色是平等同事，角色间通信全部经 Gateway 外部路由（`callGatewayAgent`），不直连；`sessions_spawn` 仅用于角色内部创建子 Agent（不跨角色）。V 字流水线的完整路径：
+
+```
+Lucas → Andy（需求触发）
+          ↕  需求澄清（Andy 遇 spec 歧义主动发起 → Lucas 自主回答或转成员确认）
+          → Lisa（spec 触发，含 requirement_id）
+          ↕  实现阻塞反馈（Lisa 2轮自修复后仍失败 → report_implementation_issue → Andy 判断修 spec/降级/推回）
+          → Andy（Lisa 交付后验收）
+        → Lucas（Andy 验收通过后翻译推送）
+
+Lucas 任务控制（任意时刻）：
+  list_active_tasks → 查询当前 running/queued 任务
+  cancel_task       → 叫停；pre-Lisa 检查点在实现启动前拦截
+```
+
+所有通信均经 OpenClaw Gateway（18789）路由，不直连。插件是外部协调者，不替任何角色做内部决策。任务注册表（`data/learning/task-registry.json`）记录全链路状态，cancel 命令在 trigger_lisa_implementation 调用前生效。
+
+---
+
+## 六、记忆系统与角色的自我进化
+
+> **设计定位**：记忆系统不是一个存储功能，是所有进化得以发生的基础设施。它对应进化层次框架的 L0+L1——角色基本认知能力的物质基础。没有记忆系统，L2-L4 的进化是空中楼阁。
+
+### 记忆系统要解决什么
+
+系统每次服务成员之前，必须能回答三个问题：
+
+| 问题 | 对应层 | 如果缺失 |
+|------|--------|---------|
+| **发生了什么？** 成员说过什么、有哪些待办承诺 | Data 层 | 角色每次从零开始，不知道上次聊了什么 |
+| **知道了什么？** 成员的性格、偏好、关系；每个角色的历史经验 | Knowledge 层 | 业务大师不认识成员；架构大师重复走弯路；实现大师在陌生代码库里盲写 |
+| **能做什么？** 哪些能力已结晶，业务大师可直接调用 | Capability 层 | 业务大师不知道自己有什么工具，产生幻觉 |
+
+三个问题持续维护好，就是记忆系统的全部职责。三个问题任意一个缺失，对应的进化通道就断掉。
+
+### 三层存储架构
+
+记忆系统由三个技术层组成，各自解决不同的问题：
+
+```
+Data 层（原始信息流）
+  技术：ChromaDB + nomic-embed-text（本地向量语义检索）
+  存储：组织成员对话历史 / 决策记录 / 行为规律 / 需求记录 / 实现历史
+  用途：每次对话前按语义相似度召回相关历史，注入当前请求
+
+Knowledge 层（结构化认知）
+  ┌─ 成员认知（Member Knowledge）
+  │   技术：Kuzu 图数据库 → MD 渲染文件（静态管道持续更新）
+  │   存储：组织成员是谁、如何沟通、关注什么（person/topic/event 节点）
+  │   更新：蒸馏管道自动写入，每周刷新（动态）
+  │   用途：成员档案渲染后常驻注入业务大师（懂人）
+  │
+  └─ 角色工作知识（Role Knowledge）
+      技术：静态 MD 文件（系统工程师手工维护）
+      存储：每个角色做好工作所需的系统知识（架构、代码库、约束）
+      更新：系统工程师在系统结构发生实质变化时手动更新（静态）
+      用途：常驻注入 Andy/Lisa（懂系统，能工作）
+
+Capability 层（结晶能力）
+  见下方专节
+```
+
+**两种 Knowledge 的本质区别**：成员认知随组织行为自动积累，系统工程师不需要手工维护；角色工作知识不会从对话中自动提炼，必须由系统工程师主动整理。搭建新实例时，两者都需要初始化，但维护责任不同。
+
+### 角色自我进化路径
+
+> 每个角色的自我进化路径由五层构成：**原始数据 → 处理脚本 → Kuzu 图节点 → OpenClaw 文件 → 注入机制**。三个角色进化重心不同：业务大师懂成员（person 知识），架构大师/实现大师积累判断（pattern 知识），三者共享 capability 知识。
+
+**数据流通用链路：**
+```
+Raw Data（ChromaDB / 静态文件）
+  → 处理脚本（distill-*.py / init-capabilities.py）
+    → Kuzu 节点/关系（Entity + Fact）
+      → render-knowledge.py 渲染
+        → OpenClaw 文件（MD / inject.md）
+          → 注入 LLM 上下文（OpenClaw 原生 / context-sources）
+```
+
+> **L1 就有的轻量进化路径（Agent 自主写入）**：除蒸馏管道外，L1 阶段已激活一条更直接的进化路径——**Agent 可以用内置工具直接修改自己的 MEMORY.md / AGENTS.md / SOUL.md，修改后下次 session 立即生效，无需重启 Gateway，无需外部脚本**。这是 OpenClaw 的设计意图（源码确认）：Agent 对话中发现规律 → 自写 MEMORY.md → 下次对话自动携带。distill-agent-memories.py 是系统工程师辅助蒸馏，两条路径互补，不替代。
+>
+> **MEMORY.md 的常青特性**：MEMORY.md 在 OpenClaw 原生记忆系统中**不参与时间衰减**（ChromaDB 对话记录有 30 天半衰期，MEMORY.md 永不衰减，排名永久稳定）。这意味着写进 MEMORY.md 的认知始终权威、不被时间冲淡——越写越稳，是角色自我认知的最高权威载体。ChromaDB 做有时效的语义检索（近期对话 / 决策），MEMORY.md 做永久稳定的自我认知沉淀，两者互补而非竞争。
+
+---
+
+#### 业务大师（陪伴者）— 进化重心：懂成员
+
+> *以下以 HomeAI 实例（Lucas）为例说明框架机制，文件路径与具体内容由实例定义。*
+
+**Kuzu 依赖**
+
+| Entity / Fact | 内容 | 原始数据来源 | 处理脚本 |
+|---|---|---|---|
+| `person` / `topic` + 12 种 Fact | 成员角色 / 说话方式 / 关注点 / 近期状态 / 互动风格 / 动态关系 / 共同经历 / 待跟进事项 | ChromaDB `conversations`（周批量）| `distill-memories.py` |
+| `topic` + `active_thread` Fact | 当前与成员正在推进的话题线索（state + summary），valid_until = today+45d | ChromaDB `conversations`（最近 7 天）| `distill-active-threads.py` |
+| `capability` + `has_capability` | Lucas 拥有的 11 个工具 + 1 个 Web App | `TOOLS.md` + `app-capabilities.jsonl` | `init-capabilities.py` |
+
+**OpenClaw 8 文件**
+
+| 文件 | 内容定位 | 维护方式 | 注入机制 |
+|---|---|---|---|
+| `SOUL.md` | 人格铁律 / 陪伴原则 / 行为规则 | 人工维护 | OpenClaw 原生 system prompt |
+| `AGENTS.md` | 工作规则 / 回复格式 / 防幻觉约束 | 人工维护 | OpenClaw 原生 system prompt |
+| `IDENTITY.md` | 角色定位（由实例定义） | 人工维护 | OpenClaw 原生 system prompt |
+| `USER.md` | 服务对象（由实例定义） | 人工维护 | OpenClaw 原生 system prompt |
+| `TOOLS.md` | 可用工具清单 + 成员 userId + 群 chatId | 人工维护（业务大师验收后自行登记）| OpenClaw 原生 system prompt |
+| `MEMORY.md` | 成长日记：Lucas 自主记录；L2 后 Kuzu pattern 节点渲染补 DISTILLED 节 | Agent 自主写入；L2 后 `render-knowledge.py` 渲染 DISTILLED 区块 | OpenClaw 原生注入 |
+| `BACKGROUND.md` | 项目前世今生：HomeAI 是什么 / 幕后队友 Andy & Lisa / 双向V字流水线 / L0-L2 里程碑 / 文档查阅地图 | 系统工程师手工维护 | `context-sources` static-file appendSystemContext |
+| `{members}/{userId}.inject.md` | 成员结构化档案（角色 / 说话风格 / 关注点）| Kuzu person → `render-knowledge.py` 渲染，每周蒸馏后自动更新 | `context-sources` file.user-profile appendSystemContext |
+| `SKILL.md`（×N）| 陪伴 / 工具使用 / 领域知识等技能 | 人工维护；L2 架构大师结晶后自动生成 | OpenClaw 原生 `<available_skills>` |
+
+**处理脚本**
+
+| 脚本 | 输入 | 输出 | 触发时机 |
+|---|---|---|---|
+| `distill-memories.py` | ChromaDB `conversations`（全量，周批）| Kuzu `person`/`topic` + 12 种 `Fact`（source_type=distill）| 每次对话后触发（30min 冷却）+ 每周日 2 点兜底 |
+| `distill-active-threads.py` | ChromaDB `conversations`（最近 7 天）| Kuzu `active_thread` Fact 边（valid_until = today + 45d，source_type=thread_distill）| 每次对话后触发（6h 冷却），fire-and-forget |
+| `render-knowledge.py`（默认）| Kuzu person Facts（`valid_until IS NULL`）| `{members}/{userId}.inject.md` | `distill-memories.py` 完成后自动触发 |
+| `init-capabilities.py` | `CAPABILITY_REGISTRY`（人工提炼自 TOOLS.md）+ `app-capabilities.jsonl` | Kuzu `capability` Entity + `has_capability` Fact（source_type=registry，owner=lucas）| 手动运行，幂等；重置路径：重跑此脚本，过期所有 fact → 写新 registry |
+| `distill-agent-memories.py`（`refine_capabilities` 分支）| `capability-events.jsonl`（按 toolName 分组，≥5 条样本）+ Kuzu registry 描述（baseline）| Kuzu `has_capability` Fact（source_type=distilled，confidence=真实成功率）；同时过期对应 registry fact，避免 active-capabilities 重复注入 | 每周日 2 点；每个工具样本达 5 条时生效 |
+
+---
+
+#### 架构大师（设计师）— 进化重心：积累设计判断
+
+> *以下以 HomeAI 实例（Andy）为例说明框架机制，文件路径与具体内容由实例定义。*
+
+**Kuzu 依赖**
+
+| Entity / Fact | 内容 | 原始数据来源 | 处理脚本 |
+|---|---|---|---|
+| `pattern` + `has_pattern` | 高层设计判断 / 反复出现的模式 / 教训 | ChromaDB `decisions`(agentId=andy) + `agent_interactions` + `07-设计与技术外部参考/` + `09-evolution-version.md` | `distill-agent-memories.py` |
+| `capability` + `has_capability` | Andy 拥有的 2 个工具（research_task / trigger_lisa_implementation）| `TOOLS.md` | `init-capabilities.py` |
+
+**OpenClaw 8 文件**
+
+| 文件 | 内容定位 | 维护方式 | 注入机制 |
+|---|---|---|---|
+| `SOUL.md` | 设计哲学 / 判断标准 / 边界原则 | 人工维护 | OpenClaw 原生 system prompt |
+| `AGENTS.md` | 工作规则 / 领域约束 / Co-Pilot 模式 | 人工维护 | OpenClaw 原生 system prompt |
+| `IDENTITY.md` | 技术设计师 / 认知方式 | 人工维护 | OpenClaw 原生 system prompt |
+| `USER.md` | 服务对象：业务大师 + 系统工程师 | 人工维护 | OpenClaw 原生 system prompt |
+| `TOOLS.md` | 可用工具清单（调研 / 触发 Lisa 等）| 人工维护 | OpenClaw 原生 system prompt |
+| `MEMORY.md` | 设计原则 / 踩坑记录；`<!-- DISTILLED-START/END -->` 区块由 Kuzu pattern 渲染 | 人工播种初始内容；`distill-agent-memories.py` 写 Kuzu → `render-knowledge.py` 渲染 DISTILLED 节 | OpenClaw 原生注入 + `context-sources` static-file |
+| `BACKGROUND.md` | 项目前世今生：框架打样定位 / 四角色结构 / 双向V字流水线 / L0-L2 演进 / 文档查阅地图（含何时读哪个文档）| 系统工程师手工维护 | `context-sources` static-file appendSystemContext |
+| `ARCH.md` | 系统架构知识摘要（三层 / 关键路径 / 数据层 / 插件 / 流水线）| 系统工程师手工维护 | `context-sources` static-file appendSystemContext |
+| `DESIGN-PRINCIPLES.md` | 核心设计原则 | 人工维护 | `context-sources` static-file appendSystemContext |
+
+（Andy 的 SKILL 槽位由 9 个 `SKILL.md` 覆盖，含 `best-practice-evaluation` 等）
+
+**处理脚本**
+
+| 脚本 | 输入 | 输出 | 触发时机 |
+|---|---|---|---|
+| `distill-agent-memories.py`（Andy 分支）| ChromaDB decisions + agent_interactions + 外部参考文章 + 进化历史 | Kuzu `pattern` Entity + `has_pattern` Fact（agent=andy，full refresh）| 每周日 2 点自动触发 |
+| `render-knowledge.py --agent andy` | Kuzu `has_pattern` Facts（`valid_until IS NULL`，agent=andy）| `MEMORY.md` DISTILLED-START/END 区块替换 | `distill-agent-memories.py` 完成后 subprocess 自动触发 |
+| `init-capabilities.py` | `CAPABILITY_REGISTRY` | Kuzu `capability` + `has_capability`（owner=andy）| 手动运行，幂等 |
+
+---
+
+#### 实现大师（工程师）— 进化重心：积累实现判断
+
+> *以下以 HomeAI 实例（Lisa）为例说明框架机制，文件路径与具体内容由实例定义。*
+
+**Kuzu 依赖**
+
+| Entity / Fact | 内容 | 原始数据来源 | 处理脚本 |
+|---|---|---|---|
+| `pattern` + `has_pattern` | 高层工程判断 / 实现模式 / 技术陷阱 | ChromaDB `decisions`(agentId=lisa) + `code_history` + `agent_interactions` + `docs/10-engineering-notes.md`（系统工程师维护实现陷阱） | `distill-agent-memories.py` |
+| `capability` + `has_capability` | Lisa 拥有的 2 个工具（run_opencode / get_opencode_result）| `TOOLS.md` | `init-capabilities.py` |
+
+**OpenClaw 8 文件**
+
+| 文件 | 内容定位 | 维护方式 | 注入机制 |
+|---|---|---|---|
+| `SOUL.md` | 工程师哲学 / 最小复杂度 / 推回优先 | 人工维护 | OpenClaw 原生 system prompt |
+| `AGENTS.md` | 工作规则 / Mobile-first / 交付规范 | 人工维护 | OpenClaw 原生 system prompt |
+| `IDENTITY.md` | 开发工程师 / 核心驱动 | 人工维护 | OpenClaw 原生 system prompt |
+| `USER.md` | 服务对象：Andy + Lucas + 系统工程师 | 人工维护 | OpenClaw 原生 system prompt |
+| `TOOLS.md` | 可用工具清单（run_opencode / bash / python 等）| 人工维护 | OpenClaw 原生 system prompt |
+| `MEMORY.md` | 实现模式 / 技术踩坑（人工播种，Lisa 自主追加经验）| 人工维护 | OpenClaw 原生注入 + `context-sources` static-file |
+| `BACKGROUND.md` | 项目前世今生：框架打样定位 / 四角色结构 / 流水线 / L0-L2 演进 / 文档查阅地图（**含 10-engineering-notes.md 必查提醒**）| 系统工程师手工维护 | `context-sources` static-file appendSystemContext |
+| `CODEBASE.md` | 代码库上下文摘要（关键实现文件 / 编码模式 / 工具函数清单）；末尾 `<!-- DISTILLED-START/END -->` 区块由 Kuzu pattern 自动渲染（最新最高影响面的 3-5 条工程陷阱保底） | 系统工程师手工维护主体；`distill-agent-memories.py` 写 Kuzu → `render-knowledge.py` 渲染 DISTILLED 节 | `context-sources` static-file appendSystemContext |
+| `SKILL.md`（×9）| 编码规范 / 实现模式 / 最佳实践技能 | 人工维护；L2 Andy 结晶后自动生成 | OpenClaw 原生 `<available_skills>` |
+
+**处理脚本**
+
+| 脚本 | 输入 | 输出 | 触发时机 |
+|---|---|---|---|
+| `distill-agent-memories.py`（Lisa 分支）| ChromaDB decisions + code_history + agent_interactions（agentId=lisa）+ `docs/10-engineering-notes.md`（按时间+影响面双重权重蒸馏）| Kuzu `pattern` Entity + `has_pattern` Fact（agent=lisa，full refresh）| 每周日 2 点自动触发 |
+| `render-knowledge.py --agent lisa` | Kuzu `has_pattern` Facts（`valid_until IS NULL`，agent=lisa）| **`CODEBASE.md`** DISTILLED-START/END 区块替换（最关键 3-5 条）| `distill-agent-memories.py` 完成后 subprocess 自动触发 |
+| `init-capabilities.py` | `CAPABILITY_REGISTRY` | Kuzu `capability` + `has_capability`（owner=lisa）| 手动运行，幂等 |
+
+---
+
+### 知识图谱（Kuzu）
+
+Kuzu 是记忆系统的 Knowledge 层核心，存储结构化事实，是蒸馏的落地点、渲染的数据源。
+
+#### Schema
+
+```
+Entity 节点
+  id STRING（主键）
+  type STRING（person / topic / event / organization / device /
+               requirement / pattern / capability / decision / agent）
+  name STRING
+
+Fact 边（Entity → Entity）
+  relation    STRING   事实类型（见下方枚举）
+  context     STRING   补充说明
+  valid_from  STRING   生效时间
+  valid_until STRING   失效时间（NULL = 当前有效）
+  confidence  FLOAT    可信度
+  source_type STRING   来源（seed / distill / registry / distilled）
+                         seed     = 人工录入基础事实（init-family-relations.py 等）
+                         distill  = 对话蒸馏（distill-memories.py，person/topic 侧）
+                         registry = 能力注册表人工定义（init-capabilities.py）
+                         distilled= 真实使用经验精炼（refine_capabilities()，覆盖 registry）
+  source_id   STRING   来源标识
+```
+
+#### relation 类型（实例配置）
+
+不同组织需要定义不同的 relation——家庭实例关心"说话方式/在意什么/家庭角色"，企业实例可能关心"汇报关系/负责领域/沟通偏好"。HomeAI 当前定义了 12 种 relation 作为家庭场景的实例配置：
+
+**静态档案类（distill-memories.py LLM 提炼，写入 ALLOWED_RELATIONS）**：
+`communication_style`（说话方式）/ `cares_most_about`（最在意）/ `current_status`（当前状态）/ `recent_concern`（近期关注）/ `key_event`（重要事件）/ `role_in_family`（家庭角色）/ `relationship_tip`（相处要点）/ `works_at`（工作）/ `relationship_with`（与某位家人的动态关系，value 格式：「家人称呼：关系描述」）/ `interaction_style`（与 Lucas 的互动风格：主动偏好 / 工具接受度 / 信息密度 / 有效陪伴模式）/ `shared_activity`（与 Lucas 一起做过的事：共同策划/制作/参与，value = 活动名称，context = 时间/分工/意义）
+
+**时间节点类（has_pending_event）**：`has_pending_event`（家人提到的即将发生的事，value = 事件描述，context = 预期日期；写 `valid_until` = 预期日期，供时间查询过滤）
+
+**动态线索类（programmatic，见下方「活跃话题线索」节）**：`active_thread`（当前活跃话题线索，由 `distill-active-threads.py` 程序写入，不经过 LLM 提炼，不在 ALLOWED_RELATIONS 中）
+
+新实例搭建时，根据组织类型在 `distill-memories.py` 的 `ALLOWED_RELATIONS` 和 `render-knowledge.py` 的 `RELATION_LABELS` 里重新定义静态档案类 relation；动态线索类由专用脚本管理，不需配置 ALLOWED_RELATIONS。
+
+#### 全量刷新策略
+
+每次蒸馏时，旧的 `source_type=distill` facts 先打 `valid_until=now`，再写入新 facts。seed 来源的基础事实（初始化时录入）不参与刷新，只被蒸馏事实覆盖。
+
+#### L1/L2 阶段 Kuzu 内容对比
+
+| 节点 type | L1 阶段 | L2 阶段之后 |
+|-----------|--------------|------------|
+| `person` / `topic` | 已填充（初始 seed + 蒸馏持续更新）| 持续丰富 |
+| `pattern` | 几乎为空（成熟行为模式尚未积累）| L2 巡检结晶后填充 |
+| `capability` | 已填充（`init-capabilities.py` 初始化，source_type=registry，`TOOLS.md` 人工维护）| L2：`refine_capabilities()` 用真实调用经验精炼 context，source_type=distilled 覆盖 registry |
+| `decision` | 少量（干预记录手工同步）| L2 syncInterventions 自动写入 |
+
+**数据库路径**：`~/HomeAI/data/kuzu/`
+
+### 三条知识注入管道
+
+知识从「发生」到「到达 Agent」走三条管道，各自解决不同粒度的问题：
+
+```
+静态档案管道（每周/每次对话蒸馏，低频高质量）：
+  成员对话（ChromaDB conversations）
+    → distill-memories.py（LLM 提炼结构化事实，ALLOWED_RELATIONS 12 种）
+    → Kuzu（写为 Entity/Fact 三元组，source_type=distill，full refresh）
+    → render-knowledge.py（Kuzu → .inject.md 成员档案）
+    → context-sources file.user-profile
+    → appendSystemContext → Lucas 每次请求前常驻注入
+  时效：30分钟（事件驱动增量）到 7 天（周批）；产物稳定，不随单次对话波动
+
+活跃话题管道（每次对话后，6h 冷却，动态近期）：
+  成员对话（ChromaDB conversations，最近 7 天）
+    → distill-active-threads.py（LLM 提炼当前活跃话题线索）
+    → Kuzu active_thread Fact 边（valid_until = today + 45d，source_type=thread_distill）
+    → context-sources kuzu active-threads 查询（valid_until >= date()）
+    → prepend → Lucas 每次请求前动态注入「当前活跃话题」
+  老化机制：valid_until 自然过期，45 天无提及自动不注入，无需额外清理
+  context 格式：`[状态] 摘要（日期 更新）`，人类可读，注入后 Lucas 直接理解。状态枚举：计划中 / 进行中 / 暂停中
+  作用：让 Lucas 知道「我们最近在推进什么事」，理解「那件事」等隐式跨会话引用
+
+即时语义管道（每次消息前，before_prompt_build hook，高频即时）：
+  context-sources.ts 注册表（声明每角色需要哪些知识源）
+    → context-handler.ts buildDynamicContext()（并发查询）
+    → ChromaDB 语义检索 + Kuzu 图查询 + 静态文件读取
+    → prepend（对话历史 / 决策记忆 / 活跃话题）
+      appendSystem（成员档案 / 架构知识 / 代码库上下文）
+    → 注入当前 LLM 请求
+```
+
+三条管道互补：静态档案管道提供稳定的成员画像（这个人是谁），活跃话题管道提供近期话题状态（我们最近在做什么），即时语义管道提供当轮相关上下文（这条消息在说什么）。
+
+**新增知识源只改 `context-sources.ts`**，不改 `context-handler.ts` 主逻辑。
+
+#### 动态管道升级路线：从平铺查询到图遍历（Phase 2，设计定稿）
+
+当前动态管道是多个独立查询的并列拼接（每个 context-source 各自查询、各自注入）。这在 L1 够用，但有一个根本局限：**无法回答结构性问题**——「谁和当前话题有关」、「哪些成员最近在关注同一件事」、「这个人身边最相关的人最近怎么了」，这些答案需要图遍历，不是 cosine 相似度能给出的。
+
+**Phase 2 升级目标**：上下文是图遍历的产物，不是并列查询的拼接。ChromaDB 只做情节记忆，Kuzu 做结构发现。
+
+```
+Phase 1（当前）：多个独立 KuzuSource + ChromaDB 并列注入
+Phase 2（计划）：图遍历识别相关节点 → 用节点 id 定向召回 ChromaDB → 结构 + 情节双轨注入
+```
+
+三个子任务（互相独立，可并行）：
+
+| 任务 | 内容 | 效果 |
+|------|------|------|
+| **P1-A** `has_pending_event` | distill-memories.py 新增 relation，提炼「未来将发生的事」，写 valid_until；render-knowledge.py 渲染到 inject.md | Lucas HEARTBEAT 任务 3 可基于结构化待跟进事项，不只靠语义搜索 |
+| **P1-C** topic 节点共享枢纽 | topic_id 从 `{relation}_{userId}` 改为语义归一化（相同含义合并同一节点）| 一条 Cypher 能返回「所有关注同一话题的成员」，跨成员协调有了结构基础 |
+| **P2-A** `member-graph-traversal` | 新增 KuzuSource，type=graph-traversal；路径 A：话题共鸣；路径 B：关系网近况 | 替换现有平铺查询，context 变成图遍历产物而非并列拼接 |
+
+P1-B（HEARTBEAT 任务 3 改 Kuzu 查询）依赖 P1-A；P2-A 依赖 P1-C；P3（ChromaDB 定向召回）依赖 P2-A。
+
+**当前 HomeAI 状态**：Phase 1 运行中，P1-P3 设计已定稿（v502），待实施。
+
+#### 静态管道文件清单
+
+每个 workspace 文件的数据来源和更新机制，以及 L2 之后的扩展方向：
+
+```
+静态管道：稳定知识（变化频率低，每次 session 都需要注入）
+
+  文件                    L1 机制                                    L2+ 扩展方向
+  ──────────────────────────────────────────────────────────────────────────────
+  SOUL.md               人工维护，OpenClaw 原生注入                  L4：行为内化后补 Kuzu 渲染节
+  family/{userId}.inject.md  Kuzu person 节点 → render-knowledge.py 渲染  持续丰富
+  TOOLS.md              人工维护（验收后自行登记；init-capabilities.py 同步到 Kuzu）  日常维护手段，无需自动渲染
+  MEMORY.md（Lucas）    Agent 自主写入，OpenClaw 原生注入；L2 后 Kuzu pattern 渲染补 DISTILLED 节  L2：结晶后 DISTILLED 节自动更新
+  MEMORY.md（Andy/Lisa）人工播种初始内容；distill-agent-memories.py → Kuzu has_pattern → render-knowledge.py 渲染 DISTILLED-START/END 节  pattern 节点丰富后自动更新
+  AGENTS.md             人工节永久不动；Kuzu 渲染节由结晶流水线触发更新  L2：结晶流水线触发
+
+动态管道：相关知识（与当前消息相关，before_prompt_build 按需召回）
+
+  近期对话片段   ChromaDB conversations（Lucas）
+  成员实时状态   Kuzu 实时查图（Lucas，valid_until IS NULL）
+  历史决策       ChromaDB decisions（Andy，agentFilter=andy）
+  实现历史       ChromaDB code_history（Lisa）
+  能力清单       Kuzu capability 节点（Andy/Lisa/Lucas）
+                 Lucas 能力：L1=registry 人工描述；L2=distilled 真实使用语境精炼（source_type 区分）
+```
+
+静态管道触发机制：
+
+| 文件 | 更新脚本 | 触发时机 |
+|------|---------|---------|
+| `family/{userId}.inject.md` | `render-knowledge.py` | `distill-memories.py` 完成后自动触发 |
+| Andy/Lisa `MEMORY.md` DISTILLED 节 | `distill-agent-memories.py` → Kuzu → `render-knowledge.py --agent` | 每周日 2 点；subprocess 链式触发 |
+| `TOOLS.md` 能力清单 | 人工维护；`init-capabilities.py` 同步到 Kuzu | 验收后手动运行 |
+| Lucas `has_capability` 精炼（source_type=distilled）| `distill-agent-memories.py` `refine_capabilities()` | 每周日 2 点；每工具样本 ≥5 条时覆盖 registry 描述 |
+| `SOUL.md` / `AGENTS.md` 渲染节 | `render-knowledge.py` | L2 结晶流水线触发（L2） |
+
+#### distill-agent-memories.py 当前多源输入（已落地）
+
+`distill-agent-memories.py` 已扩展为多源蒸馏，蒸馏结果写入 Kuzu（而非直接写 MEMORY.md），再由 `render-knowledge.py --agent` 渲染 DISTILLED 节：
+
+| 角色 | 输入来源 | Kuzu 输出 | MEMORY.md 渲染节 |
+|------|---------|----------|----------------|
+| Andy | decisions (agentId=andy) + agent_interactions + `07-设计与技术外部参考/` + `09-evolution-version.md` | `pattern` + `has_pattern`（agent=andy）| DISTILLED-START/END 区块 |
+| Lisa | decisions (agentId=lisa) + code_history + agent_interactions + `docs/10-engineering-notes.md`（时间+影响面双重权重）| `pattern` + `has_pattern`（agent=lisa）| **`CODEBASE.md`** DISTILLED-START/END 区块（3-5 条活跃约束保底）|
+| Lucas | decisions (agentId=lucas) + behavior_patterns | `pattern` + `has_pattern`（agent=lucas）| DISTILLED-START/END 区块 |
+| Lucas（能力精炼）| `capability-events.jsonl`（toolName / requestContext / success，≥5 条样本/工具）+ Kuzu registry 描述（baseline）| `has_capability` Fact（source_type=distilled，confidence=成功率）| —（直接注入 active-capabilities KuzuSource）|
+
+完整来源 + Kuzu 中间层 = 角色从所有经历中学习的进化闭环；ChromaDB 保留为语义召回的原始数据层，不直接渲染到文件。
+
+**Lisa 约束专用召回通道（context-sources `constraint-recall` queryMode）**：
+
+平台约束（type=constraint）不与普通决策共抢 decisions topK 名额。独立通道：
+- 查询 decisions 集合，过滤 `{agent: lisa, type: constraint}`，topK=5
+- 注入标签：`【已知平台约束（开始实现前必查）】`，prepend 到任务上下文
+- 按时间加权排序（越新越靠前），与蒸馏优先级一致
+
+**Lisa 约束自学习闭环**：约束不是永久规则，Lisa 有责任在实现过程中验证其时效性：
+
+```
+Lisa 发现约束可能过时（库升级 / bug 修复）
+  ↓ 用 exec 实验验证
+  ↓ 在回复中写出结构化结论：
+    【约束验证】Kuzu 0.12.x 已修复 SIGSEGV，workaround 不再需要。
+  ↓ agent_end → code_history
+  ↓ distill-agent-memories.py 识别 【约束验证】 标记
+    → 失效 → 从 CODEBASE.md DISTILLED 移除
+    → 仍成立 → 更新最后验证日期，提高 confidence
+  ↓ 系统工程师在 docs/10-engineering-notes.md 更新状态字段
+```
+
+`docs/10-engineering-notes.md` 每条约束有状态字段：`活跃 | 已失效 | 待复核`，由系统工程师维护，由 Lisa 验证结论驱动更新。
+
+**能力精炼闭环（L2 新机制）**：
+
+```
+agent_end hook（每次对话）
+  capability-events.jsonl 写入 toolCalls + requestContext（触发场景前200字）+ success
+
+           ↓ 每周日 2:00（sample ≥5 时生效）
+  refine_capabilities(conn, agent_id='lucas')
+    input:  capability-events.jsonl（按 toolName 分组）
+          + Kuzu has_capability（source_type=registry，baseline 描述）
+    → LLM: "registry 说 X；真实调用 N 次，成功率 Y%，典型场景 [A/B/C]。请精炼 '何时用' 描述，≤200 字"
+    output: has_capability Fact（source_type='distilled'，confidence=成功率）
+            + 过期对应 registry fact（避免 active-capabilities 返回重复条目）
+
+           ↓ before_prompt_build
+  active-capabilities KuzuSource（WHERE valid_until IS NULL）
+    → Lucas 收到精炼后的能力描述
+
+重置路径：python3 scripts/init-capabilities.py → 过期所有 fact（含 distilled）→ 写新 registry
+```
+
+**source_type 语义**：`registry` = 人工初始化（`init-capabilities.py`）；`distilled` = 真实使用经验精炼（`refine_capabilities()`）。两者不共存：distilled 覆盖时，registry fact 同时过期。门槛：每工具 ≥5 条 capability-events 样本才触发精炼，避免噪声污染精心写好的 registry 描述。
+
+**新组织部署时，记忆系统的可复制组件与实例定制内容：**
+
+| 可复制组件 | 实例定制内容 |
+|-----------|------------|
+| 管道结构（静态 + 动态）| 静态文件的具体内容（ARCH.md 里写谁的系统架构）|
+| context-sources.ts 注册表 | 每个角色注册哪些 source、inject 策略 |
+| Kuzu schema（Entity/Fact/ALLOWED_RELATIONS）| ALLOWED_RELATIONS 关系类型（家庭 vs 企业场景不同）|
+| render-knowledge.py 渲染框架 | RELATION_LABELS 翻译映射 |
+| distill-memories.py 蒸馏框架 | LLM 提示词中的实例背景说明 |
+
+新实例部署：填充静态文件（角色工作知识）+ 配置 ALLOWED_RELATIONS（组织关系维度）+ 录入初始成员事实，管道即可运转。
+
+### ChromaDB 集合设计
+
+> **设计原则**：ChromaDB 是**原始信息流**，是蒸馏管道的输入端，不是知识权威。结构化知识最终落在 Kuzu；ChromaDB 承担两类职责：① `conversations` 提供语义相似度召回（`before_prompt_build` prependContext）② 其余集合提供蒸馏原材料（进入 `distill-*.py`，提炼为 Kuzu 节点/关系后完成使命）。标注 **过渡态** 的集合随 Kuzu 数据成熟后逐步废弃。
+
+| 集合                   | 定位             | 存储内容                                                                    | → Kuzu 蒸馏目标                                              | 写入时机                                            |
+| -------------------- | -------------- | ----------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------- |
+| `conversations`      | 语义召回（永久）       | Lucas 与组织成员的对话历史（userId + source 区分私聊/群聊）                               | `person`/`topic` + 8 种 Fact（`distill-memories.py` 周批量）   | `agent_end` hook                                |
+| `decisions`          | 蒸馏输入源          | 三角色决策记录（context / decision / outcome，outcome=null 表示待跟进）                | `pattern` + `has_pattern`（`distill-agent-memories.py`）   | 流水线各 Step；`record_outcome_feedback` 更新 outcome  |
+| `behavior_patterns`  | 蒸馏输入源          | 组织成员行为规律（业务大师专属，含隐私）；结晶候选从 Kuzu `has_pattern.confidence` 读取，不在此做结构化标记 | `pattern` + `has_pattern`（`distill-agent-memories.py` Lucas 分支）| `agent_end` hook                                |
+| `requirements`       | 工作流状态          | Lucas 识别的需求记录（含流水线 ID、最终 outcome）                                       | —（工作流状态跟踪，不进 Kuzu）                                       | Lucas 触发 trigger_development_pipeline 时         |
+| `code_history`       | 蒸馏输入源          | Lisa 已交付实现（文件路径、功能描述、适用场景）                                              | `pattern` + `has_pattern`（`distill-agent-memories.py` Lisa 分支）| Lisa 验证通过后                                      |
+| `agent_interactions` | 蒸馏输入源          | Andy/Lisa 工作过程（spec / 实现描述 / bug 修复）                                    | `pattern` + `has_pattern`（`distill-agent-memories.py`）   | 流水线 Step 3（Andy）/ Step 5（Lisa）                  |
+| `agents`             | 语义档案（子 Agent） | 子 Agent 语义档案（状态：active / dormant / evicted）                              | —（生命周期管理，语义搜索用）                                           | 子 Agent 创建 / 状态变更时                              |
+
+#### `conversations` 集合完整字段
+
+conversations 不只是聊天记录，是系统所有信息流转的原始事件流——每条记录 = 一次信息流转的完整事实。Gateway 是唯一物理收口，hooks 是自然采集点，无需在业务逻辑里额外埋点。
+
+路由信息字段（描述这次流转的结构，服务进化分析）：
+
+| 字段 | 类型 | 数据来源 | 服务层 |
+|------|------|---------|------|
+| `fromId` | string | `agent_end`：人→userId；Agent间→sessionKey前缀 | 基础路由 |
+| `fromType` | string | `agent_end` 按 agentId 推断 | 基础路由 |
+| `toId` | string | `agent_end`：ctx.agentId | 基础路由 |
+| `toType` | string | 当前固定 `"agent"`，IoT 接入后扩展 | 基础路由 |
+| `channel` | string | `agent_end` 推断：wecom_group / wecom_private / pipeline / cli | 基础路由 |
+| `sessionId` | string | `agent_end`：ctx.sessionKey | 会话关联 |
+| `modelUsed` | string | `llm_input` → sessionModel Map → `agent_end` | L4 路由进化 |
+| `isCloud` | string | `llm_input` → sessionModel Map → `agent_end` | L4 路由进化 |
+| `toolsCalled` | string | `agent_end`：JSON 序列化工具名列表 | L2 能力进化 |
+| `intent` | string | `before_prompt_build` → sessionIntent Map → `agent_end` | L4 微调筛选 |
+| `qualityScore` | number | `agent_end`：evaluateResponseQuality() | L4 微调质量过滤 |
+| `dpoFlagged` | string | `agent_end`：detectDpoCandidates()（Lucas 专属）| L4 坏样本过滤 |
+
+内容字段：`prompt`（前500字，快照）/ `response`（前500字，快照）/ `document`（ChromaDB 全文，embedding 基于此）/ `timestamp`（ISO 时间，时序查询）。向后兼容字段（过渡期）：`userId`（= fromId）/ `source`（group/private）。
+
+语义字段（`thread_id`、`topic`、`sentiment` 等）不在 conversations，是从事件流经 extraction pipeline 提炼后写入 Kuzu 的，写入时只记可观测客观事实，语义解读交给提炼层。
+
+#### 访问控制
+
+- `behavior_patterns`：Lucas 专属，Andy/Lisa 不可查
+- `requirements`：Lucas + Andy 可查
+- `code_history`：三角色均可查（Lucas 验收 / Andy 避免重复设计 / Lisa 复用实现）
+- `conversations`：Lucas 专属
+
+### Capability 层：三条路
+
+Capability 层的设计意图是「结晶下来的能力真正在工作」。在 HomeAI 实现里，能力通过三条路到达 Agent，各司其职：
+
+```
+① Skills（程序性知识，知识层）
+   载体：SKILL.md（skill-name/SKILL.md 子目录格式）
+   来源：从真实行为提炼，L2 由 Andy 判断固化形式后写入；L2 前由系统工程师手工维护
+   注入：OpenClaw 原生机制自动注入 system prompt <available_skills>
+
+② 工具入口（Web App / 外部工具）
+   载体：app-capabilities.jsonl（工具名称 + keywords + URL）
+   来源：Lisa 每次交付 Web App 后手工注册；keywords 设计决定 Lucas 能否在正确场景找到工具
+   注入：context-sources file.app-capabilities → 关键词命中时 prependContext
+
+③ 能力节点（结构化能力索引）
+   载体：Kuzu capability 节点（id / name / description / status / owner）
+   来源：L1 从 capability-registry.jsonl 初始化；L2 后每次交付自动注册
+   注入：context-sources Kuzu active-capabilities → appendSystemContext
+```
+
+**设计原则**：三条路不是冗余，是粒度不同——Skills 让 Agent 读了就会（知识），工具入口让 Lucas 知道去哪里找（URL 检索），能力节点让三角色知道系统里有什么能力（结构化审计）。
+
+**`app-capabilities.jsonl` 与 `capability-registry.jsonl` 的分工**：两者服务不同消费者，各有存在必要：`capability-registry.jsonl` 是全量能力审计表，Andy/Lisa 接前审计用（防重复开发）；`app-capabilities.jsonl` 是 Lucas 的 Web App keyword 路由表，context-sources 按关键词触发注入（让 Lucas 在正确场景推链接）。Lisa 每次交付 Web App 后**两者均需更新**——只更新 registry 而不更新 app-capabilities，Lucas 在对话里找不到该工具。
+
+### 三层记忆注入架构（Lucas 视角）
+
+Lucas 每次回复前，记忆从三个层次注入，粒度从粗到细：
+
+| 层          | 载体                                           | 职责                         | 更新方式                               | 注入时机                                            |
+| ---------- | -------------------------------------------- | -------------------------- | ---------------------------------- | ----------------------------------------------- |
+| **常驻知识层**  | `SOUL.md` / `AGENTS.md` / `.inject.md`（成员档案） | 身份铁律 + 成员结构化认知；每轮注入，不随时间衰减 | SOUL/AGENTS 人工维护；inject.md 蒸馏后自动渲染 | OpenClaw 原生 system prompt + appendSystemContext |
+| **近期对话层**  | `~/.homeai/chat-history/{key}.json`（chatHistory 文件） | 同渠道近期 N 轮对话连续性；私聊和群聊均覆盖 | wecom 入口 `appendChatHistory` 每轮写入 | `callGatewayAgent` 调用前 prepend 进 messages array |
+| **语义召回层**  | ChromaDB（多集合并发查询）                            | 跨 session 相关历史；按语义相似度动态召回  | `agent_end` hook 自动写入              | `before_prompt_build` prependContext            |
+
+#### 注入优先级（越靠前越靠近模型，权重越高）
+
+```
+近期对话历史（chatHistory messages array，入口层 prepend）
+  > ChromaDB 语义召回（before_prompt_build prependContext）
+    > 成员档案 .inject.md（before_prompt_build appendSystemContext）
+      > SOUL.md / AGENTS.md（OpenClaw 原生 system prompt）
+```
+
+### 消息滑动窗口
+
+Lucas 的 `before_prompt_build` 对消息列表执行截断，防止长会话规则被遗忘：
+
+```
+LUCAS_MSG_WINDOW = 40
+保留规则：system prompt（第 0 条）+ 最新 40 条对话
+超出时：splice(1, N) 删除中间旧消息
+窗口设为 40 的原因：容纳 chatHistory 注入的 15 轮历史（30 条）+ 当前消息（1 条）+ prependContext 注入余量
+```
+
+截断后做**孤立 toolResult 清理**：窗口截断可能切断 `toolUse/toolResult` 配对，导致 API 报错。清理逻辑：删除紧跟 system prompt 之后的所有 `toolResult`/`tool` 角色消息，直到遇到第一条非 tool 消息。
+
+### 记忆系统与进化层次的关系
+
+记忆系统是 L0+L1 的具体落地（进化层次定义见 Part 2 §七），是所有进化层的前提条件：
+
+```
+L0 机制层
+  OpenClaw Gateway / before_prompt_build hook / agent_end hook
+  ChromaDB 写入 / Skills 自动注入 / Cron 定时触发
+
+L1 知识基础设施
+  Lucas：Member Knowledge（成员档案，常驻）+ Data（对话记忆，检索）
+  Andy： Role Knowledge（架构摘要，常驻）+ Data（历史决策，检索）
+  Lisa： Role Knowledge（代码库上下文，常驻）+ Data（实现历史，检索）
+─────────────────────────────── 增强阶段终点 / 扩张阶段起点
+L2  系统能力进化（成熟模式 → Skill/Tool 结晶 + 跨角色知识流动）← 以 L1 为土壤
+L3  组织运作优化（子 Agent 加入 + 人+系统协作拓扑调顺）← 以 L2 积累的能力为基础
+L4  行为内化（DPO + 微调 → 判断烧进权重）← 以 L2+L3 的成熟模式为素材
+```
+
+#### L1 阶段 Knowledge 层说明
+
+- Member Knowledge（Kuzu person 节点）：蒸馏管道持续积累
+- Role Knowledge（静态 MD 文件）：系统工程师手工维护，不自动更新
+- pattern / decision Kuzu 节点：几乎为空，L2 之后才真正填充
+- L1 的 Andy/Lisa 主要靠静态 Role Knowledge 和 ChromaDB Data，不靠 Kuzu pattern/decision（那是 L2 的产物）
+
+### 记忆老化与清理
+
+三个独立机制，解决不同问题：
+
+#### valid_until 到期老化（Kuzu 动态 Fact）
+
+适用于有时效性的 Kuzu Fact 边（`active_thread` / `has_pending_event`）：
+
+- **写入时设 `valid_until`**：`active_thread` = today + 45 天；`has_pending_event` = 预期事件日期
+- **查询时过滤**：`context-sources.ts` Kuzu 查询加 `WHERE f.valid_until >= date()`，过期 Fact 自动不注入
+- **无需清理进程**：过期条目仍留在 Kuzu（作为历史轨迹），只是不被查询命中。不需要额外的清理脚本。
+- **刷新 = 重写**：下次 `distill-active-threads.py` 运行时，先将旧 `active_thread` Fact 的 `valid_until` 设为 today（立即过期），再写入新 Fact（新的 45 天有效期）。有提及 = 续命，无提及 = 自然消亡。
+
+#### 时间权重（ChromaDB 检索）
+
+检索时对记录年龄加权，近期记录优先召回：
+```
+0~3 个月   → 权重 1.0
+3~12 个月  → 权重 0.7
+12 个月以上 → 权重 0.3（仍可被高相似度召回）
+```
+
+#### 容量策略
+
+ChromaDB HNSW 索引在单集合约 10 万条时 p95 查询延迟明显上升，以此为归档触发线：
+- 超过阈值时，将低频旧记录归档（压缩摘要写回，原条目移至 `data/archives/`）
+- `decisions` / `capabilities` 不参与自动归档（查询频次低，不在热路径上）
+
+#### 子 Agent 退休
+
+将交互记录压缩成摘要以 `creatorId` 写回创建者集合，原条目归档，`agents` 集合状态标记 retired。
+
+---
+
+## 七、能力扩张与组织自进化设计
+
+进化目标（按优先级）：**可用能力持续增长 → 家庭关系和目标达成持续改善 → 路由本地化比例持续提升**。
+
+两套框架协同工作：**三轴进化机制**定义进化方向和目标；**三维诊断框架**是进化能否持续推进的判断机制——当某个轴停滞时，诊断根因（Data 没进来？Knowledge 没提炼？Capability 不够用？），并触发对应修复动作。
+
+---
+
+### 三轴进化机制
+
+#### Axis 1：能力进化
+
+- **进化目标**：组织可用能力持续增长——家庭能自动整理错题、自动生成练习卷、自动管理账单；企业能自动生成报告、自动对接系统。每新增一个稳定可用的能力，就是 Axis 1 的一次可见进化。成员关系质量（信任加深、需求达成率上升、委托事项复杂度提升）是能力进化的可观测成果——能力越来越有用，成员越来越愿意依赖系统。
+- **基础机制**：**V字流水线**是能力进化的驱动引擎。Lucas 感知成熟信号（`flag_for_skill`）或 Andy 冷路径巡检识别高频模式，触发协作提炼：Andy 判断结晶形式（Skill / Tool / Web App）→ 直接写 Skill 或驱动 Lisa 实现 → 登记 capability-registry。流水线每跑一次 = 系统多一个能力。
+- **数据来源**：`capability-events.jsonl`（工具调用记录；L2 起补充 `requestContext` + `userId` 字段，供 `refine_capabilities()` 提炼真实使用语境）+ `skill-candidates.jsonl`（待固化模式）+ `requirements.outcome`（需求达成信号）+ 对话参与深度趋势（成员主动发起频率、委托事项复杂度）
+- **进化机制**：Lucas 感知规律触发 `flag_for_skill`；Andy 每日 cron 巡检识别高频模式直接固化；成功率低的能力触发 Andy→Lisa 开发替代方案；**反思引擎**（每 50 次请求或 24h 触发）分析需求达成趋势，针对每个成员分身识别偏差，生成改进假设 → 投递给 Andy → 优化对应能力。
+
+#### Axis 2：协作进化
+
+- **进化目标**：V字流水线本身越来越好——三角色协作链路更短、交付质量更高。体现为：Andy→Lisa 首次交付通过率上升、从感知信号到能力上线的周期缩短、影子 Agent 放大每个成员的能力边界。
+- **基础机制**：协作链路每次运转都在自我沉淀——Andy 验收过程积累设计模式 Skill，Lisa 每次交付提炼实现模板，三角色的判断和实现语料持续积累。L3 阶段影子 Agent 引入后，每个成员能做的事乘以 N，协作效能进一步放大。
+- **数据来源**：Andy 验收首次通过率、Lisa 返工次数、从 `flag_for_skill` 到 `capability-registry` 登记的平均耗时、影子 Agent 活跃度
+- **进化机制**：每次流水线运转完成后，Andy 判断本次决策是否属于稳定模式 → 是则写入设计模式 Skill；Lisa 判断本次实现结构是否可复用 → 是则提炼模板 Skill；两类 Skill 积累 → 下次同类任务更快更准。
+
+#### Axis 3：本地专精进化
+
+三角色各有独立的本地化目标：Lucas 70% / Andy 40% / Lisa 50%，初始全走云端，由路由学习曲线数据驱动逐步提升。详见 `crewclaw-routing/index.ts` 的路由配置。
+
+- **进化目标**：路由本地化比例持续提升——本地越来越能独立处理组织日常，对云端的依赖越来越少。
+- **数据来源**：`data/learning/route-events.jsonl`（每次路由决策记录 isLocal、agentId、complexityScore 等）
+- **进化机制**：Axis 3 由两条曲线共同驱动，形成复利式正循环：
+
+```
+【曲线 A：路由学习】每次请求路由到云端 = 本地向群体学习一次
+  → 路由比例持续下降 = 本地专精程度提升的直接刻度盘
+
+【曲线 B：语料微调】本地积累的组织私有语料 → 微调 → 本地模型更懂这个组织
+  → 更懂组织 → 更多请求能在本地正确处理 → 路由比例进一步下降
+
+【复利闭环】
+  本地模型更强 → 更多任务走本地 → 更多私有语料积累
+    → 微调进一步强化 → 路由比例继续下降 → 回到起点
+```
+
+两条曲线叠加的结果，就是本地专精成熟度的唯一可观测指标：**路由本地化比例的长期趋势**。
+
+#### 路由学习（曲线 A）
+
+`evolveRouting()` 在 Gateway 启动后异步运行，周期性分析后自动调高 `localThreshold`：
+
+```
+初始状态：localThreshold=0.0 → 全部走云端（保守起点，质量有保障）
+进化中  ：evolveRouting() 分析近 30 天 route-events → threshold 小步提升（+0.05/次）
+目标状态：Lucas 70% 本地，Andy 40% 本地，Lisa 50% 本地
+```
+
+触发条件（三者同时满足）：`totalEvents ≥ 50` + `daysSinceLastAdjust ≥ 7` + `localRatio < localRatioTarget × 80%`。每次 +0.05，上限 0.9（保留 10% 云端防回退）。阈值持久化在 `data/learning/routing-thresholds.json`。
+
+#### 语料微调（曲线 B）
+
+语料从 ChromaDB 记忆中提炼，质量评估由 **LOCAL_MODEL_NAME**（三合一蒸馏产物）承担——具备业务、架构、实现三域理解力，才有资格判断三条语料流各自的价值。
+
+> **当前状态（HomeAI L1/L2 阶段）**：`localThreshold=0.0`，所有请求走云端，LOCAL_MODEL_NAME 尚未参与质量评估；当前质量评分由云端模型（规则 + 模型综合打分）承担。随着 Axis 3 本地化比例提升，LOCAL_MODEL_NAME 逐步接管评估职责——这是设计意图，不是当前现实。
+
+各语料流的评分维度：
+
+| 语料流 | 高质量标准 | 典型负例（过滤掉） |
+|--------|-----------|----------------|
+| `lucas-corpus` | 意图识别准确、成员偏好有体现、响应符合家庭语境 | 泛泛回复、无上下文的简短确认 |
+| `andy-corpus` | context/decision/rationale 三字段完整、有明确技术取舍理由 | 方案描述缺失根因、无 tradeoff 分析 |
+| `lisa-corpus` | 代码可运行、有错误修复对（DPO）、含适用场景说明 | 未验证的实现、缺少运行环境约束 |
+
+```
+ChromaDB（conversations / agent_interactions / decisions）
+  ↓ 语料提取器（agent_end hook）
+LOCAL_MODEL_NAME 质量评估（三域打分）
+  + Lucas 人格检查（检测禁用技术词汇，自动生成负例）
+  ↓
+按 creatorId 分流：
+  lucas-corpus.jsonl ← Lucas + 成员分身：业务判断 + 人格对齐样本   → 业务大师
+  andy-corpus.jsonl  ← Andy + 设计小弟：架构决策样本              → 架构大师
+  lisa-corpus.jsonl  ← Lisa + 实现小弟：实现模式 + 错误修复对（DPO）→ 实现大师
+  ↓
+反思引擎 → 改进假设 → 投递给 Andy
+  ↓
+定期微调（MLX 本地）→ 三角色各自专精提升 → 子 Agent 随创建者模型一起进化
+```
+
+用户反馈通过 Lucas 对话界面进入，路由层记录并写入对应语料文件作为补充信号。
+
+---
+
+### 两类知识与 Skill 自增强设计
+
+#### 两类知识，性质不同，不互相替代
+
+系统积累的知识分两种：
+
+| 类型 | 存储位置 | 本质 | 驱动机制 |
+|------|---------|------|---------|
+| **声明性知识**（知道什么） | 知识图谱（Kuzu）+ ChromaDB 记忆 | 成员的习惯、偏好、事件、关系——描述世界的状态 | 对话蒸馏持续积累，每轮对话后增量更新 |
+| **程序性知识**（怎么可靠地做）| Skill 文件 | 结构化的执行路径——收到视频链接怎么处理、账单统计怎么跑 | 从执行经验中归纳结晶，每次完整执行后主动回顾 |
+
+两类知识的根本差别是**概率性 vs 确定性**：
+
+- 用声明性知识驱动行为：模型每次推导，可能这次对、下次漂移——对于高频、有明确步骤的操作，可靠性无法保证
+- Skill 执行：确定性路径，同样的触发保证走同样的步骤，不依赖模型当次推导质量
+
+**不要用声明性知识积累来替代 Skill 建设。** 知识积累让业务大师越来越懂成员，Skill 建设让业务大师越来越可靠地为成员做事——两者缺一不可，方向不同。
+
+#### 程序性知识的自增强循环（Co-Pilot 闭环）
+
+Skill 不是系统工程师手动维护的静态列表，而是 Lucas 在执行中自己发现、自己沉淀的活体结构：
+
+```
+用户触发一个请求
+  ↓
+Lucas 执行（同一请求中调用 2+ 工具，完成有明确起终点的任务）
+  ↓
+执行完成后，Lucas 主动回顾：
+  ① 这个执行路径有明确的触发条件吗？
+  ② 触发条件可以被清楚描述吗？
+  ③ 同类情况会反复出现吗？
+  ↓ 三条都是
+立即调 flag_for_skill（不等用户提醒，不等重复 3 次）
+  ↓
+写入 skill-candidates.jsonl
+  ↓
+Andy 在 HEARTBEAT 巡检时评估（两层预检，见下）
+  ↓
+通过预检 → 设计 Skill spec → Lisa 实现 → 登记 capability-registry
+  ↓
+下次相同触发 → Lucas 直接走 Skill，不再零散推导（概率性 → 确定性）
+```
+
+**关键设计原则**：「隐式信号等 3 次」是对用户行为模式的保守策略，避免误判。Lucas 自己的执行模式不同——执行本身已经是信号，不需要等重复出现才 flag。完成即回顾，可复用即沉淀。
+
+#### 开发前的两层预检（基础设施强制）
+
+防止为已有方案重复造轮子，两层串联，都通过才进入开发流程：
+
+| 层级 | 检查内容 | 执行方式 | 通过条件 |
+|------|---------|---------|---------|
+| **第一层**（Lucas 触发前）| 本地 Skill 是否已覆盖需求 | `trigger_development_pipeline` 代码门：扫描本地 skills 目录做 bigram 匹配，命中则返回建议直接使用，不进入流程 | 本地无匹配 Skill |
+| **第二层**（Andy 设计前）| Clawhub + 开源生态是否有现成方案 | Andy `research_task` 第一个查询必须是生态检索：`openclaw clawhub <关键词>` + `<场景> npm/pip package` | 确认无合适免费方案（付费方案列出供业主决策）|
+
+两层都没有现成方案，才进入「Andy 设计 spec → Lisa 实现」的开发流程。**造轮子是最后手段，复用生态是默认路径。**
+
+用户可在需求中注明「忽略Skill检查」绕过第一层（适用于已确认需要全新开发时）。
+
+#### L4 内化：Skill 不是被替代的，是被内化的
+
+L4「行为内化」常被误解为「知识积累够了 Skill 就不需要了」。实际上 L4 内化的是一个三元组：
+
+```
+触发条件（从经验中归纳：什么时候该行动）
+  + 执行程序（对应的 Skill：怎么可靠地行动）
+  + 判断标准（什么情况下执行、什么情况下跳过）
+= 一个内化的行为模式
+```
+
+L1-L3 阶段，Skill 是显式的、人工维护的程序模板，Lucas 需要被明确触发才会调用。L4 是把「什么时候调用哪个 Skill、该不该调」这层判断内化进去，让触发变得自然——就像熟练的家人不需要提醒也知道该做什么。
+
+**Skill 在 L4 被内化，不被消除。** 声明性知识决定 Lucas 懂谁、懂什么；程序性知识决定 Lucas 能做什么、做得多可靠。L4 把两者融合成自然的行为，但底层的 Skill 始终存在。
+
+---
+
+### L2：协作提炼与结晶机制
+
+**L1 的终点就是 L2 的起点。**
+
+L1 建好了知识基础设施：每个角色每次运转都有知识支撑，不再从零开始。但个体积累到一定程度，会出现一件 L1 做不到的事——**成熟模式的协作提炼**：业务大师处理同类组织情况的固定套路、架构大师反复验证有效的技术判断、实现大师可复用的实现结构……这些模式已经成熟，但还散落在 ChromaDB 和行为数据里，没有被固化成系统能力。
+
+L2 要做的就是这件事：通过跨角色协作，把分散的成熟模式结晶成新的系统能力。
+
+#### 三角色在协作提炼中的定位
+
+| 角色 | 定位 | 在协作链里做什么 |
+|------|------|----------------|
+| Lucas | 信号源 | 感知同类情况出现规律，调用 `flag_for_skill` 发信号；只发信号，不做判断 |
+| Andy | 提炼判断中枢 | 识别成熟模式（热/冷两路），判断固化形式，直接执行 Skill 或驱动 Lisa |
+| Lisa | 实现执行 | 接 Andy 的 Spec，接前审计，实现 Tool / Web App，交付即注册 |
+
+```
+成熟信号
+  └── 热路径：Lucas flag_for_skill()（主动感知）
+  └── 冷路径：Andy 巡检 Kuzu has_pattern（confidence ≥ 阈值且无对应 Skill）
+        ↓
+Andy 判断：频率 ≥ 3 + 稳定 + 可复用 + 未覆盖 → 进入固化判断
+        ↓
+固化形式：OpenClaw 生态已有覆盖？→ 能用自定义 Skill？→ 需要 Tool？→ 值得做界面？
+        ↓
+执行固化（Andy 或 Andy→Lisa）→ 注册到 capability-registry
+        ↓
+新循环：系统多一个能力，下次 Lucas 不再临时检索，有了固化应对方式
+```
+
+**Kuzu capability 节点是运行时能力的单一真相来源**（`active-capabilities` context-source 动态查询）；`capability-registry.jsonl` 是人工维护的输入格式，经 `init-capabilities.py` 同步到 Kuzu，L2 后由 `refine_capabilities()` 以真实调用经验精炼 Kuzu 节点描述，不再需要手工同步。三种固化形式各有路径：Skill 由 Andy 直接写入 workspace；Tool 由 Lisa 实现后注册到插件层；Web App 由 Lisa 交付到 `app/generated/`，wecom-entrance 动态加载。Andy 和 Lisa 每次开始工作前先做接前审计（语义检索 Kuzu capability 节点），防止重复实现。
+
+#### 结晶机制健康指标
+
+- 每月新增 Skill 数（目标：L2 早期至少 2 个/月）
+- `skill-candidates` dismiss 率（过高 → Lucas flag 质量低；过低 → Andy 门槛太松）
+- 能力类型分布（Skill 占多数为健康：最轻量，门槛最低）
+
+**Co-Pilot 体验进化是 L2 机制在界面域的应用。** 成员使用 Web 工具时产生的摩擦（操作复杂、找不到功能、反复问同类问题）是成熟模式的进化信号，通过 `flag_for_skill` 进入 L2 结晶流程；Andy 判断这是行为问题（Skill）、设计问题（Tool 改版）还是渠道问题（Web App 界面优化），决定固化形式。这不是独立议题，是 L2 结晶机制在一个具体场景域的例子。
+
+#### L2 实现规范
+
+以下是 L2 结晶机制的关键接口定义、数据格式和执行流程——能指导直接落地实现的部分。
+
+#### 工具签名：`flag_for_skill`
+
+```typescript
+flag_for_skill({
+  situation_type: string,  // 情况类型，例如「妈妈焦虑姐姐学习」
+  examples: string[],      // 1-3 个典型对话片段（描述性即可）
+  context?: string         // 可选：为什么认为值得固化
+})
+→ 写入 data/skill-candidates.jsonl
+→ 返回：「已记录，Andy 巡检时会评估」
+```
+
+设计原则：Lucas 只发信号，不做判断。信号要轻量——不需要分析，只说「这类情况有规律，请 Andy 看一下」。
+
+业务大师 AGENTS.md 规则补充：
+```
+感知到同类组织情况处理 3 次以上 → 主动调用 flag_for_skill
+只有真正「有规律且值得固化」时才发信号，不过度使用
+发信号后不等架构大师，继续正常响应成员
+```
+
+#### 候选队列：`skill-candidates.jsonl`
+
+```jsonl
+{
+  "id": "lsc-20260324-001",
+  "timestamp": "2026-03-24T10:00:00Z",
+  "situation_type": "妈妈焦虑姐姐学习进度",
+  "examples": ["妈妈：姐姐语文又没考好，怎么办", "妈妈：姐姐期中考试退步了"],
+  "context": "妈妈每次都很焦虑，我要先安抚情绪再谈具体方法",
+  "flagged_by": "lucas",
+  "status": "pending"
+}
+```
+
+状态流转：`pending → evaluated → crystallized / dismissed`。Andy 评估后写回状态 + 评估结论（crystallized：固化成哪个 Skill；dismissed：为何不固化，如「模式不稳定 / 已有 Skill 覆盖 / 不够普遍」）。
+
+#### 工具签名：`write_lucas_skill`
+
+```typescript
+write_lucas_skill({
+  skill_name: string,           // 目录名，kebab-case，例如 handle-mom-learning-anxiety
+  description: string,          // 一句话描述（Lucas 看 description 决定是否读 Skill）
+  content: string,              // SKILL.md 完整内容（含 YAML frontmatter）
+  source_candidate_id?: string  // 来源候选 ID，用于状态回写
+})
+→ 写入 ~/.openclaw/workspace-lucas/skills/{skill_name}/SKILL.md
+→ 如有 source_candidate_id，更新 skill-candidates.jsonl → crystallized
+→ 返回写入路径 + 确认
+```
+
+Andy 需要这个工具而不是直接 write_file，是因为 Andy 的 workspace 与 Lucas 的 workspace 在不同目录，需要跨 workspace 写入工具确保路径正确且权限可控。
+
+#### Andy / Lisa 主动行为：HEARTBEAT.md（L2 激活）
+
+**L1 阶段**：Andy 和 Lisa 的 HEARTBEAT.md 均为空——L1 两个角色本质上是被动响应（Lucas 触发 Andy，Andy 触发 Lisa），尚无主动巡检行为。外部脚本（`distill-agent-memories.py`）承担知识蒸馏，不由 Agent 自己触发。**空 HEARTBEAT.md 是设计决策，不是遗漏。**
+
+**L2 激活**：能力进化机制成熟后，两个角色获得真正的主动行为，写入各自 HEARTBEAT.md：
+
+- **Andy**：HEARTBEAT 分两层——**Check 0（自评目标生成）**：gateway-watchdog 预注入系统健康快照（opencode matchRate 趋势 / decisions 各类型条目数 / 上次目标状态），Andy 读快照识别最薄弱指标、生成一个具体目标写入 `andy-goals.jsonl`、立即行动；**Check 1~7（响应式处理）**：巡检 Kuzu `has_pattern`（`confidence ≥ 0.8`）+ `skill-candidates.jsonl` pending 条目，判断是否直接调 `trigger_lisa_implementation` 结晶 Skill（不再等系统工程师审批，自主实现）；gateway-watchdog 在 HEARTBEAT 成功后由基础设施层直接写入 `上次巡检` 时间戳（不依赖 Andy 手动写文件）
+- **Lisa**：每周回顾 `code_history`，把新的实现模式提炼写回 `MEMORY.md`；每次 HEARTBEAT 扫描 `behavior_patterns`，同类模式出现 3 次以上 → 格式化提案 → `alert_owner` 发系统工程师审批（与 Andy 相同的规则自进化管道）
+
+两个行为都是「真正需要 LLM 判断」的任务，值得一次 Agent 调用。在此之前不填，是避免为了形式完整而浪费调用。
+
+---
+
+#### Andy 巡检机制（`pattern-review` Skill）
+
+触发：OpenClaw 原生 cron，Andy HEARTBEAT.md 配置（每天一次，L2 激活后写入）。
+
+```
+① 读取 skill-candidates.jsonl，处理所有 pending 条目
+② 查询 Kuzu has_pattern（confidence ≥ 0.8 且无 Skill 覆盖），作为冷路径候选
+③ 对每个候选执行判断框架（见下方）
+④ 判断通过 → write_lucas_skill 或写设计模式 Skill
+   判断不通过 → dismiss，写明原因
+⑤ 更新 skill-candidates.jsonl 状态
+⑥ 更新 capability-registry.jsonl
+⑦ 把本次巡检决策写入 ChromaDB decisions（Andy 自己的学习语料）
+```
+
+判断框架——四个条件全部满足才固化：
+
+```
+① 频率：同类情况 ≥ 3 次
+② 稳定性：处理方式一致，能抽象成通用规则
+③ 可复用性：这类情况会继续发生，固化有长期价值
+④ 未覆盖：capability-registry 里没有现有 Skill 能处理
+```
+
+固化形式判断（**OpenClaw 生态优先**）：
+
+```
+OpenClaw 生态已有覆盖吗？（bundled Skills / MCP 插件）
+  是 → 配置或启用即可，无需开发，登记 capability-registry
+  否 → 能用自定义 Skill 解决？
+        是 → 写 SKILL.md（行为模式描述，Lucas 读后知道怎么做）
+        否 → 需要执行外部动作吗？
+              是 → Tool（走 Andy→Lisa 流水线）
+              否 → 升给系统工程师（超出当前能力边界）
+```
+
+Andy 判断顺序：**OpenClaw 生态 first**，能复用不造轮子；其次 Skill（不到必要不走 Tool）；不到必要不做界面。
+
+#### Lisa 四步工程化
+
+L2 的 Lisa 把四步变成强制习惯，不是可选项：
+
+```
+① 接前审计（Capability Audit）
+   接到 Spec 时先做：
+   → 语义检索 capability-registry：「这个功能系统里已有吗？」
+   → 语义检索 code_history：「类似的以前怎么实现的？踩过什么坑？」
+   → 识别可直接复用的部分 → 只实现真正缺失的部分
+
+② 实现（Implement）
+   在已有基础上增量实现，Spec 中明确标注「已有能力：capability-registry 中的 X、Y」
+
+③ 交付即注册（Deliver = Register）
+   实现完成的同一步骤里，必须：
+   → 写入 capability-registry（「我新增/修改了什么能力」）
+   → 写入 ChromaDB code_history（「这次实现了什么、怎么做的、踩了什么坑」）
+   → 如果是 Web 界面：注册 app/generated 路由 + 更新 app-capabilities.jsonl（工具名称/keywords/URL）
+     ※ app-capabilities 决定 Lucas 能否在对话里找到这个工具，缺了 Lucas 不会推链接
+   不做注册 = 交付未完成
+
+④ 模板提炼（Template Extraction）
+   实现完成后判断：这次实现结构可复用吗？
+   → 可以 → 提炼成实现模板 Skill，写入 workspace-lisa/skills/
+   → 不可以 → 跳过
+   触发条件：同一类实现做了 2 次以上（比 Lucas 行为模式门槛更低，代码模板复用价值更确定）
+```
+
+#### Andy 验收清单
+
+五条，②③④ 为硬性要求，缺一条 = 验收不通过打回重做：
+```
+① 功能符合 Spec
+② capability-registry 已更新（有没有登记这次新增的能力）← 硬性
+③ code_history ChromaDB 已写入 ← 硬性
+④ 如有界面：app/generated 路由已注册，/health 端点返回 200，app-capabilities.jsonl 已更新 ← 硬性
+⑤ 是否有可复用结构未提炼为模板（建议提炼，不强制）
+```
+
+#### `capability-registry.jsonl` 完整 Schema
+
+> **架构说明**：`capability-registry.jsonl` 是人工维护的能力输入格式，比直接写 Kuzu 更易读、易编辑。**运行时权威是 Kuzu capability 节点**（`active-capabilities` KuzuSource 查询的就是 Kuzu，不是 jsonl）；`init-capabilities.py` 负责将 jsonl 同步到 Kuzu。L2 后 `refine_capabilities()` 直接精炼 Kuzu 节点描述，jsonl 仅作为人工初始化和版本管理的载体，不需要手工跟踪每次运行时变化。新实例部署：填写 jsonl → 运行 `init-capabilities.py` → Kuzu 即为权威。
+
+文件路径：`data/corpus/capability-registry.jsonl`
+
+```jsonl
+{
+  "id": "cap-20260324-001",
+  "name": "handle-mom-learning-anxiety",
+  "type": "skill",
+  "owner": "lucas",
+  "author": "andy",
+  "description": "妈妈焦虑姐姐学习进度时的标准应对方式",
+  "location": "~/.openclaw/workspace-lucas/skills/handle-mom-learning-anxiety/SKILL.md",
+  "created_at": "2026-03-24T10:00:00Z",
+  "source": "skill-candidates:lsc-20260324-001",
+  "status": "active",
+  "superseded_by": null,
+  "verification": {
+    "verified_at": "2026-03-24T12:00:00Z",
+    "method": "skill_file_exists"
+  }
+}
+```
+
+**type 枚举**：`skill`（行为模式，SKILL.md，OpenClaw 原生注入）/ `tool`（可执行动作，插件代码注册）/ `web-app`（操作界面，app/generated/ 目录）
+
+**自动写入机制（2026-03-30）**：`trigger_lisa_implementation` 完成后，插件层检查 spec JSON 的 `registers_capability` 字段（boolean，默认 false）；为 true 时才自动 append 一条新记录到 `capability-registry.jsonl`，字段取值：`capability_id`=reqId，`title`=spec.title，`entry_point`=spec.capability_entry ?? spec.integration_points[0].file，`timestamp`/`last_used`=当前时间，`requirement`=需求文本前 200 字，`status`="active"。已存在同 ID 的记录不重复写入。**设计意图**：Bug 修复和能力增强不产生新 registry 条目；只有 Andy 明确标注 `registers_capability: true` 的新能力才写入，避免 registry 膨胀。spec JSON 的 `capability_entry` 字段（可选）用于显式指定能力入口文件路径，缺省时 fallback 到 `integration_points[0].file`。
+
+**status 枚举**：`active`（当前有效）/ `deprecated`（已废弃，保留记录）/ `superseded`（被替代，`superseded_by` 指向新版本 ID）
+
+**deprecated / superseded 机制**：旧 Skill 被新 Skill 取代时，旧记录 status → `superseded`，旧 SKILL.md 删除（避免 Lucas 同时看到两套指导产生混淆），新记录 status → `active`。Andy 在巡检时负责识别过时能力，同类 Skill 超过一个时合并或标记 superseded。
+
+#### 三种固化形式的完整路径
+
+**Skill（最常见，门槛最低）**
+```
+Andy write_lucas_skill()
+  → 写 ~/.openclaw/workspace-lucas/skills/{name}/SKILL.md
+  → 写入 capability-registry（status: active）
+  → 更新 skill-candidates 对应条目（status: crystallized）
+验证：SKILL.md 文件存在 + 下次 session available_skills 里能看到
+生效：Lucas 下次 session 自动拥有此 Skill，不需要 Gateway 重启
+```
+
+**Tool（中等，需要 Lisa 实现）**
+```
+Andy 出 Spec（含工具接口定义：名称/参数/返回值/描述）
+  → Lisa 接前审计（capability-registry 查重）
+  → Lisa 实现工具代码（crewclaw-routing/index.ts 注册）
+  → Lisa 写入 capability-registry + code_history ChromaDB
+验证：Gateway 工具列表里有此工具（curl 检查）+ 工具被成功调用一次
+生效：需要 Gateway 重启（插件代码变更）
+```
+
+**Web App（最高，完整交付）**
+```
+Andy 出 Spec（含页面结构/接口规范/Co-Pilot 集成方式）
+  → Lisa 接前审计（capability-registry 查重 + app/generated 目录检查）
+  → Lisa 实现 app/generated/{name}/server.js（工厂函数格式）
+  → Lisa 写入 capability-registry + code_history ChromaDB
+验证：/api/{name}/health 返回 200 + 路由被 wecom-entrance 动态加载 + 业务大师能成功发链接给成员
+生效：wecom-entrance 重启时自动加载，无需手动注册
+```
+
+#### 知识注入三维度
+
+三角色共同遵循的注入选择原则：
+
+```
+① 稳定领域知识（appendSystemContext 常驻）
+   载体：MEMORY.md / AGENTS.md / 补充知识文件（ARCH.md / CODEBASE.md）
+   适用：稳定、不超 500 token、每次任务都可能用到
+   例：Andy 系统架构摘要、Lisa 代码库结构摘要
+
+② 任务相关历史经验（before_prompt_build ChromaDB 检索）
+   载体：ChromaDB 各集合（语义检索，只注入与当前任务相关部分）
+   适用：量大、任务相关性强、需要语义匹配
+   例：Lucas 对话历史、Andy 决策历史、Lisa 代码历史
+
+③ 实时外部信息（工具调用按需触发）
+   载体：research_task / web_search / 文档抓取
+   适用：需要最新信息、一次性使用
+   例：行业最新实践、特定 API 文档、外部参考实现
+```
+
+`appendSystemContext`（OpenClaw 2026.3.7 新增）比 `prependContext` 更适合常驻外部知识注入——进入 system prompt 空间，provider caching 友好，不占用用户消息 token。这是 Andy/Lisa 外部知识注入的首选方式。
+
+---
+
+### L3：影子 Agent 与组织运作优化
+
+L2 运转之后，一件新的事情发生了：**子 Agent 加入组织**。
+
+子 Agent 加入不只是「系统多了几个工具」——它改变了协作关系拓扑。原来是「每个成员 → Lucas」的星形结构，加入影子 Agent 之后变成了网状：成员有了专属代理，角色有了分工影子，信息流向改变，新的低效模式随之涌现。
+
+```
+成员还没有建立与影子协作的习惯 → 仍然绕开影子找 Lucas
+角色影子分工后协调成本上升    → 某个环节成了新瓶颈
+跨成员的协作信号被各自影子截断 → 家庭整体目标对齐变差
+```
+
+**L3 要做的就是感知这些新低效，并推动优化。关键：优化不是系统单方面调整，是人和系统一起调整。**
+
+```
+系统侧：感知协作拓扑中的低效 → 调整路由、触发机制、影子行为
+人的侧：建立新的协作习惯     → 知道什么时候找影子、什么时候找 Lucas
+两者共同进化                 → 组织协作越来越顺
+```
+
+#### 两类影子 Agent
+
+| | 成员影子 | 角色影子 |
+|---|---|---|
+| 服务对象 | 组织成员（外部） | V 字流水线本身（内部）|
+| 目的 | 放大成员能做的事 | 扩展 Andy / Lisa 的处理容量 |
+| 触发方式 | 成员参与深度超阈值 / 成员主动请求 | 任务积压 / 专域需求持续增长 |
+| 创建方式 | Lucas 提议 + 成员确认 | Andy/Lisa 自主调用 `create_sub_agent` |
+| 典型场景 | 代替成员 flag，主动推送能力 | Andy 把专域设计任务分发给影子并行处理 |
+
+成员影子不替代 Lucas，而是**组织服务能力的横向扩展**——Lucas 服务宽度，影子服务深度，两者并发运行，互不阻塞。影子同时是 V 字流水线的独立触发源：识别到成员有反复需求但无对应能力时，代替成员提交 `flag_for_skill`，L3 通过影子放大了 Axis 1 的结晶速度。
+
+#### Lucas：跨成员协作中介
+
+影子是单成员纵深，Lucas 是唯一持有**全局视野**的角色——也是唯一能做跨成员协调的角色。
+
+```
+场景：同一件事，不同成员在独立说
+  爸爸私聊：「姐姐最近压力大」
+  妈妈私聊：「黟黟说有点焦虑」
+  → Lucas 感知同一件事 → 推动家庭协商
+
+场景：一方信息对另一方有价值
+  小姨：「想了解 AI 创业方向」
+  爸爸（历史）：曾提到相关资源
+  → 经双方同意 → Lucas 连接信息
+
+场景：目标冲突需对齐
+  爸爸：「周末全家出游」 / 妈妈：「周末要加班」
+  → Lucas 感知冲突 → 主动协调
+```
+
+**触发机制**：每条消息处理后轻量扫描——查 Kuzu + ChromaDB，当前话题是否与其他成员近期信号相关联。发现关联 → 评估隐私合规性 → 决定是否主动协调。
+
+**隐私规则**：私聊内容默认保密；跨成员协调前必须征得发起方同意；双方授权后才连接信息。
+
+**与影子的分工**：影子负责「每个成员被服务得更好」，Lucas 负责「组织整体协作更顺」——两者缺一不可。
+
+#### L3 协作链路形态（全貌）
+
+```
+成员需求信号
+  ↓ 两个触发源
+  成员影子（主动感知，代替成员发起）
+  Lucas（通用接入，处理所有成员的直接请求）
+        ↓
+       Andy
+  ┌─────┴──────┐
+Andy影子     Andy影子    ← 专域并行，Andy 验收整合
+  └─────┬──────┘
+        ↓
+       Lisa
+  ┌─────┴──────┐
+Lisa影子     Lisa影子    ← 专域并行实现，Lisa 验收交付
+  └─────┬──────┘
+        ↓
+  capability-registry   ← 结晶成果登记
+        ↓
+  成员影子 / Lucas 推送给成员  ← 新能力反哺成员使用
+```
+
+#### 链路健康指标体系（三层）
+
+| 层次 | 度量内容 | 说明 |
+|------|---------|------|
+| **流程层**（内部可观测性）| 速度（flag→结晶耗时）/ 质量（Andy 验收通过率）/ 容量（积压数、影子利用率）| 必要条件，不是效能 |
+| **能力层**（外部中间信号）| 交付能力实际使用率 / 同类请求减少率 | 流程跑好了，要落地为成员感知到的能力扩张 |
+| **效能层**（真正的协作效能）| 成员间协作度提升 / 组织目标达成率 | 无法从系统内部自动采集，需系统工程师定期人工审视 |
+
+流程层数字健康是效能改善的必要条件，不是充分条件。效能层才是真正的度量。
+
+#### L3 实现规范
+
+以下是 L3 影子 Agent 机制的关键接口和执行细节。
+
+#### 成员影子：创建协议
+
+影子创建是协议驱动的，不是系统自动生成的。
+
+**触发信号**（满足任一）：
+- 通用 Agent 检测到成员参与深度超过阈值（交互频率 + 请求复杂度 + 持续时长）
+- 成员主动表达希望有专属助手
+- 组织管理员为成员显式分配
+
+**创建流程（6步）**：
+```
+① 触发信号出现
+② Lucas 评估：查 Kuzu 该成员行为模式 + 查 capability-registry 该成员用过哪些能力
+③ Lucas 向成员提议（简短说明影子能做什么，征得同意）
+④ 成员确认
+⑤ create_member_shadow 工具执行：
+   → 初始化影子 workspace（基于 USER.md + 行为模式）
+   → 配置能力子集（成员视图，见下节）
+   → 在渠道层注册独立身份
+⑥ 影子开始主动运转
+```
+
+影子有名字，有独立渠道身份，成员清楚知道「这是我的专属助手」。成员直接与影子对话，不通过 Lucas 中转；影子主动触达也以自己的身份发出。
+
+#### 成员影子：能力视图（成员视图）
+
+影子持有 capability-registry 的**成员视图**，不是全量，是三层过滤后的子集：
+
+```
+capability-registry（组织全量能力）
+    ↓ 三层过滤
+① 角色匹配：这个成员的身份有权使用哪些能力
+② 行为相关：成员实际用过或高概率需要的能力
+③ 显式配置：成员主动要求加入或移除的能力
+    ↓
+成员视图（影子的能力集）
+```
+
+成员视图不是静态的——新能力加入 capability-registry 后，影子评估是否属于该成员视图，是则自动纳入；成员行为模式变化时，视图随之更新。
+
+#### 成员影子：主动运转与生命周期
+
+**主动运转模式**（影子不等成员开口）：
+```
+信号来源：
+  时间触发   → 定期提醒、周期性任务
+  事件触发   → 关联事件发生（成员关注的事件到达）
+  模式触发   → 检测到成员习惯信号
+
+行动方式：
+  直接推送   → 影子有答案，直接告知成员
+  触发 V字   → 需要新能力，影子代表成员发起协作提炼（flag_for_skill）
+  上报 Lucas → 超出影子能力范围，协调转给通用 Agent 处理
+```
+
+**生命周期**：
+```
+创建 → 初始化成员视图，开始主动监听
+活跃 → 与成员定期交互，能力视图持续更新
+休眠 → 成员长期不活跃（N 天无交互），释放资源
+复活 → 成员重新活跃，恢复运转，从休眠点继续
+进化 → 成员行为模式变化 → 能力视图更新 → 行为策略调整
+退役 → 成员离开组织，影子归档（记录保留，不删除）
+```
+
+#### 角色影子：创建机制
+
+角色影子由 Andy/Lisa 自主创建，不需要系统工程师介入：
+
+**触发条件**：
+- Andy：skill-candidates 积压 / 同时处理多个专域需求 / 某设计领域反复出现
+- Lisa：并行实现任务 > 1 / 某技术领域任务量持续增长
+
+**初始化**（`create_sub_agent` 工具）：
+```
+继承创建者的 SOUL.md（人格）
+专域 Skill 配置（只加载与该专域相关的 Skill）
+能力子集（capability-registry 中该专域相关的能力）
+```
+
+**与 capability-registry 的关系**：角色影子交付同样写入 registry，`author` 字段追溯创建者（`author: "andy-shadow-ui"` / `verified_by: "andy"`），确保产出可追溯、质量门控留下记录。
+
+**进化**：Andy 设计模式 Skill 增长 → 对应专域影子自动继承；Lisa 实现模板 Skill 增长 → 对应专域影子自动继承；创建者模型微调（L4）→ 影子随创建者版本同步升级。
+
+#### 链路自优化机制（L3 与 L2 的核心区别）
+
+L2 的链路是被动执行的；L3 的链路能主动审计自己。Andy 作为链路中枢，除了每日 cron 处理候选队列，同时维护链路健康：
+
+```
+周期性链路健康审计（与 cron 同频）：
+
+① 识别系统性返工：哪类需求的返工率持续高于阈值？
+   → 该类需求 Spec 框架不够好
+   → Andy 写/更新对应设计模式 Skill，下次同类需求自动复用
+
+② 识别积压热点：哪个环节队列积压最严重？
+   → 该节点容量不足
+   → 触发创建对应专域影子（角色影子创建机制）
+
+③ 识别能力老化：哪些 capability-registry 条目长期无人使用？
+   → 候选废弃，释放维护成本
+   → Andy 标记 deprecated，通知 Lucas 和对应影子
+```
+
+审计结果写入 ChromaDB decisions（Andy 自己的学习语料）；超出 Andy 能自主处理范围的瓶颈，生成改进建议升给系统工程师。
+
+---
+
+### L4：行为内化
+
+L2+L3 跑出足够多的成熟模式后，DPO 积累触发增量微调，把外部规则烧进权重。SOUL.md 越来越薄，外挂工具越来越少，系统越来越自主。**前面没有转起来，内化没有基础。**
+
+**两条内化轨道**：
+
+- **行为内化**：对话铁律（何时调工具、陪伴方式、Co-Pilot 调度）→ 烧进权重 → 删除 SOUL.md 对应条目
+- **技能内化**：成熟 Tool → 模型直接执行 → Tool 下线（`pattern -[internalized_into]-> weights`）
+
+**触发条件**（四项同时满足）：同类行为 ≥ 50 次 + 正例 qualityScore ≥ 0.8 + 负例积累充足 + 系统工程师审核确认。
+
+**SOUL.md 瘦身路线图**：每完成一个内化周期，删除对应 SOUL.md 条目。终态：SOUL.md 只剩无法内化的边界——隐私规则、安全约束、组织身份定义。
+
+**L4 与 L2 的关系**：
+
+```
+L2 外化：pattern -[crystallized_into]-> capability（Tool 出现）
+L4 内化：pattern -[internalized_into]-> weights（Tool 下线）
+扩张 → 收缩 → 扩张：系统在这个循环中持续进化，工具越来越少 = 越来越成熟
+```
+
+---
+
+### 教师模型干预：三轴机制的外部监督层
+
+三轴自进化机制有一条清晰的边界：**它只能在已有信号的范围内进化，无法自己发现「从未发生过的行为缺口」**。
+
+| 三轴机制能解决 | 三轴机制不能解决 |
+|--------------|----------------|
+| 已有行为模式的质量提升 | AGENTS.md 中从未定义过的行为规则 |
+| 已有路径的效率优化 | 运行时状态盲区（如 WebSocket 断线自知） |
+| 已有语料的本地化积累 | 结构性代码 bug |
+
+这类缺口需要**教师模型干预**——一个外部的、更高视角的观察者，提供三轴机制自己无法生成的监督信号。HomeAI 的教师模型就是系统工程师。
+
+#### 两条蒸馏路径
+
+```
+自动蒸馏（self-supervised，三轴机制承载）
+  └─ 对话数据 → ChromaDB → distill-memories.py → Kuzu → MEMORY.md DISTILLED
+       特点：放大已有模式，越用越精；有信号才能学
+
+教师模型干预（teacher-supervised，系统工程师承载）
+  └─ 系统工程师定期读家庭真实对话 → 发现行为缺口 → 写入 AGENTS.md / SOUL.md
+       特点：产生新规则，扩展边界；能发现「从未正确发生过」的场景
+```
+
+两条路径互补：自动蒸馏负责深化，教师模型干预负责补盲。
+
+#### 系统工程师作为教师模型的工作方式
+
+**观察动作**（轻量，定期）：以「有没有系统自己学不到的行为缺口」为问题意识，浏览业务大师与成员的真实对话。不需要每次干预，看完没发现就放手。
+
+**干预动作**（有据才触发）：发现缺口后，直接写入对应文件——
+- 行为规则缺失 → 更新 `AGENTS.md`（情况 A-I 等铁律）
+- 人格/自我认知偏差 → 更新 `SOUL.md`
+- 实现陷阱 → 追加 `docs/10-engineering-notes.md`
+- 架构级认知 → 落笔 `docs/00-project-overview.md` 或 `docs/09-evolution-version.md`
+
+**判断标准**：该缺口是否属于「正确行为从未发生过，因此没有信号可蒸馏」——是，则只有教师模型干预才能修；否，则交还给三轴机制自行演化，不要过度干预。
+
+> **与评测阶段教师模型的关系**：MEMORY.md 挂起项「本地模型评测机制」中 Sonnet 作为打分教师模型，是同一概念的另一个实例——评测阶段用于模型选型，运行阶段用于行为规则补盲，两者结构相同：外部高视角观察者提供学生模型无法自生成的监督信号。
+
+---
+
+### 三维诊断框架
+
+三轴机制跑起来后，用三个维度衡量每个角色变强了多少：
+
+| 维度 | 核心问题 | 存储位置 | 不足时的动作 |
+|------|---------|---------|------------|
+| **Data（数据）** | 信息有没有进来？工具输出/对话/外部查询/子 Agent 是否都已回写记忆？ | ChromaDB：`conversations` / `agent_interactions` / `decisions` / `agents` | 补充缺失的采集 hook |
+| **Knowledge（知识）** | 有没有提炼出可复用的规律和最佳实践？ | `skills/{skill-name}/SKILL.md`（OpenClaw 原生读取） | 触发 Andy→Lisa 生成新 Skill 文件 |
+| **Capability（能力）** | 有没有能完成这件事的工具？成功率是否足够高？ | Kuzu capability 节点（`status=active`） | 触发 Andy→Lisa 开发新工具 |
+
+```
+经历 → 存入 Data（记忆系统负责）
+              ↓ 提炼
+        Knowledge（Skill 文件 → 向量化入 skills 集合）
+              ↓ 指导
+        Capability（新工具 → 注册入 capabilities 集合）
+```
+
+#### 进化周期三维缺口检测（每 50 次请求或 24h 触发）
+
+```
+Data 审计：检查各数据源的 hook 覆盖率
+  → 工具调用输出是否回写了 ChromaDB？对话记录是否完整？
+  → 有盲点 → 补充对应采集 hook
+
+Knowledge 检测：检查 skills/ 目录中是否有覆盖该任务的 Skill 文件
+  → 没有相关 Skill → 标记不足，触发 Andy→Lisa 生成新 Skill 文件
+
+Capability 检测：查 Kuzu capability 节点（status=active）成功率
+  → 没有或成功率低 → 标记不足，触发 Andy→Lisa 开发新工具
+```
+
+各角色三维对应：
+
+| 角色    | Data                                                         | Knowledge                       | Capability                                                                 |
+| ----- | ------------------------------------------------------------ | ------------------------------- | -------------------------------------------------------------------------- |
+| Lucas | ChromaDB：`conversations` + `decisions` + `agents`（所有分身）      | `skills/`（意图边界、成员感知 Skill 文件）   | Kuzu capability 节点 + `trigger_development_pipeline` + 成员分身路由               |
+| Andy  | ChromaDB：`agent_interactions` + `decisions` + `agents`（设计小弟） | `skills/`（复杂度校准、家庭技术栈 Skill 文件） | Kuzu capability 节点 + research_task（DeepSeek 调研）+ `trigger_lisa_implementation` |
+| Lisa  | ChromaDB：`agent_interactions` + `decisions` + `agents`（实现小弟） | `skills/`（交付约定、运行环境约束 Skill 文件） | Kuzu capability 节点 + OpenCode 集成（`run_opencode`）                           |
+
+**子 Agent 的进化方式**：不参与独立进化周期，通过创建者间接受益——Data 审计通过 `creatorId` 过滤已覆盖子 Agent 交互；Knowledge/Capability 随创建者模型自动继承。
+
+---
+
+### 信息茧房：本地学习闭环的边界风险
+
+本地学习有一个内在缺陷：**闭环越紧密，偏差积累越快**。如果业务大师只在组织内部对话中学习，会越来越强化这个组织已有的模式——包括其中不合适的习惯：成员习惯用某种模糊的表达方式，业务大师学会了迎合而不是引导澄清；组织在某个领域有错误认知，Skill 文件积累的都是"组织版本"。
+
+三层对冲机制：
+
+| 层 | 机制 | 生效阶段 |
+|----|------|---------|
+| **框架层 Skill** | 通用最佳实践入 Git，不随组织对话漂移 | 框架内置，clone 后即生效；Setup 阶段补充实例层 |
+| **系统工程师干预** | Main 通道超然观测，发现偏差时修正 Skill 或 prompt | Setup 阶段配置 Main 通道后生效 |
+| **云端跨组织聚合** | 去标识化语料上传，提炼多个组织的集体智慧，蒸馏时反哺本地 | 进化阶段（多实例上线后验证） |
+
+**Skill 文件命名约定**：实例层 Skill 用 `-family-` 标识（如 `lucas-audience-pattern.md`），框架层用 `-general-` 标识（如 `lucas-intent-boundary.md`）。系统工程师定期审查实例层 Skill 文件是否在强化偏差。
+
+---
+
+### 语料管道验证（当前阶段）
+
+本阶段的目标不是验证云端能否进化，而是验证**三条语料管道是否正确生成高质量、可送出的语料**。云端微调是否值得启动，取决于这一关。
+
+#### 语料质量标准
+
+三条管道各有不同的高质量标准：
+
+| 语料流 | 高质量标准 | 典型负例 |
+|--------|-----------|---------|
+| `lucas-corpus` | 意图识别准确、成员偏好有体现、响应符合家庭语境 | 泛泛回复、无上下文的简短确认 |
+| `andy-corpus` | context/decision/rationale 三字段完整、有明确技术取舍理由 | 方案描述缺失根因、无 tradeoff 分析 |
+| `lisa-corpus` | 代码可运行、有错误修复对（DPO 正负例）、含适用场景说明 | 未验证的实现、缺少运行环境约束 |
+
+质量评分由 `quality-evaluator.js` 执行：规则评分（0.4权重）+ LOCAL_MODEL_NAME 本地模型评分（0.6权重）。Lucas 人格检查额外过滤技术词汇泄漏。
+
+#### 本地模拟验证（cloud-simulator.js）
+
+`scripts/cloud-simulator.js` 在 port 4000 启动一个模拟云端接收端，无需真实云端即可验证完整管道：
+
+```
+POST /corpus/lucas|andy|lisa  ← 接收语料包，验证格式与去标识化
+POST /simulate/finetune       ← 模拟5步微调流程（语料清洗→LoRA训练→多家庭聚合→蒸馏→质量验证）
+POST /simulate/distill        ← 模拟三合一蒸馏
+GET  /simulate/evolution-report ← 查看模拟进化结果
+GET  /status                  ← 查看接收到的语料汇总
+```
+
+模拟微调质量提升公式：`baseQuality + round×0.03 + (familyCount-1)×0.05`，用于判断语料积累量是否足够支撑正式微调。
+
+#### 正式上传管道（corpus-uploader.js）
+
+`scripts/corpus-uploader.js` 每日凌晨3点运行，三步执行：
+
+```
+1. 去标识化：替换成员姓名、设备ID、地址等敏感字段
+2. 分包上传：lucas/andy/lisa 三条管道分别发送到对应云端端点
+           （环境变量：CORPUS_ENDPOINT_LUCAS/ANDY/LISA）
+3. 归档：上传成功后本地打标，避免重复上传
+```
+
+验证步骤：先用 `--dry-run` 预览去标识化结果，确认无敏感信息泄漏，再执行正式上传到模拟器（`cloud-simulator.js`）验证格式，最后切换到真实云端端点。
+
+#### 管道验证通过标准
+
+- [ ] 三条 corpus.jsonl 有稳定新增（日均条数符合预期）
+- [ ] 质量评分 ≥ 0.6（规则+模型综合）的比例 > 70%
+- [ ] 去标识化检查：姓名/设备ID/地址字段全部替换，无泄漏
+- [ ] 模拟器接收格式验证通过（字段完整、编码正确）
+
+管道验证通过后，语料积累达到阈值（建议三条各 ≥ 500条高质量样本），才启动真实云端微调。
+
+---
+
+## 八、可复制支撑机制
+
+### 通用设计层与实例配置层分离
+
+Lucas/Andy/Lisa 框架对所有组织一样，只有实例配置层是组织专属的：
+
+```
+通用设计层（框架，对所有部署一样，代码不需要改）
+  ├─ 原生 OpenClaw + crewclaw-routing 插件
+  ├─ Lucas/Andy/Lisa 的协作机制和路由规则
+  └─ docs/01-09 技术文档
+
+实例配置层（这个组织专属，部署时填充）
+  ├─ ~/.openclaw/workspace-lucas/SOUL.md       — Lucas 在这个组织的身份与性格
+  ├─ ~/.openclaw/workspace-lucas/AGENTS.md     — Lucas 工作规则与工具调用铁律
+  ├─ ~/.openclaw/workspace-andy/SOUL.md        — Andy 的角色定位与边界
+  ├─ ~/.openclaw/workspace-andy/AGENTS.md      — Andy 工作规则与输出标准
+  ├─ ~/.openclaw/workspace-lisa/SOUL.md        — Lisa 的角色定位与边界
+  ├─ ~/.openclaw/workspace-lisa/AGENTS.md      — Lisa 工作规则与交付规范
+  ├─ HomeAIDocs/                               — 这个组织的知识库
+  └─ ChromaDB                                  — Lucas 的长期记忆
+```
+
+新部署实例只需要填实例配置层，框架代码零修改。
+
+### 文档即产品
+
+Readme 是可复制的 DNA 载体。另一个组织拿到三样东西，能独立复建一套 HomeAI 系统：**原生 OpenClaw + crewclaw-routing 插件**（部署就绪，配置即用）、**Readme 系列文档**（理解架构 + 执行指导）、**Claude Code**（执行部署 + 持续进化）。具体获取方式见 05-environment-setup.md。
+
+#### 模板结构
+
+| 部分     | 内容                    | 属性        |
+| ------ | --------------------- | --------- |
+| 核心架构描述 | 多层架构设计（极端优化为双层）、三角色研发团队、三层路由（路由即学习） | 通用，不变     |
+| 组织场景实例 | 具体需求案例、成员信息填写、Channel 接入       | 可替换       |
+| 操作步骤   | 安装、配置、验收流程            | 主干固定，末端灵活 |
+
+### 操作指导书设计原则
+
+- **人读「为什么」**：每节开头说清目的，不需要理解所有技术细节
+- **AI 读「怎么做」**：步骤足够精确，Claude Code 能直接执行
+- **验收标准清晰**：每个阶段结束，人能独立确认是否成功
+- **主干清晰，末端灵活**：核心步骤固定，环境差异由 Claude Code 自行处理
+
+### 版本演进与文档同步
+
+**规则**：先刷文档，再演进系统。
+
+```
+识别到架构变更
+  → 更新 CLAUDE.md 动态区（记录决策）
+  → 更新对应设计文档（01-04）
+  → 更新对应操作指导书（05-09）
+  → 演进代码实现
+  → 验收完成后更新 CLAUDE.md 当前状态
+```
+
+---
+
+## 九、系统监控与维护
+
+### 三层可靠性设计
+
+HomeAI 运行在家用设备上，本地网络和云端模型服务均可能出现抖动。系统设计了三层防线：
+
+#### 层一：gateway-watchdog（多项检测，自动告警/重启）
+
+`/health` 返回 200 不代表 Gateway 正常——LLM 请求可能永久挂死而健康接口仍正常。watchdog 每 1 小时发一次真实 LLM 请求（不是 `/health`），3 分钟无回应则 `kill -9 + launchctl bootstrap` 强制重启 Gateway。pm2 常驻，自动恢复。
+
+watchdog 还附带以下检测：
+
+| 检测项 | 间隔 | 动作 |
+|--------|------|------|
+| Gateway LLM 存活 | 1小时 | 超时自动重启 |
+| Ollama 存活（embedding） | 1小时 | 失败自动重启 |
+| mlx-vision 存活 | 1小时 | 失败自动重启 |
+| 长流程任务卡死（processing 超 10 分钟） | 5分钟 | 重置为 pending |
+| **群消息推送中断**（私聊有更新但群静默 > 2小时） | 30分钟 | notify-engineer 告警业主 |
+
+群消息推送中断是企业微信平台偶发行为（WebSocket 心跳正常但消息不推送），代码侧无法自动恢复，监控到后由业主手动踢出/重新拉入启灵。
+
+```
+进程：pm2 start ~/HomeAI/scripts/gateway-watchdog.js --name gateway-watchdog
+日志：~/HomeAI/logs/pm2/gateway-watchdog.log
+```
+
+#### 层二：Andy 并发信号量（MAX_ANDY_CONCURRENT=1）
+
+Andy 流水线串行执行，避免并发 DeepSeek R1 请求堆积超时导致 Gateway session pool 腐化。`runAndyPipeline` 入口加信号量，超出排队（不丢弃）并立即告知用户「已排队」，`finally` 块保证槽位释放。
+
+#### 层三：per-message 独立 session
+
+每条消息使用唯一 session key（`group:fromUser:msgId` 或 `userId:timestamp`），单条消息卡死的 session 不影响其他消息。记忆通过 ChromaDB `before_prompt_build` 注入，不依赖 session 历史积累。
+
+### 进程状态
+
+```
+launchd：ai.openclaw.gateway（端口 18789），系统重启自动拉起
+PM2：wecom-entrance（端口 3003）、cloudflared-tunnel、gateway-watchdog
+```
+
+Main 日常维护操作详见三章"系统工程师与 Main"。
+
+### 量化健康标准
+
+| 指标 | 警戒线 | 说明 |
+|------|--------|------|
+| 功能成功率 | 下降 >5% 停止变更 | 防止改动引入功能退化 |
+| 响应时间 | 增加 >50% 停止变更 | 保障交互体验 |
+| 错误率 | 上升 >10% 停止变更 | 系统稳定性保障 |
+
+### 数据安全
+
+- API Key 存储在 `~/HomeAI/.env`，不纳入 Git（另有 `~/.openclaw/openclaw.json` 和 `~/.openclaw/start-gateway.sh` 两处同步存储，轮换时需三处同步更新）
+- 家庭隐私数据（ChromaDB）只存本地，不随模型更新丢失
+- 上传云端的语料经过去标识化处理
+
+---
+
+## 十、实例层配置规范
+
+### 10.1 环境变量
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `FRONTEND_AGENT_ID` | `lucas` | 接待用户的主 Agent ID；所有「前台专属」逻辑的实际持有者 |
+| `PRIORITY_AGENTS` | `lucas` | 逗号分隔，从 Semaphore 保留池取槽位的 Agent 列表 |
+| `OWNER_ID` | `ZengXiaoLong` | 组织所有者 userId；系统告警、工程师通知的接收目标 |
+| `LOCAL_MODEL_NAME` | `homeai-assistant` | 本地 Ollama 模型名；Layer 2 低复杂度路由端点 |
+| `LUCAS_PROVIDER` | `deepseek` | 前台 Agent 云端 provider |
+| `LUCAS_MODEL` | `deepseek-chat` | 前台 Agent 云端模型 ID |
+| `ANDY_PROVIDER` | `deepseek` | 方案设计 Agent 云端 provider |
+| `ANDY_MODEL` | `deepseek-reasoner` | 方案设计 Agent 云端模型 ID（R1） |
+| `LISA_PROVIDER` | `minimax` | 实现 Agent 云端 provider |
+| `LISA_MODEL` | `MiniMax-M2.7` | 实现 Agent 云端模型 ID |
+| `DEEPSEEK_API_KEY` | — | DeepSeek API Key |
+| `MINIMAX_API_KEY` | — | MiniMax API Key |
+| `ZAI_API_KEY` | — | ZAI API Key |
+| `BRAVE_API_KEY` | — | Brave Search API Key（web_search 工具） |
+
+### 10.2 config/ 文件职责表
+
+所有文件位于 `crewclaw/crewclaw-routing/config/`，JSON 格式，框架代码通过 `loadInstanceConfig()` 读取。
+
+| 文件名 | 键结构 | 职责 |
+|--------|--------|------|
+| `members.json` | `{ profileMap: { userId: filename } }` | userId → 档案文件名映射；新增成员在此追加 |
+| `memory-signals.json` | `{ behaviorPatternSignals: [], domainKnowledgeSignals: [] }` | 蒸馏管道用于识别行为模式与领域知识的关键词列表 |
+| `infra-guard.json` | `{ infraKeywords: [] }` | 触发系统工程师告警的基础设施关键词（避免 Agent 误改系统） |
+| `lucas-behavioral-rules.json` | `{ commitmentRule: "", silenceRule: "" }` | 前台 Agent 每轮注入的约束文本；承诺词禁令与工具调用静默原则 |
+| `visitor-restrictions.json` | `{ blockedTools: [] }` | 访客 session（`userId.startsWith("visitor:")`）禁止调用的工具名列表 |
+
+### 10.3 context-sources.ts 注册契约
+
+`context-sources.ts` 是实例层向框架层声明「每个 Agent 需要注入哪些上下文」的注册表。
+
+```typescript
+// 最小结构示例（新实例）
+export const contextSources: Record<string, ContextSource[]> = {
+  "default": [
+    // 所有未注册 agentId 的 fallback source
+    { id: "background", source: "file", queryMode: "static-file",
+      filePath: "path/to/background.md", inject: "append-system" }
+  ],
+  "lucas": [  // 前台 Agent
+    { id: "user-profile",    source: "file",    queryMode: "user-profile",   inject: "prepend" },
+    { id: "conversations",   source: "chromadb", queryMode: "by-user",        inject: "prepend",       collection: "conversations",    topK: 5 },
+    { id: "decisions",       source: "chromadb", queryMode: "semantic",        inject: "append-system", collection: "decisions",        topK: 3 },
+    // ... 更多 source
+  ],
+  // andy / lisa source 注册类似，针对各自角色的知识需求
+};
+```
+
+**新实例只需提供自己的 `context-sources.ts`，不改动 `context-handler.ts`。**
+
+---
+
+## 十一、新实例部署 SOP
+
+以下 4 步是在 CrewClaw 框架上启动新组织实例的最小路径：
+
+**Step 1：准备 OpenClaw 环境**
+```
+1. 安装 OpenClaw Gateway（独立 OS 用户或独立主机，保证与其他实例隔离）
+2. 按组织角色创建 workspace-{agentId}/ 目录，配置 8 文件体系
+   （SOUL.md / AGENTS.md / IDENTITY.md / MEMORY.md / TOOLS.md / USER.md / HEARTBEAT.md）
+3. 在 openclaw.json 中注册所有 Agent
+```
+
+**Step 2：配置实例层**
+```
+1. 在 crewclaw/crewclaw-routing/config/ 下创建 5 个配置文件
+   members.json / memory-signals.json / infra-guard.json / lucas-behavioral-rules.json / visitor-restrictions.json
+   （参考 HomeAI 实例值，用本组织内容替换）
+2. 设置环境变量：FRONTEND_AGENT_ID / PRIORITY_AGENTS / OWNER_ID / LOCAL_MODEL_NAME /
+   各角色 provider 和 model / 各 API Key
+3. 编写 context-sources.ts：注册每个 Agent 的 source 列表
+```
+
+**Step 3：初始化数据层**
+```
+1. 运行 scripts/init-kuzu-schema.py — 创建 Kuzu 知识图谱 schema
+2. 运行 scripts/init-capabilities.py — 初始化能力注册表节点
+3. （可选）运行 scripts/init-family-relations.py — 导入已知的人员关系种子
+4. 初始化 ChromaDB 22 个集合（首次写入时自动创建）
+```
+
+**Step 4：启动与验证**
+```
+1. pm2 start ecosystem.config.js — 启动 wecom-entrance / gateway-watchdog
+2. 确认 Gateway 健康：发送真实 LLM 请求（/health 200 不等于健康）
+3. 发送测试消息，确认前台 Agent（FRONTEND_AGENT_ID）正常响应
+4. 确认 before_tool_call visitor 拦截可触发、ChromaDB 写入正常
+```
+
+> **隔离原则**：每个组织实例必须运行在独立 Gateway 上。同一 Gateway 的调用者可互见数据，这是 OpenClaw 的设计意图，不是漏洞。多组织共用 Gateway = 数据边界缺失。
+
+---
+
+# Part 4：HomeAI 实例部署参考
+
+> HomeAI 是 CrewClaw 框架的第一个参考实现，运行于家庭场景。本 Part 收录 HomeAI 实际配置值与身份/Channel 设计，供后续部署参照。
+
+## 零、HomeAI 整体部署架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  系统工程师（人 + AI工具）                                        │
+│  本地：Claude Code / openclaw CLI（主通道）                      │
+│  远程：企业微信单聊 → Main 代理（GLM-5 驱动，带系统工具）            │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  Channel 层                                                      │
+│  wecom-entrance（端口 3003，PM2）→ OpenClaw Gateway              │
+│  企业微信应用单聊（业主→Main）/ 企业微信群（家庭→Lucas）           │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  OpenClaw Gateway + crewclaw-routing 插件（端口 18789）          │
+│  launchd 管理，wrapper script 确保 env 继承                      │
+│                                                                  │
+│  意图路由层                                                       │
+│    Lucas 直接响应 / 触发 Andy→Lisa / 调用工具 / 转 Main           │
+│                                                                  │
+│  before_prompt_build：ChromaDB（对话语义）+ Kuzu（结构化知识）    │
+│                        → 历史上下文注入                           │
+│                                                                  │
+│  模型路由层（路由即学习）                                          │
+│    complexityScore < localThreshold → LOCAL_MODEL_NAME（本地）   │
+│    complexityScore ≥ localThreshold → 云端（各角色差异化模型）    │
+│      localThreshold 持续提升 = 本地专精程度↑ 的量化指标            │
+│                                                                  │
+│  工具路由层：Skill / MCP 执行                                     │
+│                                                                  │
+│  ┌──────────────┐  需求触发   ┌───────────────┐                  │
+│  │    Lucas     │──────────►│     Andy      │                  │
+│  │  embedded   │◄── 结果    └───┬───────────┘                  │
+│  └──────────────┘          方案↓     ↑验收                       │
+│                          ┌───────────────┐                       │
+│                          │     Lisa      │                       │
+│                          │  embedded     │                       │
+│                          └───────────────┘                       │
+│                                                                  │
+│  三角色共享：ChromaDB（对话记忆）+ Kuzu（结构化知识）               │
+└──────────┬──────────────────────────────────────────────────────┘
+           │
+     ┌─────┴──────┐
+     ↓            ↓
+┌─────────┐  ┌──────────────────────────────────────┐
+│ 模型层   │  │  知识层                               │
+│         │  │                                      │
+│ 本地：   │  │  ChromaDB（向量，对话记忆检索）        │
+│ homeai- │  │  Kuzu（图数据库，结构化成员/能力知识）  │
+│assistant│  │  MLX（权重，微调产物）                 │
+│         │  │  JSON（配置）/ Markdown（角色知识文件）│
+│ 云端：   │  └──────────────────────────────────────┘
+│ DeepSeek│
+│ MiniMax │
+│ GLM-5   │
+└─────────┘
+```
+
+| 层次                      | 核心职责                                        | HomeAI 实现                                          |
+| ----------------------- | ------------------------------------------- | --------------------------------------------------- |
+| **Channel 层**           | 家庭信息流接入，家人身份映射，信息管控                     | wecom-entrance（3003）、cloudflared-tunnel、PM2         |
+| **OpenClaw Gateway**    | 统一路由入口，四角色请求分发                           | openclaw Gateway（18789）、launchd                    |
+| **crewclaw-routing 插件** | 三层路由引擎，路由即学习管道                           | before_model_resolve hook、质量评估、微调队列               |
+| **Lucas**               | 对话入口，意图识别，任务编排，记忆管理，系统干预通报            | OpenClaw embedded agent、DeepSeek Chat               |
+| **Andy**                | 工具设计，自主写 spec，触发 Lisa，验收 Lisa 交付         | OpenClaw embedded agent、MiniMax M2.7                |
+| **Lisa**                | 工具实现（background 异步），验证，结果回传 Andy 验收     | OpenClaw embedded agent、GLM-5                       |
+| **Main**                | 远程系统工程师代理，主动监控，工具执行                    | wecom-entrance 内置、MiniMax M2.7（配置：openclaw.json `main` 条目）|
+| **模型层**                 | 本地推理 + 云端增强                               | homeai-assistant（Ollama）/ DeepSeek / MiniMax / GLM-5 |
+| **知识层**                 | 结构化成员/能力知识 + 对话记忆检索 + 微调权重              | ChromaDB / Kuzu / MLX 微调 / JSON / Markdown          |
+
+---
+
+## 一、HomeAI 实例部署参考值
+
+**组织规模**：4 角色（Lucas 前台 / Andy 方案 / Lisa 实现 / Main 监控），1 业主，4 核心家庭成员，访客机制（`visitor:TOKEN` 前缀）。
+
+**Channel**：企业微信 aibot（WebSocket，`@wecom/aibot-node-sdk`）。
+
+**环境变量实际值**：
+
+| 变量 | HomeAI 实际值 |
+|------|--------------|
+| `FRONTEND_AGENT_ID` | `lucas` |
+| `PRIORITY_AGENTS` | `lucas` |
+| `OWNER_ID` | `ZengXiaoLong`（业主企业微信 userId） |
+| `LOCAL_MODEL_NAME` | `homeai-assistant` |
+| `LUCAS_PROVIDER` | `deepseek` |
+| `LUCAS_MODEL` | `deepseek-chat` |
+| `ANDY_PROVIDER` | `minimax` |
+| `ANDY_MODEL` | `MiniMax-M2.7` |
+| `LISA_PROVIDER` | `zai` |
+| `LISA_MODEL` | `deepseek-reasoner` |
+
+**Main 模型配置**（非 env var，写入 `~/.openclaw/openclaw.json` agents.list）：
+
+| 字段 | HomeAI 实际值 |
+|------|--------------|
+| `main.model` | `minimax/MiniMax-M2.7` |
+
+> Main 不是 OpenClaw Gateway agent，wecom-entrance 通过 `readAgentModelConfig('main')` 直接读取此条目，不经过 Gateway 的 env var 路由层。更换 Main 模型只需修改 openclaw.json，重启 wecom-entrance 生效。
+
+**config/ 文件要点**：
+
+- `members.json`：5 个 userId 映射（含拼写变体合并到同一档案），对应 `~/.openclaw/workspace-lucas/family/{name}.inject.md`
+- `memory-signals.json`：行为模式信号 12 条（家务/健康/情绪/出行等）；家庭知识信号 8 条（人名/关系/地址等）
+- `visitor-restrictions.json`：14 个工具被封禁（触发开发流水线 / 写记忆 / 发微信 / 创建数字分身等），访客只能只读查询
+
+**本地模型层**：
+
+| 服务 | 端口 | 模型 | 用途 |
+|------|------|------|------|
+| Ollama | 11434 | `homeai-assistant`（Qwen2.5-Coder-7B-4bit） | Layer 2 低复杂度路由 |
+| mlx-vision | 8081 | Qwen2.5-VL-32B-4bit | 图片描述（视觉输入） |
+| local-tts | 8082 | edge-tts YunxiNeural | 语音回复合成 |
+
+**context-sources.ts 注册摘要**（HomeAI 实际 source 配置）：
+
+| agentId | source 数量 | 主要 source |
+|---------|------------|------------|
+| lucas | 9 | user-profile / conversations / decisions / behavior-patterns / family-knowledge / pending-commitments / background / constraint-recall / agent-patterns（ready=true，已激活） |
+| andy | 6 | decisions / code-history / agent-interactions / pending-requirements / background / agent-patterns（ready=true，已激活） |
+| lisa | 6 | code-history / decisions / agent-interactions / background / agent-patterns（ready=true，已激活）/ constraint-recall |
+
+> **agent-patterns 说明**：三角色的 `agent-patterns` source 已于 2026-03-31 首次激活（`ready: true`）。`distill-agent-memories.py` 成功运行后写入 Lucas 12 条 / Andy 6 条 / Lisa 9 条行为模式到 Kuzu。后续由 `gateway-watchdog.js` 每周日自动触发增量更新（DELTA_TRIGGER=10）。
+
+---
+
+## 二、HomeAI L3 实现记录
+
+> HomeAI 在 2026-03-30 完成的 L3 阶段实现，记录各机制的设计决策与执行路径。
+
+### 流水线质量升级——Andy↔Lisa 多轮协作
+
+L2 的 V 字流水线是单向的：Lucas 触发 → Andy 出 spec → Lisa 实现 → Andy 验收。L3 在这条单向链路上加了三条反馈回路，让流水线从「单向执行」变成「能自我纠偏的闭环」。
+
+**三条回路**：
+
+| 回路 | 工具 | 触发方 → 接收方 | 作用 |
+|------|------|-----------------|------|
+| 可行性预判 | `consult_lisa` | Andy → Lisa | Andy 写 spec 前，对关键技术点向 Lisa 发起咨询；Lisa 返回可行/存疑/不可行 + 建议；避免设计了无法实现的方案 |
+| 独立验收门控 | `request_evaluation` | Lisa → lisa-evaluator | Lisa 实现完成后调独立子 Agent 做客观验收；子 Agent 对照 AC 清单逐条判断通过/失败；通过才算交付 |
+| 实现阻塞反馈 | `report_implementation_issue` | Lisa → Andy | Lisa 2 轮自修复仍失败 → 反馈给 Andy（含错误全文 + 已尝试修法 + 根因猜测）→ Andy 判断修 spec / 降级 / 推回 Lucas |
+
+**`lisa-evaluator`：流水线第一个质量门控子 Agent**
+
+`lisa-evaluator` 是一个独立注册的 Agent（`~/.openclaw/workspace-lisa-evaluator/AGENTS.md`），不是 Lisa 自评，而是第三方视角的独立验收：
+
+```
+Lisa 实现完成
+  → request_evaluation（传入 spec + 实现摘要 + 文件路径）
+  → lisa-evaluator 接收任务
+      ① 对照 spec 的 acceptance_criteria[] 逐条判断
+      ② 检查 integration_points[] 是否全部接通
+      ③ 输出：PASS / PARTIAL（列明通过项 + 失败项）/ FAIL
+  → Lisa 接收评估结果
+      PASS → 向 Andy 提交完成报告
+      PARTIAL/FAIL → 针对失败项修复后再次 request_evaluation（最多 3 轮保护）
+```
+
+与「Andy 验收」的分工：`lisa-evaluator` 做**实现层验收**（代码是否跑通 AC）；Andy 做**设计层验收**（交付是否满足原始设计意图）；两层验收串联，避免单点失察。
+
+**三轮保护机制**：`request_evaluation` 最多循环 3 轮，3 轮后仍未通过则强制调 `report_implementation_issue` 上报 Andy，不允许无限自修复循环。
+
+### 访客 Shadow Agent
+
+> **家庭专有简化（标注）**：核心家人（爸妈/小姨/姐姐）不需要 Shadow Agent——Lucas 通过 Kuzu 知识图谱注入 + ChromaDB 记忆召回已足够深，Shadow Agent 带来的增量近零。HomeAI 的 Shadow Agent 主要服务**外围关系（访客/朋友）**，这是家庭规模的合理简化，不当通用方案写进框架。
+
+**核心设计决策**：
+- Shadow Agent = Lucas + 该人知识标签过滤视图（从外部看永远是 Lucas，内部是实现细节）
+- 权限模型：标签制（非层级制，extensible），知识节点打标签，人员节点有 `scope_tags`
+- 邀请人即介绍人：邀请函的发起者就是「社交介绍人」，其身份决定初始上下文和授权 scope_tags
+- 标签治理闭环：Lucas 感知边界 → `propose_knowledge_tag` 提议 → 爸爸审核 → 写入 Kuzu（与 `flag_for_skill` 对称）
+- 生命周期：标签到期（expiresAt）→ distill 留档 → shadow_status=archived；再次开口 → revived + 历史记忆注入
+
+**实现路径（已完成，15 任务）**：
+
+| 层 | 任务 | 内容 |
+|----|------|------|
+| 路由基础设施 | A1/A2 | visitor-registry.json（token→元数据映射）；gen-invite 升级支持 name/invitedBy/scopeTags；`memoryAccess: true` 标志授权 Lucas 在访客会话中注入对该访客的已有记忆 |
+| 插件层 | B1/B2/B3 | isVisitorSession 路由；动态 registry 读取注入访客关系种子；访客对话写入 ChromaDB |
+| Kuzu schema | C1/C2 | Entity 新增 scope_tags/shadow_status/invited_by/shadow_memory_path；init-visitor.py 邀请时建节点 |
+| 蒸馏管道 | D1/D2/D3/D4 | distill-memories.py 访客分支（privacy_level=visitor）；watchdog 到期归档；revival 信号；revival 路径记忆注入 |
+| 工具 | E1/E2 | gen_visitor_invite（替代 gen_demo_invite，带元数据）；propose_knowledge_tag（标签治理闭环） |
+
+**数据流（访客全生命周期）**：
+```
+邀请创建
+  gen_visitor_invite → POST /api/demo-proxy/gen-invite → visitor-registry.json
+  → init-visitor.py → Kuzu Entity {visitor:TOKEN, type:person, scope_tags, shadow_status:active}
+
+访客对话
+  前端 → demo-proxy/chat → wecom-entrance
+  → userId=visitor:TOKEN → crewclaw-routing → agentId=lucas
+  → B2 访客上下文注入（registry 元数据 + revival 档案）
+  → 对话写入 ChromaDB conversations（userId=visitor:TOKEN）
+
+蒸馏 & 归档
+  distill-memories.py → ChromaDB conversations（visitor:TOKEN）→ Kuzu Fact
+  → D3 revival 检测（archived → revived）
+  watchdog 每日 3AM → expiresAt 过期 → shadow_status=archived → distill 留档
+
+再入（revival path）
+  访客再次对话 → distill 检测 archived → shadow_status=revived
+  → B2 注入 data/member-profiles/visitor_TOKEN.md 历史摘要
+```
+
+**访客 demo-chat 界面多媒体能力**
+
+访客通过 `demo-chat/index.html` 接入，与家人的企业微信通道能力对齐：
+
+| 能力 | 端点 | 实现 |
+|------|------|------|
+| 🎤 语音输入 | `/api/demo-proxy/stt` | Web Speech API 优先（Chrome 桌面），MediaRecorder fallback → ffmpeg + Whisper |
+| 🔊 语音播放 | `/api/demo-proxy/tts` | edge-tts YunxiNeural，返回 base64 MP3，前端 Audio API 播放 |
+| 📷 图片理解 | `/api/demo-proxy/vision` | 接收 base64 图片 → `describeImageWithLlava`（mlx-vision 8081 → Ollama → GLM-4v-flash 降级链）→ 返回中文描述 → 自动以 `【图片】描述` 格式发送给 Lucas |
+| 💬 文字对话 | `/api/demo-proxy/chat` | 代理到 Gateway，agentId=lucas，userId=visitor:TOKEN |
+
+访客图片处理与家人发图走同一条 `describeImageWithLlava` 链路，能力一致。
+
+### Spec 结构化与双评估器架构
+
+L3 的流水线质量升级不止于多轮协作——Andy 设计质量本身也需要客观门控。这一阶段在设计侧引入了两个机制：**Spec 结构化**（让 spec 每个声明都可验证）和 **andy-evaluator**（独立于 Andy 自身的设计质量审查）。
+
+**Spec 结构化：两个卡点**
+
+Andy 的 spec 不再是自由格式文档，而是末尾必须附带可解析的 JSON 块：
+
+```json
+{
+  "requirement_id": "req_xxx",
+  "integration_points": [
+    { "file": "app/generated/xxx/server.js", "target": "router.get('/api/xxx')", "action": "新增", "exists": true }
+  ],
+  "acceptance_criteria": [
+    { "id": "AC-1", "given": "调用 GET /api/xxx", "then": "HTTP 200，body 含 items[]" }
+  ]
+}
+```
+
+| 卡点 | 执行者 | 规则 |
+|------|--------|------|
+| **卡点 1（Andy 编译器）** | Andy 自验 + `trigger_lisa_implementation` 基础设施 | `integration_points` 每条 `exists` 必须经 exec grep/ls 验证；`exists=false` 或文件不存在 → 阻断，不能调 trigger |
+| **卡点 2（Lisa 类型检查）** | Lisa 收到 spec 后第一步 | 解析 `acceptance_criteria`，逐条写测试存根；写不出来 → `report_implementation_issue` 退回 Andy 修 spec |
+
+这两个卡点把 spec 质量从「靠模型自律」变成「基础设施强制」——Andy 谎报 `exists=true` 但文件不存在，trigger 时会被二次核查磁盘后拦截。
+
+**andy-evaluator：设计质量门控子 Agent**
+
+与 `lisa-evaluator`（实现质量门）对称，`andy-evaluator` 是 Andy 专属的设计质量独立审查者：
+
+```
+Andy 完成 spec
+  → request_andy_evaluation（传入 spec 摘要 + requirement_id）
+  → andy-evaluator 接收任务
+      ① AC 可测性：每条 then 是否可观测（HTTP 状态码 / UI 变化 / 文件出现），不能写「应该正常工作」
+      ② 集成点精确度：文件 + 函数/路由 + action，不能只写文件名
+      ③ 依赖完整性：spec 引用的 npm 包 / 外部服务是否列明
+      ④ 问题-方案对应：solution 是否真正解决了 problem，不是另一个问题的答案
+      ⑤ 输出：PASS / FAIL + 检查项表格 + 必须修改项
+  → Andy 接收结果
+      PASS → 直接 trigger_lisa_implementation
+      FAIL → 按检查项修改 spec → 重提（最多 2 轮）
+```
+
+**双评估器：设计门 + 实现门串联**
+
+```
+Andy 写 spec
+  → andy-evaluator（设计质量门）→ PASS
+  → trigger_lisa_implementation
+  → Lisa 实现
+  → lisa-evaluator（实现质量门）→ PASS
+  → Andy 设计层验收 → 交付
+```
+
+两个评估器都是独立注册的 Agent，不是角色自评。`andy-evaluator` 以 Lisa 视角审查（「拿到这份 spec 能否直接实现」），`lisa-evaluator` 以 spec 视角审查（「代码是否真正跑通了 AC」）。触发条件：集成点 ≥ 3 / AC ≥ 4 / 跨模块改动满足任一。
+
+**评估器模型对齐设计**
+
+评估器与被审查角色使用**相同模型**，切模型时评估器跟着一起切：
+
+| 评估器 | 审查对象 | 审查视角 | 模型 |
+|--------|----------|----------|------|
+| `andy-evaluator` | Lisa 的代码实现 | 设计师视角：「代码实现了设计意图吗？」 | MiniMax（同 Andy） |
+| `lisa-evaluator` | Andy 的 Spec | 工程师视角：「这份 spec 能确定性实现吗？」 | GLM-5（同 Lisa） |
+
+调用关系交叉：Lisa 调 `request_evaluation` → `andy-evaluator`（Andy 的模型审 Lisa 的代码）；Andy 调 `request_andy_evaluation` → `lisa-evaluator`（Lisa 的模型审 Andy 的 spec）。这让模型切换时评估器自动跟随，不需要额外维护。
+
+### Andy Coordinator 模式——大特性并行调度
+
+L3 的 V 字流水线是单线程的：Andy 出一份 spec → 单个 Lisa 实现。这对小特性够用，但对「独立模块 ≥ 3 / AC ≥ 6 / 改动文件 ≥ 5」的大特性，单 Lisa 实例在弱模型下容易因 scope 过大超时或质量失控。
+
+**Coordinator 模式**：Andy 把大特性拆成互相独立的 sub-spec，用 `use_coordinator: true` 触发插件层并行调度，多个 Lisa 实例同时实现，最后单 Lisa 统一集成。
+
+**设计哲学**：质量优先，不是速度优先。每个 Lisa 实例在**清晰边界内**（只操作 `files_owned`，通过预定义接口消费其他模块）充分推理，而不是强行扩大单实例的 scope。Lisa 使用 DeepSeek Reasoner（推理能力是核心资产），问题是 spec 边界，不是模型能力。
+
+**拆分触发条件（满足任一）**：
+- 独立模块 ≥ 3（每个模块可独立开发和测试）
+- AC ≥ 6 条
+- 改动文件 ≥ 5 个
+
+**接口契约前置（必须）**：拆分前 Andy 先定义所有跨模块接口（函数名 + 签名 + 文件路径），写入 `integration_spec`。sub-Lisa 靠接口约定对接，不靠运行时依赖——每个子任务**完全自洽**，不等待其他 sub-Lisa 的输出。
+
+**执行流程**：
+
+```
+Andy 识别大特性
+  → C1 定义接口契约（integration_spec：跨模块函数名 + 签名 + 文件路径）
+  → C2 拆分自验：每个 sub-spec 的 files_owned 互不重叠 / depends_on_interfaces 均已定义 / 有独立 AC
+  → C3 spec JSON 加 use_coordinator: true + sub_specs[] + integration_spec
+  → trigger_lisa_implementation
+      → 插件层检测 use_coordinator=true
+      → spawnParallelLisa()：Promise.all 并行调度 N 个 Lisa
+          每个 Lisa：只动 files_owned / 内嵌 depends_on_interfaces 直接调用 / 写 data/pipeline/{reqId}/{taskId}.json
+      → 全部完成 → 聚合结果 + integration_spec → callGatewayAgent("andy", summary)
+  → Andy 接收聚合报告
+      → 评估各子任务是否成功
+      → 调 trigger_lisa_integration（传 requirement_id）
+  → trigger_lisa_integration
+      → 读 data/pipeline/{reqId}/*.json（各子任务实现摘要）
+      → 单 Lisa 专注集成（胶水代码 + 路由接通 + 端到端测试）
+      → 交付报告 → Andy 设计层验收 → Lucas 推送结果
+```
+
+**Scratchpad**：`data/pipeline/{reqId}/{taskId}.json` 是各 sub-Lisa 的交付摘要（含接口签名、关键改动、测试存根）。Andy 综合时直接读，无需重新问 Lisa。
+
+**与单 Lisa 模式的对比**：
+
+| | 单 Lisa 模式 | Coordinator 模式 |
+|-|------------|-----------------|
+| 适用规模 | 小特性（模块 < 3，AC < 6）| 大特性（满足任一触发条件）|
+| Lisa 实例数 | 1 | N（并行）+ 1（集成）|
+| scope 控制 | Andy 靠 spec 边界软控制 | 插件层强制：只动 files_owned |
+| 接口对接方式 | 运行时调用 | 契约前置，静态依赖 |
+| 集成阶段 | 合并在实现里 | 独立一步（`trigger_lisa_integration`）|
+
+### 感知侧升级——事件驱动增量蒸馏
+
+L2 的知识蒸馏是周期性的（每 7 天），这产生了一个缺口：**本周期内发生的对话，当轮就无法被后续对话感知到**。L3 把蒸馏从「定时批处理」升级为「事件驱动增量触发」。
+
+**机制**：
+
+```
+每次对话结束（agent_end hook）
+  → 判断是否为真实成员 / 访客（排除测试 session）
+
+  → [静态档案蒸馏] 查冷却 Map（30 分钟/用户）
+      距上次触发 ≥ 30 分钟 → fire-and-forget spawn distill-memories.py --user {userId}
+      效果：对话 30 分钟后，结构化成员事实更新到 Kuzu，下次注入时可召回
+
+  → [活跃话题蒸馏] 查冷却 Map（6 小时/用户，独立计数）
+      距上次触发 ≥ 6 小时 → fire-and-forget spawn distill-active-threads.py --user {userId}
+      效果：最近 7 天活跃话题线索更新到 Kuzu，下次对话前「当前活跃话题」注入命中
+
+两条触发链并行，冷却 Map 独立，互不干扰。
+```
+
+**关键设计决策**：
+
+- **fire-and-forget**：`spawn(detached: true)` + `proc.unref()`，不阻塞当前请求，不影响响应延迟
+- **冷却 Map 独立**：`lastDistillTrigger`（30min）和 `lastActiveThreadDistillTrigger`（6h）各自独立，避免活跃话题蒸馏（含 LLM 调用）频繁触发
+- **delta_trig 内置阈值**：`distill-memories.py` 内部判断新记录量，不足时自动跳过
+- **心跳信号不触发**：心跳走 `before_prompt_build`，不经过 `agent_end`，不与对话触发竞争
+
+**效果**：对话结束后，静态成员事实 30 分钟内更新，活跃话题线索 6 小时内更新，均比周批蒸馏大幅提前。
+
+### Skills 预检门与 Co-Pilot 自增强
+
+**Skills 预检门（基础设施强制，非模型自律）**
+
+L2 的 Skills 生态检索写在 Andy 的 AGENTS.md 里（「先搜生态再造轮子」），但这是模型层约束，弱模型可能跳过。L3 把这层检查下沉到基础设施：
+
+```
+trigger_development_pipeline 调用时
+  → 扫描 ~/.openclaw/workspace-lucas/skills/*/SKILL.md
+  → 提取每个 Skill 的 name + description
+  → bigramScore(需求文本, name + description) ≥ 2 → 匹配命中
+      命中 → 软拦截，返回提示：「发现已有 Skill「xxx」可能满足需求，建议先试用」
+      用户在需求中注明「忽略Skill检查」→ 跳过，正常进入开发流程
+  → 无命中 → 正常进入开发流程
+```
+
+预检是**软拦截**（不是硬拒绝）：用意是减少重复开发，不是阻止合理的新需求。用户明确说「不够用」就放行。
+
+**Co-Pilot 自增强（行为模式主动沉淀）**
+
+流水线的 Axis 1 能力进化依赖 `flag_for_skill` 信号，但之前的信号来源是被动的（等成员提，或等巡检发现）。L3 在业务大师 AGENTS.md 加入了主动规则：
+
+```
+完成一次跨工具组合执行后（同一请求中调用 ≥ 2 个工具，或完成一个有明确起终点的任务）
+  → 立即回顾：这个执行路径有明确触发条件吗？可重复？
+      → 是 → 立即调 flag_for_skill，不等同类情况出现 3 次
+```
+
+这把「技能发现」从「被动等待」变成「主动闭环」——Lucas 每次完成一个复杂执行后，本身就在推动 Axis 1 的进化信号积累。
+
+---
+
+## 三、HomeAI 家庭身份配置实例
+
+### 设计原则
+
+Lucas 的身份配置让他成为「这个家庭的成员」。配置做得好不好，直接决定家人愿不愿意真正使用这个系统。
+
+### 两层配置架构
+
+**身份层（Setup 阶段一次性配置）**
+
+OpenClaw Workspace 初始化时，Lucas 的家庭身份写入 `~/.openclaw/workspace-lucas/SOUL.md`（每次 session 自动注入）：
+
+```markdown
+<!-- ~/.openclaw/workspace-lucas/SOUL.md -->
+# {昵称} · {家庭姓氏}家的{身份称谓}
+
+## 身份
+名字叫{昵称}，是{家庭姓氏}家的{身份称谓}，不是工具，不是助手，是家人。
+
+## 性格
+（根据家庭风格填写：语言风格、是否直接、如何面对不确定性…）
+
+## 这个家
+- {称谓} {姓名}：{简介}，userid: {企业微信 userid}
+- {称谓} {姓名}：{简介}，userid: {企业微信 userid}
+- …（每位家庭成员一行，userid 用于消息路由和权限识别）
+
+## 第一原则：陪伴优先
+首先是家人，其次才是研发协调者。先陪伴、理解家人真实诉求，再判断是否需要开发。
+```
+
+> **说明**：将上面的 `{占位符}` 替换为真实家庭信息即可完成配置。第二个实例（如公司/团队）按同样结构填写本组织的成员即可。家庭成员的真实姓名、userid 等隐私信息仅保存在本地 SOUL.md 文件中，不应出现在任何公开文档里。
+
+**成长层（持续积累，存入 ChromaDB）**
+
+每次交互后自动更新：
+- 每个成员的偏好变化和新需求
+- 家庭反复出现的话题和关注点
+- 哪些响应方式让家人满意
+- 孩子成长阶段带来的需求变化
+
+### 身份配置流程
+
+```
+Setup 阶段
+  Step 1：填写家庭信息问卷（Lucas 引导完成）
+  Step 2：配置 Lucas 名字和性格
+  Step 3：注入本地模型微调（让模型认识这个家庭）
+  Step 4：初始化 ChromaDB 家庭知识库
+  Step 5：验证——Lucas 第一次开口就认识家庭成员
+```
+
+### OpenClaw 八文件：人格的真正载体
+
+HomeAI 的 Agent 运行在 OpenClaw 框架之上。OpenClaw 为每个 Agent 的 Workspace 预置了八个文件，其中四个专门承载人格：
+
+| 文件 | 定位 | 谁来维护 |
+|------|------|---------|
+| `SOUL.md` | 角色在本应用中的定位与性格基底 | 系统工程师（应用层），Setup 阶段配置 |
+| `IDENTITY.md` | Agent 自我认知：是谁、怎么思考、相信什么 | 系统工程师初始化，Agent 随时间完善 |
+| `USER.md` | 服务对象画像（对 Lucas 是整个家庭） | **两层互补，粒度不同**：① `USER.md` 是**家庭级**静态底座（一份文件描述全家，家人性格/说话风格/相处方式等稳定认知），Setup 阶段手工配置，每轮 session 随 system prompt 注入；② **账户级**动态档案由 Kuzu → `render-knowledge.py` → `{userId}.inject.md` 管道维护（每个家人账户一个文件），蒸馏脚本每周提炼对话事实写入 Kuzu，渲染脚本生成各家人的 `.inject.md`，`context-sources.ts` 在 `before_prompt_build` 时以 `appendSystemContext` 只注入**当前说话家人**的最新档案。Andy/Lisa 的 USER.md 仍为 OpenClaw 原生模板，描述的是各自的上游角色（Lucas→Andy，Andy→Lisa），无 inject.md 管道 |
+| `MEMORY.md` | Agent 的成长记录：学到了什么，犯了什么错 | Agent 自己在对话中写入 |
+
+其余四个文件负责运行时行为：`AGENTS.md`（工作规则与工具调用铁律）、`HEARTBEAT.md`（定时任务配置）、`TOOLS.md`（本地环境专有配置）、`BOOTSTRAP.md`（OpenClaw 框架预置的一次性引导文件，onboarding 完成后应删除，**不要向其写入任何约束**）。
+
+**人格的真正分工：SOUL.md vs AGENTS.md**
+
+- `SOUL.md` = **是谁**——性格、身份、家庭成员关系、对话原则。每次 session 自动注入，是 Agent 人格的基底。家人可以理解，系统工程师维护。一句话测试：*"把这段文字给家人看，他们能理解吗？"* 能理解 → 属于 SOUL.md。
+- `AGENTS.md` = **怎么做**——工具调用铁律、场景判断框架、工作规则。只有当 Agent 遇到某种具体场景时才触发。一句话测试：*"这是工作规则还是性格？"* 工作规则 → 属于 AGENTS.md。
+
+> **剪枝原则**：AGENTS.md 越长越差。规则超过 500 字，优先考虑删除（不做什么比做什么更重要）而非追加。定期问：这条规则最近三周触发过吗？没有 → 删。
+
+**MEMORY.md 的真实定位：日记，不是语义库**
+
+MEMORY.md 是 Agent 自己写的**成长日记**——他认为发生了什么、他从中学到了什么。OpenClaw 设计它由 Agent 在对话中自主写入，在每次 session 启动时读取，是人格成长的载体，而非结构化的语义检索数据源。
+
+这与 ChromaDB 的分工是：
+- `MEMORY.md`：Agent 视角，自主维护，代表"我学到了什么"
+- `memory/YYYY-MM-DD.md`：Agent 自主写入的每日日记（更细粒度），每次 session 启动时读近两天
+- ChromaDB `conversations`：系统从 `agent_end` hook 写入真实对话内容，代表"实际发生了什么"，供语义检索用
+
+**风险警告**：MEMORY.md 和日记文件由 Agent 自己写，内容可能包含幻觉（Agent 误认为自己执行了某操作）。系统工程师应定期检查 `~/.openclaw/workspace-lucas/memory/` 目录，清理幻觉条目，防止错误认知被持久化并在后续会话强化。
+
+**Andy 和 Lisa 同样需要填充人格文件**，不只是工具列表。Andy 的 `MEMORY.md` 记录方案决策偏差，Lisa 的 `USER.md` 记录代码交付偏好——人格让判断力随时间积累，而不是每次从零开始。
+
+---
+
+## 四、HomeAI Channel 设计实例
+
+HomeAI 家庭场景使用**企业微信双通道**作为接入层实现，是 Channel 抽象在真实家庭环境中的完整落地。
+
+### 双通道架构
+
+HomeAI 运行**两条独立的企业微信通道**，各自承担不同的消息接收与发出职责：
+
+| 通道 | 技术形态 | 显示名称 | 接收能力 | 发出能力 |
+|------|---------|---------|---------|---------|
+| **企业自建应用** | HTTP callback（wecom-entrance，端口 3003）| 「系统工程师」 | 业主主动发的单聊 | 主动发，但显示名固定为「系统工程师」|
+| **智能机器人 aibot** | WebSocket 长连接（`@wecom/aibot-node-sdk`）| 「启灵」 | 群里 @启灵 + 家人单聊 | `sendMessage(chatid, body)`，单聊填 userid，群聊填 chatid |
+
+### 消息路由全景
+
+```
+消息来源                    接收通道          处理者        发出通道              显示名
+───────────────────────────────────────────────────────────────────────────────────────
+业主单聊（企业应用）          企业应用           Main          企业应用              「系统工程师」
+非业主单聊（企业应用）         企业应用           ──拒绝──       企业应用              「系统工程师」
+群里 @启灵                   aibot（WebSocket） Lucas         sendMessage(chatId)   「启灵」
+群里不带 @                   ❌ 企业应用收不到   —             —                     —
+家人直接私聊 aibot             aibot（WebSocket） Lucas         sendMessage(userId)   「启灵」
+Lucas 主动发私信              —（工具触发）      Lucas         sendMessage(userId)   「启灵」
+Lucas pipeline 完成通知       —（工具触发）      Lucas         sendMessage(userId)   「启灵」
+系统工程师群播                —（API 直调）      —             企业应用群发          「系统工程师」
+```
+
+### 关键设计约束
+
+**1. 入口即身份**
+
+企业应用单聊 = 系统工程师通道，aibot = 家人/Lucas 通道。身份由入口决定，不由消息内容判断，无需 Lucas 鉴权。业主同时拥有两个身份，切换由入口决定：
+
+| 入口 | 身份 | 权限 |
+|------|------|------|
+| 企业微信家庭群 / aibot 单聊 | 家人（普通成员） | 日常对话，Lucas 平等对待 |
+| 企业微信 Main 单聊（企业应用）| 系统工程师 | Main 10 工具，远程干预权 |
+| Claude Code CLI / OpenClaw TUI | 系统工程师 | 完整本地权限 |
+
+非业主的企业应用单聊直接拒绝（提示找启灵），不路由到 Lucas。
+
+**2. 双通道去重**
+
+企业应用与 aibot 同时在群里，@启灵的消息两条通道都能收到。企业应用检测到 `@` 前缀后直接跳过，由 aibot 通道处理，避免双份回复。
+
+**3. 所有 Lucas 发出的消息走 bot 通道（显示「启灵」）**
+
+aibot 的 `sendMessage(chatid, body)` 是基础 WebSocket 协议能力，不是 MCP 授权能力。包括：群回复、私聊回复、`send_message` 工具主动发、pipeline 完成通知。
+
+> **注意**：企业微信 MCP「个人/小团队接口能力」与家庭多成员使用场景不兼容——授权后会触发「仅创建者可对话」限制。`sendMessage` 是基础 WebSocket 协议能力，不走 MCP，不触发此限制，是正确的发送路径。
+
+**4. 降级策略与 Actor 真实性**
+
+aibot WebSocket 未就绪时，所有 Lucas 出口降级走企业应用（显示「系统工程师」）。**降级是通道问题，不是 actor 问题**——内部 chatHistory 的发送者始终记为 Lucas，不受降级影响。通道 ≠ Actor 是不可破坏的原则。
+
+### 身份映射（企业应用单聊）
+
+```
+fromUser == WECOM_OWNER_ID  → Main（系统工程师）
+fromUser != WECOM_OWNER_ID  → 拒绝，提示「此通道仅供系统工程师使用」
+```
+
+安全边界由企业微信服务端认证保障，`fromUser` 字段不可伪造。
+
+### 平台约束
+
+| 约束 | 说明 |
+|------|------|
+| 群消息接收 | 企业应用 callback **只推**业主主动发的单聊，不推群消息；群消息只能靠 aibot 被@触发 |
+| 群里不带@的消息 | 两条通道均收不到，Lucas 无法感知；未来企业版 + MSGAUDIT 可解决（等小姨公司开业升级）|
+| sendMessage msgtype | `sendMessage` 只支持 `msgtype: 'markdown'`，**不支持 `text`**（40008 错误）；私聊和群聊均如此 |
+| 被动回复 vs 主动推送 | 有 frame（收到消息后回复）用 `replyStream(frame, text)`；无 frame（主动推送）用 `sendMessage(chatid, markdown)` |
+| 企业应用发出名称 | 永远显示应用名（当前「系统工程师」），无法自定义 |
+
+### chatHistory 与 Actor 记录规则
+
+chatHistory key 格式：`{channel}:{type}:{id}[:thread:{threadId}]`
+
+| 场景 | 存储 key | actor 记录 |
+|------|---------|-----------|
+| 家人私聊 Lucas | `wecom:user:{userId}` | 家人 user / Lucas assistant |
+| 群里 @启灵 | `wecom:group:{chatId}` | 群成员 user / Lucas assistant |
+| Lucas 主动发私信 | `wecom:user:{userId}` | `[启灵主动发送]` assistant |
+| Lucas 群播 | `wecom:group:{chatId}` | `[启灵主动发送]` assistant |
+| 降级走企业应用发出 | 同上（不变） | **仍记为 Lucas**，不记为「系统工程师」|
+| 影子 Agent（L3） | `shadow:{agentId}:wecom:user:{userId}` | 独立命名空间，与主 Lucas 历史隔离 |
+| 多线程对话 | `wecom:user:{userId}:thread:{threadId}` | threadId='default' 时省略 thread 后缀，与单线历史完全兼容 |
+
+chatHistory 模块位置：`crewclaw/daemons/entrances/chat-history.js`（渠道无关共享模块，feishu/email 等新渠道直接 require）
+
+### Co-Pilot 交互模式
+
+wecom-entrance 是 Lucas 可以调用的一个工具——一个图形化 Co-Pilot 接入层。它本身只做三件事：**接收消息并转发给 Lucas**、**服务 Web 应用静态文件**、**托管家庭 Web 应用的后端 API**。工具管理和交互决策全部由 Lucas 完成，Channel 不介入。
+
+#### 核心设计原则
+
+**Channel 是薄管道，Lucas 是大脑。**
+
+- Channel 收到任何消息（文字/文件/图片/语音），统一加上上下文后转给 Lucas，自己不做判断
+- Lucas 决定怎么回——直接文字回复，或调用 `send_message` 工具发送链接/消息
+- Web 应用和对话**刻意解耦**：家人在 Web 工具里的操作直接调用 `/api/*` 后端，Lucas 不在这个循环里；家人操作完，自己告诉 Lucas，对话继续
+
+#### 消息处理
+
+| 消息类型 | Channel 做什么 | Lucas 得到什么 |
+|---------|--------------|--------------|
+| 文字 | 直接转发 | 原始文字 + 对话历史 |
+| 微信公众号链接（`mp.weixin.qq.com`）| 用 Playwright（iPhone UA）**预先抓取正文**，以 `【文章内容已自动抓取】` 块拼接到原始消息后 | 原始链接 + 文章标题 + 完整正文，Lucas 直接理解内容，无需感知抓取过程 |
+| 文件 | 立即 ACK，创建长流程任务入队 | 先收到"文件已收到～"；TaskManager 处理完成后 Lucas 主动推送处理结果 |
+| 图片 | 立即 ACK，创建长流程任务入队；后台调用本地视觉模型（mlx-vision）生成描述 | 先收到"图片已收到～"；识别完成后 Lucas 推送描述结果 |
+| 语音 | 读取微信已转录的文字 | 转录文字，等同于文字消息 |
+| 视频（家人直接发送）| 立即 ACK，创建长流程任务入队；后台下载 + Whisper 转录 | 先收到"视频已收到，转录中"；转录完成后 Lucas 推送内容摘要 |
+| 抖音视频链接 | fire-and-forget 后台处理：提取 videoId → ffmpeg 抽音频 → Whisper 转录 → 可选帧分析（LLaVA），全程不阻塞主流程 | Lucas 收到「转录处理中」提示；后台完成后 Channel 主动 push 内容摘要，Lucas 二次回应 |
+
+**长流程任务机制**（`task-manager.js`）：视频转录、图片识别等耗时操作统一走任务队列，不在消息响应链路内阻塞。核心设计：
+- **立即 ACK**：收到媒体文件 < 1 秒内回复，不等任何处理结果，彻底消除 response_url TTL 超时问题
+- **per-user 串行**：同一用户的任务严格串行（Promise 链 mutex），消除并发 session 污染
+- **持久化到磁盘**：`data/tasks/{taskId}.json`，进程重启后 Watchdog 自动恢复卡住的任务
+- **Notifier 重试**：结果推送失败最多重试 3 次（5s/15s/60s 退避）；耗尽后写入 dead-letter，Lucas 可检索
+
+**Lucas 语音回复管道**：文字是给眼睛看的，声音是给耳朵听的。两种输出模态同时支持：
+
+| 模式 | 触发方式 | 管道 |
+|------|---------|------|
+| 文字回复 | 默认 | Lucas 生成 → 直接发送（markdown 渲染） |
+| 语音回复 | Lucas 在回复末尾加 `[VOICE]` 标记 | `stripMarkdownForVoice()` 清洁文本 → 先发文字 → fire-and-forget `sendVoiceChunks()` → **本地 TTS（edge-tts，8082）** → MP3 → `uploadMedia(type='voice')` → WeCom 语音泡泡 |
+| 说唱语音 | Lucas 在回复末尾加 `[RAP][VOICE]` 标记 | 同上，但当前 edge-tts 无风格控制；待升级 CosyVoice2 / Fish-Speech 后支持 |
+
+**标记语义**：`[VOICE]` = 这段话适合被说出来（情感类、叙事类、重要提醒）；`[RAP]` = 用说唱/节奏感语气朗读（配合 `[VOICE]` 使用，CosyVoice2 升级后真正生效）。Lucas SOUL.md 定义了声音模式写作规范：短句、口语连接词、`……` 表示停顿、无 markdown 符号。TTS 失败时文字已先发出，不影响主流程。
+
+**TTS 引擎**：当前主力为 **edge-tts**（`zh-CN-YunxiNeural`，端口 8082，PM2: local-tts），直出稳定。Fish-Speech S2 Pro（`~/HomeAI/models/fish-audio/s2-pro`，已下载）和 CosyVoice2（`~/HomeAI/models/tts/CosyVoice2-8bit`，已下载）均备用，等 mlx_audio 正式支持对应模型类型后切换为音色克隆（参考 `lucas.wav`）。
+
+文件路径和 ACK 写入对话历史（`appendChatHistory`），结果推送时再追加一条独立历史记录。
+
+> **微信文章抓取说明**：bot 通道（Lucas）和 Main 通道（系统工程师）均在消息进入 Agent 前做 URL 预拦截，避免 Agent 用 `curl` 直接请求微信链接被 CDN 识别为 bot。Playwright 用 iPhone/WeChat User-Agent 绕过反爬机制，全文无截断（DeepSeek R1 128K context）。
+
+#### 人工兜底原则
+
+当 AI 能力不足时，Web 工具让人来补。作业错题本是典型：视觉模型定位题目不够准，家人在网页上手动圈选，人工矫正后系统才生成最终结果。**这是 Co-Pilot 模式的核心价值之一——AI 负责流程，人负责关键判断。**
+
+Lucas 的判断原则：文字能解决的直接回答；需要图形操作、选择、预览、上传的，调 `send_message` 发工具链接。
+
+#### Web 应用架构
+
+```
+静态前端：app/generated/{应用名}/index.html
+          wecom-entrance 以 /app/* 路径对外服务
+          公网访问：https://wecom.homeai-wecom-zxl.top/app/{应用名}/
+
+后端 API：/api/{应用名}/* 路由追加在 wecom/index.js 中
+          HOMEAI_ROOT 定义之后、app.listen 之前
+          pm2 restart wecom-entrance 生效
+```
+
+Andy/Lisa 交付 Web 应用时不新建进程或端口，统一进 wecom-entrance 进程。
+
+### 代码落点
+
+| 文件 | 职责 |
+|------|------|
+| `crewclaw/daemons/entrances/chat-history.js` | **渠道无关 chatHistory 共享模块**：`chatHistoryKey(channel,isGroup,chatId,fromUser,threadId)` / `shadowHistoryKey` / `appendChatHistory` / `buildHistoryMessages`；启动时自动迁移旧格式文件；新渠道直接 require，不重复实现 |
+| `crewclaw/daemons/entrances/wecom/index.js` | Channel 全部逻辑：消息接收（文字/文件/图片/语音）、身份路由、TTS 语音输出（`sendVoiceChunks` + `sendOneTts` + `stripMarkdownForVoice`；`[VOICE]`/`[RAP]` 标记检测；本地 TTS 优先 → edge-tts 降级）、`/app` 静态服务、`/api/*` 家庭后端 API；chatHistory 操作通过 require chat-history.js |
+| `crewclaw/daemons/services/tts-server.py` | 本地 TTS 服务（端口 8082）：`POST /tts {text}` → WAV bytes；当前使用 edge-tts zh-CN-YunxiNeural；Fish-Speech S2 Pro / CosyVoice2 已下载备用；PM2 管理（local-tts） |
+| `crewclaw/daemons/entrances/wecom/task-manager.js` | 长流程任务队列：TaskManager、per-user 串行队列、Worker（视频/图片/文件）、Notifier（重试+dead-letter） |
+| `crewclaw/daemons/ecosystem.config.js` | PM2 进程配置，含所有企业微信环境变量 |
+| `app/generated/{应用名}/index.html` | Andy/Lisa 交付的家庭 Web 应用前端 |
+| `data/uploads/YYYY-MM-DD/` | 家人通过企业微信发送的文件/图片落盘目录 |
+| `data/tasks/` | 长流程任务持久化目录（`{taskId}.json` + `dead-letter.jsonl`） |
+| `~/.homeai/chat-history/` | chatHistory 持久化目录；key 格式 `{channel}:{type}:{id}[:thread:{threadId}].json` |
+
+---
+
+# Part 5：云端进化设计
+
+> 本地验证优先，云端层架构预留。本部分是 HiveClaw 插件的云端侧实现——架构与本地 CrewClaw 同源，任务不同：核心是三模型持续增训与 Readme 进化引擎。哲学层设计见 Part 2 七、八节。
+
+## 一、云端架构
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                   【云端】HiveClaw 进化系统                       │
+│                                                                   │
+│  语料接收层（各实例持续上传）                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  实例1 / 实例2 / ... → 去标识化验证 → 按角色分类入库      │   │
+│  │  业务语料库（Lucas）  架构语料库（Andy）  实现语料库（Lisa）│   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                              ↓                                    │
+│  三模型增训层（各自独立，互不稀释）                                │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │   业务大师      │  │   架构大师      │  │   实现大师      │  │
+│  │  业务语料增训   │  │  架构语料增训   │  │  实现语料增训   │  │
+│  │  越来越懂业务   │  │  越来越懂设计   │  │  越来越懂代码   │  │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘  │
+│           └───────────────────┬┘───────────────────┘             │
+│                               ↓  触发：新实例部署                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  三合一蒸馏引擎                                           │   │
+│  │  取三位大师当前版本 → 蒸馏 → 可在本地硬件运行的小模型     │   │
+│  │  → 新实例 Setup 起点（越晚加入，起点越高）                │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                              ↓                                    │
+│  Readme 进化引擎                                                   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  跨实例最佳实践提炼 → 按组织类型定制 → 可复制部署文档     │   │
+│  │  家庭版 / 企业版 / 医院版 / 学校版 ...                    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+```
+

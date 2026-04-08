@@ -1,5 +1,5 @@
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 // 从 .zshrc/环境变量读取 API keys（PM2 继承 shell env）
 const envVars = {
@@ -28,7 +28,7 @@ const envVars = {
   WECOM_BOT_SECRET:           process.env.WECOM_BOT_SECRET
 };
 
-const LOGS_DIR = path.join(__dirname, '../../logs/pm2');
+const LOGS_DIR = path.join(__dirname, '../../../logs/pm2');
 
 module.exports = {
   apps: [
