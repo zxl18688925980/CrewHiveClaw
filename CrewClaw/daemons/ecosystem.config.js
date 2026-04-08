@@ -81,25 +81,32 @@ module.exports = {
     //   interpreter: '/opt/homebrew/opt/python@3.11/bin/python3.11',
     //   ...
     // },
-    {
-      name: 'mlx-gemma4',
-      script: '/opt/homebrew/opt/python@3.11/bin/python3.11',
-      args: '-m mlx_lm server --model /Users/xinbinanshan/HomeAI/Models/mlx/gemma-4-31B-lucas-fused --host 127.0.0.1 --port 8083',
-      interpreter: 'none',
-      cwd: path.join(require('os').homedir(), 'HomeAI'),
-      instances: 1,
-      exec_mode: 'fork',
-      autorestart: true,
-      watch: false,
-      // 不设 max_memory_restart：Gemma 4 31B 4bit 占用约 16GB，不应被 PM2 杀掉
-      restart_delay: 10000,
-      min_uptime: '60s',  // 60s 内退出视为启动失败，避免模型加载失败时无限重启
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: path.join(LOGS_DIR, 'mlx-gemma4-error.log'),
-      out_file:   path.join(LOGS_DIR, 'mlx-gemma4-out.log'),
-      combine_logs: true,
-      merge_logs: true
-    },
+    // mlx-gemma4 暂停（2026-04-08）：
+    //   - 对话路由 localThresholdInit=0.0，本地路由从未触发，无有效工作
+    //   - mlx_lm.server 是纯文本接口，不支持 vision，图片路径直接降级到 GLM Vision
+    // 恢复条件（满足其一）：
+    //   A. evolveRouting() 把 localThreshold 抬高后，需要本地对话路由
+    //   B. mlx_vlm 支持 Gemma4 → 届时改用 mlx_vlm（同时接管 vision），
+    //      本地 provider 从 mlx_lm.server 切换到 mlx_vlm server，不再需要此条目
+    // 恢复命令：pm2 start ecosystem.config.js --only mlx-gemma4
+    // {
+    //   name: 'mlx-gemma4',
+    //   script: '/opt/homebrew/opt/python@3.11/bin/python3.11',
+    //   args: '-m mlx_lm server --model /Users/xinbinanshan/HomeAI/Models/mlx/gemma-4-31B-lucas-fused --host 127.0.0.1 --port 8083',
+    //   interpreter: 'none',
+    //   cwd: path.join(require('os').homedir(), 'HomeAI'),
+    //   instances: 1,
+    //   exec_mode: 'fork',
+    //   autorestart: true,
+    //   watch: false,
+    //   restart_delay: 10000,
+    //   min_uptime: '60s',
+    //   log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    //   error_file: path.join(LOGS_DIR, 'mlx-gemma4-error.log'),
+    //   out_file:   path.join(LOGS_DIR, 'mlx-gemma4-out.log'),
+    //   combine_logs: true,
+    //   merge_logs: true
+    // },
     {
       name: 'local-tts',
       script: '/Users/xinbinanshan/HomeAI/CrewHiveClaw/CrewClaw/daemons/services/tts-server.py',
