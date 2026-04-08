@@ -837,7 +837,8 @@ function runPersonalizationDistill() {
 async function check() {
   await checkGateway();
   await checkOllama();
-  await checkMlxVision();
+  // mlx-vision 暂停（2026-04-08）：等 mlx_vlm 支持 gemma4 后恢复
+  // await checkMlxVision();
 
   const today = new Date().toDateString();
 

@@ -72,24 +72,15 @@ module.exports = {
       combine_logs: true,
       merge_logs: true
     },
-    {
-      name: 'mlx-vision',
-      script: '/Users/xinbinanshan/HomeAI/CrewHiveClaw/CrewClaw/daemons/services/mlx-vision-server.py',
-      interpreter: '/opt/homebrew/opt/python@3.11/bin/python3.11',
-      cwd: path.join(require('os').homedir(), 'HomeAI'),
-      instances: 1,
-      exec_mode: 'fork',
-      autorestart: true,
-      watch: false,
-      // 不设 max_memory_restart：模型正常占用约 16GB，不应被 PM2 杀掉
-      restart_delay: 5000,
-      min_uptime: '30s',  // 30s 内退出视为启动失败，避免无限重启循环
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: path.join(LOGS_DIR, 'mlx-vision-error.log'),
-      out_file:   path.join(LOGS_DIR, 'mlx-vision-out.log'),
-      combine_logs: true,
-      merge_logs: true
-    },
+    // mlx-vision 暂停（2026-04-08）：等 mlx_vlm 支持 gemma4 后用 Gemma4 多模态一次性替换
+    // 视觉功能当前降级到 GLM Vision 云端兜底
+    // 恢复命令：pm2 start ecosystem.config.js --only mlx-vision
+    // {
+    //   name: 'mlx-vision',
+    //   script: '/Users/xinbinanshan/HomeAI/CrewHiveClaw/CrewClaw/daemons/services/mlx-vision-server.py',
+    //   interpreter: '/opt/homebrew/opt/python@3.11/bin/python3.11',
+    //   ...
+    // },
     {
       name: 'mlx-gemma4',
       script: '/opt/homebrew/opt/python@3.11/bin/python3.11',
