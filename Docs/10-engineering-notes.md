@@ -648,3 +648,28 @@ else:
 ```
 
 **通用原则**：Kuzu 的 `MERGE` 是节点专属操作。所有「关系边 upsert」必须在 Python 应用层实现两步逻辑，不能寄希望于单条 Cypher 语句完成。
+
+---
+
+### PM2 dump.pm2 路径陈旧陷阱（2026-04-08）
+
+**现象**：`pm2 restart <name>` 或 `pm2 resurrect` 后进程报错 `can't open file '/old/path/script.py': No such file or directory`，但 `ecosystem.config.js` 里的路径已经是正确的。
+
+**根因**：PM2 将进程启动命令持久化到 `~/.pm2/dump.pm2`，**独立于** `ecosystem.config.js`。目录重构/重命名后，`dump.pm2` 里的旧路径不会自动更新。`pm2 restart` 使用 `dump.pm2` 的记录，不重新读 `ecosystem.config.js`。
+
+路径里出现 `crewclaw/CrewClaw/` 这种双重前缀，是重构中间状态被 PM2 保存的典型症状。
+
+**修复方式**（唯一可靠方法）：
+```bash
+pm2 delete <name>
+pm2 start ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/ecosystem.config.js --only <name>
+pm2 save
+```
+
+**不要用**：`pm2 restart <name>`（仍用旧路径）、`pm2 reload`（同上）。
+
+**预防**：任何目录重构后，逐一检查每个 PM2 进程是否用了旧路径：
+```bash
+pm2 env <id> | grep "out_file\|error_file\|pm_exec_path"
+```
+出现旧路径即需重新注册。
