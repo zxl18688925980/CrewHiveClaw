@@ -64,7 +64,7 @@ OpenClaw Gateway（端口 18789，launchd 管理）
 - **Lucas = OpenClaw embedded agent**：不是独立进程，由 Gateway 统一管理
 - **Andy / Lisa = Gateway proxy 代理**：通过 crewclaw-routing 插件的 `triggerDevelopmentPipeline` 调用，走 Gateway `/api/chat` 代理路由
 - **wecom-entrance 是唯一外部入口**：所有企业微信消息都经 wecom-entrance → Gateway → Lucas
-- **PM2 管三个进程**：wecom-entrance（3003）+ cloudflared-tunnel（Cloudflare 隧道）+ gateway-watchdog（Gateway 存活探测，5 分钟一次）
+- **PM2 管三个进程**：wecom-entrance（3003）+ cloudflared-tunnel（Cloudflare 隧道）+ gateway-watchdog（三重保活：Gateway LLM / Ollama embedding / cloudflared tunnel，每小时一轮）
 
 ---
 

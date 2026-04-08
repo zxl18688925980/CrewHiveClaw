@@ -2988,7 +2988,8 @@ watchdog 还附带以下检测：
 |--------|------|------|
 | Gateway LLM 存活 | 1小时 | 超时自动重启 |
 | Ollama 存活（embedding） | 1小时 | 失败自动重启 |
-| mlx-vision 存活 | 1小时 | 失败自动重启 |
+| cloudflared tunnel 存活 | 1小时 | metrics 端口（20241）无响应 → `pm2 delete + start ecosystem.config.js` 重新注册；注：`pm2 restart` 无法修复旧注册状态导致的 pid=N/A 问题，须重新注册 |
+| mlx-vision 存活 | 1小时 | 失败自动重启（当前已暂停，等 mlx_vlm 支持 gemma4） |
 | 长流程任务卡死（processing 超 10 分钟） | 5分钟 | 重置为 pending |
 | **群消息推送中断**（私聊有更新但群静默 > 2小时） | 30分钟 | notify-engineer 告警业主 |
 
