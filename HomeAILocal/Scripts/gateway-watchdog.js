@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * gateway-watchdog.js
- * 双重保活：Gateway + Ollama（nomic-embed-text）。
+ * 三重保活：Gateway + Ollama + cloudflared tunnel。
  *
- * Gateway：每 5 分钟发一个真实 LLM 请求，3 分钟内无响应则重启。
- * Ollama ：每 5 分钟探测 /api/embed，失败则通过 launchctl kickstart 重启，
- *          防止 embedding 静默失效导致记忆系统无声停止工作。
+ * Gateway    ：每轮发一个真实 LLM 请求，3 分钟内无响应则重启。
+ * Ollama     ：探测 /api/embed，失败则 launchctl kickstart 重启。
+ * cloudflared：探测 metrics 端口（20241），进程退出则 pm2 delete+start 重新注册。
  *
  * 用 pm2 启动：pm2 start gateway-watchdog.js --name gateway-watchdog
  */
@@ -209,6 +209,59 @@ async function checkMlxVision() {
     log(recheck.ok
       ? `mlx-vision 重启后恢复正常 (HTTP ${recheck.status})`
       : `mlx-vision 重启后仍异常: ${recheck.error || recheck.status}`
+    );
+  }
+}
+
+// ── cloudflared tunnel 保活 ───────────────────────────────────────────────────
+// 探测 metrics 端口（默认 20241）；进程存在且端口响应 = 正常
+// 重启用 pm2 delete + start，避免旧注册状态导致 pid 显示 N/A 的问题
+
+const CLOUDFLARED_METRICS_PORT = 20241;
+const CLOUDFLARED_TIMEOUT_MS   = 10_000;
+const ECOSYSTEM_CONFIG = path.join(__dirname, '../../CrewClaw/daemons/ecosystem.config.js');
+
+function probeCloudflared() {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: CLOUDFLARED_METRICS_PORT,
+      path: '/metrics',
+      method: 'GET',
+    }, (res) => {
+      clearTimeout(timer);
+      resolve({ ok: res.statusCode === 200, status: res.statusCode });
+      res.resume();
+    });
+    req.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+    const timer = setTimeout(() => { req.destroy(); resolve({ ok: false, error: `timeout ${CLOUDFLARED_TIMEOUT_MS}ms` }); }, CLOUDFLARED_TIMEOUT_MS);
+    req.end();
+  });
+}
+
+function restartCloudflared() {
+  log('cloudflared tunnel 异常，通过 PM2 重新注册启动...');
+  try {
+    execSync(`pm2 delete cloudflared-tunnel 2>/dev/null || true`, { shell: true });
+    execSync(`pm2 start "${ECOSYSTEM_CONFIG}" --only cloudflared-tunnel`, { shell: true });
+    log('cloudflared PM2 重新注册完成');
+  } catch (e) {
+    log(`cloudflared 重启失败: ${e.message}`);
+  }
+}
+
+async function checkCloudflared() {
+  const result = await probeCloudflared();
+  if (result.ok) {
+    log(`cloudflared 正常 (HTTP ${result.status})`);
+  } else {
+    log(`cloudflared 异常: ${result.error || result.status} → 触发重启`);
+    restartCloudflared();
+    await new Promise(r => setTimeout(r, 8_000));
+    const recheck = await probeCloudflared();
+    log(recheck.ok
+      ? `cloudflared 重启后恢复正常 (HTTP ${recheck.status})`
+      : `cloudflared 重启后仍异常: ${recheck.error || recheck.status}`
     );
   }
 }
@@ -837,6 +890,7 @@ function runPersonalizationDistill() {
 async function check() {
   await checkGateway();
   await checkOllama();
+  await checkCloudflared();
   // mlx-vision 暂停（2026-04-08）：等 mlx_vlm 支持 gemma4 后恢复
   // await checkMlxVision();
 
