@@ -72,7 +72,7 @@ let lastFrontendUserId = "";
 
 // ── HomeAI 实例层配置（从 config/ 加载，不含业务逻辑）─────────────────────────
 function loadInstanceConfig<T>(filename: string): T {
-  const p = join(PROJECT_ROOT, "crewclaw", "crewclaw", "crewclaw-routing", "config", filename);
+  const p = join(PROJECT_ROOT, "CrewHiveClaw", "CrewClaw", "crewclaw-routing", "config", filename);
   return JSON.parse(readFileSync(p, "utf8")) as T;
 }
 const _membersConfig       = loadInstanceConfig<{ profileMap: Record<string, string> }>("members.json");
@@ -450,7 +450,7 @@ interface DepConfigJson {
 }
 
 function loadAgentDeps(): DepSpec[] {
-  const cfgPath = join(PROJECT_ROOT, "crewclaw/crewclaw/crewclaw-routing/config/agent-deps.json");
+  const cfgPath = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config/agent-deps.json");
   let raw: DepConfigJson[];
   try {
     raw = JSON.parse(readFileSync(cfgPath, "utf8")) as DepConfigJson[];
@@ -3107,7 +3107,7 @@ interface DpoPatternsJson {
 }
 
 function loadDpoPatterns(): DpoPatternsJson {
-  const cfgPath = join(PROJECT_ROOT, "crewclaw/crewclaw/crewclaw-routing/config/dpo-patterns.json");
+  const cfgPath = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config/dpo-patterns.json");
   try {
     return JSON.parse(readFileSync(cfgPath, "utf8")) as DpoPatternsJson;
   } catch {
@@ -4708,7 +4708,7 @@ const crewclawRoutingPlugin = {
       if (agentId === FRONTEND_AGENT_ID && !isVisitorSession) {
         try {
           // 读当前渠道的 contextSensitivity
-          const audienceCfgPath2 = join(PROJECT_ROOT, "crewclaw/crewclaw/crewclaw-routing/config", "channel-audience.json");
+          const audienceCfgPath2 = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config", "channel-audience.json");
           const channelSensitivity: string = existsSync(audienceCfgPath2)
             ? ((JSON.parse(readFileSync(audienceCfgPath2, "utf8")) as Record<string, { contextSensitivity?: string }>)
                 [isGroup ? `${CHANNEL_NAME}_group` : `${CHANNEL_NAME}_private`]?.contextSensitivity ?? "private")
@@ -4787,7 +4787,7 @@ const crewclawRoutingPlugin = {
       // membersSource=family_members：从家人 inject.md 动态解析，成员增减自动更新
       if (agentId === FRONTEND_AGENT_ID && !isVisitorSession) {
         try {
-          const audienceCfgPath = join(PROJECT_ROOT, "crewclaw/crewclaw/crewclaw-routing/config", "channel-audience.json");
+          const audienceCfgPath = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config", "channel-audience.json");
           if (existsSync(audienceCfgPath)) {
             const audienceCfg = JSON.parse(readFileSync(audienceCfgPath, "utf8")) as Record<string, {
               audienceType: "single" | "multiple" | "broadcast";
@@ -4835,7 +4835,7 @@ const crewclawRoutingPlugin = {
       // 实例层：intent-patterns.json 填写自己域的关键词和意图类别
       if (agentId === FRONTEND_AGENT_ID) {
         try {
-          const intentCfgPath = join(PROJECT_ROOT, "crewclaw/crewclaw/crewclaw-routing/config", "intent-patterns.json");
+          const intentCfgPath = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config", "intent-patterns.json");
           if (existsSync(intentCfgPath)) {
             const intentCfg = JSON.parse(readFileSync(intentCfgPath, "utf8")) as {
               patterns: Array<{ id: string; keywords: string[]; label: string; hint: string }>;
@@ -6112,7 +6112,7 @@ const crewclawRoutingPlugin = {
         "  1. integration_points 所有文件路径真实存在（exists=false → 阻断）",
         "  2. acceptance_criteria 非空（Lisa 凭此写测试存根）",
         "  3. code_evidence 非空（修改现有文件时必填）：列出你用 exec 读过的文件和在该文件中找到的真实符号名。",
-        "     格式：[{ \"file\": \"crewclaw/crewclaw/crewclaw-routing/index.ts\", \"symbol\": \"callGatewayAgent\" }]",
+        "     格式：[{ \"file\": \"CrewHiveClaw/CrewClaw/crewclaw-routing/index.ts\", \"symbol\": \"callGatewayAgent\" }]",
         "     infrastructure 层会 grep 验证 symbol 确实存在 —— 不读代码就写不出能通过验证的 symbol。",
         "     纯新建文件（integration_points 全是 action:新增）时 code_evidence 可为空数组。",
       ].join("\n"),
@@ -6327,7 +6327,7 @@ const crewclawRoutingPlugin = {
                           "请在 spec JSON 中加入 code_evidence 数组，引用你 exec 读到的真实符号：",
                           '```json',
                           '"code_evidence": [',
-                          '  { "file": "crewclaw/crewclaw/crewclaw-routing/index.ts", "symbol": "callGatewayAgent" }',
+                          '  { "file": "CrewHiveClaw/CrewClaw/crewclaw-routing/index.ts", "symbol": "callGatewayAgent" }',
                           ']',
                           '```',
                           "每条须包含：文件路径 + 该文件中真实存在的函数/变量/路由名。infrastructure 层会 grep 验证。",
@@ -6369,8 +6369,8 @@ const crewclawRoutingPlugin = {
               // 保护列表：基础设施层核心文件，任何修改都需要工程师知情。
               {
                 const PROTECTED_FILES = [
-                  "crewclaw/crewclaw/crewclaw-routing/index.ts",
-                  "crewclaw/crewclaw/crewclaw-routing/context-sources.ts",
+                  "CrewHiveClaw/CrewClaw/crewclaw-routing/index.ts",
+                  "CrewHiveClaw/CrewClaw/crewclaw-routing/context-sources.ts",
                   "crewclaw/daemons/entrances/wecom/index.js",
                   "crewclaw/daemons/entrances/wecom/task-manager.js",
                 ];

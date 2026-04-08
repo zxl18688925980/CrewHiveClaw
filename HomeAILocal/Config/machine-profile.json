@@ -1,0 +1,77 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-03-15",
+  "setup_by": "业主曾晓龙 + Claude Code，Setup 阶段共同记录",
+
+  "hardware": {
+    "model": "Mac Mini",
+    "chip": "Apple M-series（统一内存架构，CPU/GPU 共享内存）",
+    "ram_gb": 48,
+    "storage_gb": 512
+  },
+
+  "mlx_training": {
+    "base_model": "models/mlx/Qwen2.5-Coder-32B-4bit",
+    "safe_params": {
+      "batch_size": 1,
+      "num_layers": 8,
+      "max_seq_length": 256,
+      "val_batches": 0,
+      "grad_checkpoint": true,
+      "learning_rate": "1e-5",
+      "iters_incremental": 200
+    },
+    "pre_training": {
+      "stop_ollama_models": ["homeai-assistant", "qwen2.5-coder:32b"],
+      "wait_seconds": 5,
+      "reason": "Ollama 占用统一内存，不释放会导致训练 OOM"
+    },
+    "learnings": [
+      {
+        "date": "2026-03-14",
+        "param": "val_batches=0",
+        "discovery": "验证阶段触发额外内存峰值，48GB 统一内存下导致 Metal GPU OOM → kernel panic",
+        "fix": "跳过验证集评估，训练过程看 training loss 即可"
+      },
+      {
+        "date": "2026-03-14",
+        "param": "max_seq_length=256",
+        "discovery": "512 时峰值 activation 内存溢出，256 减半后稳定",
+        "fix": "数据平均长度约 1758 chars，截断可接受"
+      },
+      {
+        "date": "2026-03-14",
+        "param": "num_layers=8",
+        "discovery": "32B 4-bit 模型下 16 层额外消耗约 4GB，触发 OOM",
+        "fix": "8 层在当前数据量下效果足够"
+      }
+    ]
+  },
+
+  "ollama": {
+    "active_models": ["homeai-assistant:latest", "nomic-embed-text:latest"],
+    "inactive_models": {
+      "qwen2.5-coder:32b": "Setup 微调完成后不需要常驻，不调用则不占内存"
+    },
+    "adapter_note": "MLX U32 量化格式不兼容 Ollama 导入，LoRA 推理走 mlx_lm.generate --adapter-path"
+  },
+
+  "network": {
+    "tunnel": {
+      "provider": "bore.pub",
+      "local_port": 3003,
+      "requested_port": 10080,
+      "port_guaranteed": false,
+      "learnings": [
+        {
+          "date": "2026-03-14",
+          "discovery": "bore.pub 是公共服务，--port 10080 为优先请求，不保证每次可用",
+          "mitigation": "Lucas 启动后自动推送当前端口到家庭群，业主手动更新企业微信后台回调 URL",
+          "manual_check": "pm2 logs bore-tunnel --lines 5 --nostream | grep 'listening at'"
+        }
+      ]
+    }
+  },
+
+  "operational_findings": []
+}

@@ -37,7 +37,7 @@ module.exports = {
     {
       name: 'chromadb',
       script: '/opt/homebrew/bin/chroma',
-      args: `run --path ${path.join(require('os').homedir(), 'HomeAI/data/chroma')} --port 8001`,
+      args: `run --path ${path.join(require('os').homedir(), 'HomeAI/Data/chroma')} --port 8001`,
       cwd: path.join(require('os').homedir(), 'HomeAI'),
       interpreter: 'none',
       instances: 1,
@@ -74,7 +74,7 @@ module.exports = {
     },
     {
       name: 'mlx-vision',
-      script: '/Users/xinbinanshan/HomeAI/crewclaw/daemons/services/mlx-vision-server.py',
+      script: '/Users/xinbinanshan/HomeAI/CrewHiveClaw/CrewClaw/daemons/services/mlx-vision-server.py',
       interpreter: '/opt/homebrew/opt/python@3.11/bin/python3.11',
       cwd: path.join(require('os').homedir(), 'HomeAI'),
       instances: 1,
@@ -93,7 +93,7 @@ module.exports = {
     {
       name: 'mlx-gemma4',
       script: '/opt/homebrew/opt/python@3.11/bin/python3.11',
-      args: '-m mlx_lm server --model /Users/xinbinanshan/HomeAI/models/mlx/gemma-4-31B-lucas-fused --host 127.0.0.1 --port 8083',
+      args: '-m mlx_lm server --model /Users/xinbinanshan/HomeAI/Models/mlx/gemma-4-31B-lucas-fused --host 127.0.0.1 --port 8083',
       interpreter: 'none',
       cwd: path.join(require('os').homedir(), 'HomeAI'),
       instances: 1,
@@ -111,7 +111,7 @@ module.exports = {
     },
     {
       name: 'local-tts',
-      script: '/Users/xinbinanshan/HomeAI/crewclaw/daemons/services/tts-server.py',
+      script: '/Users/xinbinanshan/HomeAI/CrewHiveClaw/CrewClaw/daemons/services/tts-server.py',
       interpreter: '/opt/homebrew/opt/python@3.11/bin/python3.11',
       cwd: path.join(require('os').homedir(), 'HomeAI'),
       instances: 1,
@@ -129,7 +129,7 @@ module.exports = {
     },
     {
       name: 'gateway-watchdog',
-      script: path.join(require('os').homedir(), 'HomeAI/scripts/gateway-watchdog.js'),
+      script: path.join(require('os').homedir(), 'HomeAI/CrewHiveClaw/HomeAILocal/Scripts/gateway-watchdog.js'),
       cwd: path.join(require('os').homedir(), 'HomeAI'),
       instances: 1,
       exec_mode: 'fork',

@@ -1,0 +1,98 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.2",
+    "description": "OpenClaw 配置示例 - 不包含敏感信息"
+  },
+  "env": {
+    "shellEnv": {
+      "enabled": true
+    },
+    "ZAI_API_KEY": "YOUR_ZAI_API_KEY",
+    "DEEPSEEK_API_KEY": "YOUR_DEEPSEEK_API_KEY",
+    "MINIMAX_API_KEY": "YOUR_MINIMAX_API_KEY"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "deepseek": {
+        "baseUrl": "https://api.deepseek.com/v1",
+        "apiKey": "YOUR_DEEPSEEK_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-chat",
+            "name": "DeepSeek Chat"
+          },
+          {
+            "id": "deepseek-reasoner",
+            "name": "DeepSeek Reasoner"
+          }
+        ]
+      },
+      "vllm": {
+        "baseUrl": "https://api.minimaxi.com/v1",
+        "apiKey": "YOUR_MINIMAX_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "MiniMax-M2.5",
+            "name": "MiniMax M2.5"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "ollama/homeai-assistant",
+        "fallbacks": [
+          "deepseek/deepseek-chat"
+        ]
+      },
+      "models": {
+        "ollama/deepseek-r1:14b": {},
+        "ollama/homeai-assistant": {}
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "name": "main",
+        "workspace": "~/HomeAI",
+        "agentDir": "~/.openclaw/agents/main/agent",
+        "model": "deepseek/deepseek-chat"
+      },
+      {
+        "id": "andy",
+        "name": "andy",
+        "workspace": "~/.openclaw/workspace/andy",
+        "agentDir": "~/.openclaw/agents/andy/agent",
+        "model": "vllm/MiniMax-M2.5"
+      },
+      {
+        "id": "lisa",
+        "name": "lisa",
+        "workspace": "~/.openclaw/workspace/lisa",
+        "agentDir": "~/.openclaw/agents/lisa/agent",
+        "model": "zai/glm-5"
+      }
+    ]
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "YOUR_GATEWAY_TOKEN"
+    }
+  }
+}
