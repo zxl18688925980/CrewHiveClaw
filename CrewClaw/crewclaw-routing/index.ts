@@ -4502,7 +4502,7 @@ const crewclawRoutingPlugin = {
         "  只能做网页类应用（在浏览器里打开用的工具或页面），不能做客户端 App 或后端服务。",
         "  做出来的是真实可用的网页，如实说，不夸大。",
         "③硬性限制（铁律）：以下工具在访客会话中禁止调用：",
-        "  send_message / send_voice / send_file / trigger_development_pipeline",
+        "  send_message / send_voice / send_file / forward_message / trigger_development_pipeline",
         "  访问家庭数据库或记忆（recall_memory / query_member_profile 等）",
         "  ⚠️ 访客提出上述需求，直接说「这个需要主人开通，我没有这个权限」。",
         "④禁止提及「HomeAI」「系统工程师」「Lucas」等内部名词。",
@@ -6506,6 +6506,20 @@ const crewclawRoutingPlugin = {
               );
               responseText = "❌ Lisa 实现失败：Lisa 绕过了 run_opencode，用不存在的 edit 工具假装修改了文件。代码未被实际更改。";
               success = false;
+              // Andy 是 spec 的作者，应知道 Lisa bypass 并决定下一步
+              void (async () => {
+                try {
+                  await callGatewayAgent("andy", [
+                    `【Lisa 实现失败 · ${reqId}】Lisa 绕过了 run_opencode，用文字描述假装修改了文件，实现无效。`,
+                    `Spec 摘要：${p.spec.slice(0, 300)}`,
+                    ``,
+                    `请你决定下一步（选一个行动）：`,
+                    `1. spec 表述可以更明确以减少歧义 → 调用 trigger_lisa_implementation 提交修订版`,
+                    `2. 需要拆小任务 → 重新设计并分批触发`,
+                    `3. 判断是 Lisa 的系统性问题 → 调用 notify_engineer`,
+                  ].join("\n"), 180_000, threadId);
+                } catch { /* 静默，不阻塞主流程 */ }
+              })();
             } else {
               success = !!lisaResponse;
             }
@@ -6635,6 +6649,21 @@ const crewclawRoutingPlugin = {
             responseText = isTimeout
               ? "Lisa 这次实现时间比预期长，任务已暂停。我稍后会重新评估并告知进展。"
               : `Lisa 实现遇到问题：${errMsg.slice(0, 100)}`;
+            // Andy 是 spec 的作者，应知道 Lisa 失败并决定下一步
+            void (async () => {
+              try {
+                await callGatewayAgent("andy", [
+                  `【Lisa 实现失败 · ${reqId}】Lisa 在实现你的 spec 时${isTimeout ? "超时（10分钟未完成）" : `遇到异常：${errMsg.slice(0, 150)}`}。`,
+                  `Spec 摘要：${p.spec.slice(0, 300)}`,
+                  ``,
+                  `请你决定下一步（选一个行动）：`,
+                  `1. spec 太复杂可以拆小 → 调用 trigger_lisa_implementation 提交简化版`,
+                  `2. 需要了解具体阻塞原因 → 调用 consult_lisa`,
+                  `3. 需要 Lucas 向用户澄清需求 → 调用 query_requirement_owner`,
+                  `4. 判断是技术环境问题 → 调用 notify_engineer`,
+                ].join("\n"), 180_000, threadId);
+              } catch { /* 静默，不阻塞主流程 */ }
+            })();
             // ② Lisa→Andy 失败通知：Andy 同样需要知道 spec 未落地
             void addDecisionMemory({
               decision_id: `req_${Date.now()}-andy-outcome`,
@@ -6991,7 +7020,8 @@ const crewclawRoutingPlugin = {
         ].filter(Boolean).join("\n");
 
         try {
-          const andyReply = await callGatewayAgent("andy", parts, 60_000, threadId);
+          // 300s：DeepSeek-R1 CoT 推理需要时间，60s 几乎必超时
+          const andyReply = await callGatewayAgent("andy", parts, 300_000, threadId);
           void addDecisionMemory({
             decision_id: `lisa-issue-${Date.now()}`,
             agent: "lisa",
@@ -8171,6 +8201,96 @@ const crewclawRoutingPlugin = {
           content: [{ type: "text", text: `🚫 已叫停任务：${target.requirement.slice(0, 80)}` }],
           details: { cancelled: true, taskId: target.id, status: target.status },
         };
+      },
+    }));
+
+    // ── forward_message：访客转告家庭成员 ─────────────────────────────────────
+    // detectForwardIntent：解析访客消息中的转告意图，返回目标用户和内容
+    function detectForwardIntent(message: string, visitorCode: string): { targetUserId: string; content: string } | null {
+      if (!message || typeof message !== 'string') return null;
+
+      // 家庭成员 ID 映射（大驼峰格式，用于 send_message）
+      const FAMILY_MEMBER_MAP: Record<string, string> = {
+        '爸爸': 'ZengXiaoLong',
+        '妈妈': 'XiaMoQiuFengLiang',
+        '姐姐': 'ZiFeiYu',
+      };
+
+      // 转告意图正则：告诉/转告/帮我告诉 + 家庭成员称呼 + 内容
+      const FORWARD_PATTERNS = [
+        /^(?:告诉|转告|帮我告诉|请告诉|帮我转告|麻烦告诉)\s*([\u4e00-\u9fa5]{2,4}?)(?:，|,|\s)(.+)$/,
+        /^(?:告诉|转告|帮我告诉)\s+([\u4e00-\u9fa5]{2,4}?)[\u4e00-\u9fa5]*?(?:，|,|\s)(.+)$/,
+        /^(?:帮我|请|麻烦)?\s*(?:转告|告诉)\s*([\u4e00-\u9fa5]{2,4}?)(?:，|,|\s)(.+)$/,
+      ];
+
+      for (const pattern of FORWARD_PATTERNS) {
+        const match = message.match(pattern);
+        if (match) {
+          const [, name, content] = match;
+          const targetUserId = FAMILY_MEMBER_MAP[name.trim()];
+          if (targetUserId) {
+            return { targetUserId, content: content.trim() };
+          }
+        }
+      }
+
+      return null;
+    }
+
+    api.registerTool((_toolCtx) => ({
+      label: "转告家庭成员",
+      name: "forward_message",
+      description: [
+        "Lucas 专属工具：检测访客消息是否包含转告家庭成员的意图，并自动发送消息。",
+        "适用场景：访客说「告诉爸爸我明天到上海」时调用。",
+        "输入：message（访客原始消息）、visitorCode（访客邀请码）。",
+        "返回：检测到转告意图时返回目标用户 ID 和消息内容，并自动发送给对应家庭成员。",
+        "家庭成员 userId：ZengXiaoLong（爸爸）、XiaMoQiuFengLiang（妈妈）、ZiFeiYu（姐姐）。",
+      ].join("\n"),
+      parameters: Type.Object({
+        message: Type.String({ description: "访客发送的原始消息内容" }),
+        visitorCode: Type.String({ description: "访客邀请码（如 DB334C），用于记录转告历史" }),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const { message, visitorCode } = params as { message: string; visitorCode: string };
+        const intent = detectForwardIntent(message, visitorCode);
+
+        if (!intent) {
+          return { content: [{ type: "text", text: "未检测到转告意图" }], details: { forwarded: false } };
+        }
+
+        const { targetUserId, content } = intent;
+        const forwardContent = `[访客转告] ${content}`;
+
+        try {
+          // 调用 send_message 实际发送
+          const resp = await fetch(CHANNEL_SEND_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: targetUserId, text: forwardContent }),
+          });
+          const result = await resp.json() as { success: boolean; error?: string };
+
+          if (!result.success) throw new Error(result.error ?? "发送失败");
+
+          const memberNames: Record<string, string> = {
+            ZengXiaoLong: "爸爸",
+            XiaMoQiuFengLiang: "妈妈",
+            ZiFeiYu: "姐姐",
+          };
+          const memberName = memberNames[targetUserId] ?? targetUserId;
+
+          return {
+            content: [{ type: "text", text: `已转告${memberName}：${content}` }],
+            details: { forwarded: true, targetUserId, content, memberName },
+          };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return {
+            content: [{ type: "text", text: `转告失败：${msg}` }],
+            details: { forwarded: false, error: msg },
+          };
+        }
       },
     }));
 
