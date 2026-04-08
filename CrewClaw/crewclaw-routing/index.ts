@@ -2509,12 +2509,34 @@ async function runAndyPipeline(params: {
         markTaskStatus(requirementId, "completed");
       } else {
         markTaskStatus(requirementId, "failed");
-        void pushToChannel(
-          `Andy 收到了这个需求，但没有启动开发流水线。可能是需求描述太模糊、或 API 临时不稳定。可以稍后重发，或把需求说得更具体一些。`,
-          params.wecomUserId,
-          true,
-        );
         void notifyEngineer(`流水线异常 [${requirementId}]\nAndy 响应但未触发 Lisa（无协作线程文件）`);
+        // Andy 没有启动实现流水线——让 Lucas 判断原因并决定下一步
+        // Lucas 有家人背景/记忆，能判断：①自己补充背景重新触发 ②问用户一个关键问题 ③判断是技术问题上报
+        void (async () => {
+          try {
+            const lucasDecisionPrompt = [
+              `【流水线卡壳】Andy 收到了这个需求，但没有调用 trigger_lisa_implementation 启动实现。`,
+              `需求原文：${params.requirement.slice(0, 400)}`,
+              `需求 ID：${requirementId}`,
+              ``,
+              `Andy 没有启动流水线，通常是因为需求信息不足、或遇到技术问题。`,
+              `请你判断，然后选一个行动（不要两个都做）：`,
+              `1. 如果是需求背景不足，你能从你对家人的了解里补充信息 → 调用 trigger_development_pipeline，在 lucasContext 里附上补充背景`,
+              `2. 如果你也不确定，需要家人提供更多信息 → 用人话问爸爸一个最关键的问题`,
+              `3. 如果你判断是技术问题（不是信息问题）→ 调用 notify_engineer 上报，并口语告知爸爸稍等`,
+            ].join("\n");
+            const lucasDecision = await callGatewayAgent("lucas", lucasDecisionPrompt, 60_000);
+            if (lucasDecision) {
+              await pushToChannel(lucasDecision, params.wecomUserId, true);
+            }
+          } catch {
+            await pushToChannel(
+              `Andy 分析了这个需求，但没有启动实现。可能是需求细节还不够，稍后可以把具体场景说得更详细一些。`,
+              params.wecomUserId,
+              true,
+            );
+          }
+        })();
       }
     }
   } catch (e: unknown) {
