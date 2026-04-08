@@ -4,7 +4,7 @@
 AI 算力盒子周报系统 - 主入口
 
 使用方法:
-    /usr/bin/python3 ~/HomeAI/scripts/ai-box-weekly/main.py
+    /usr/bin/python3 ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/ai-box-weekly/main.py
 
 依赖安装:
     pip3 install requests beautifulsoup4 --user

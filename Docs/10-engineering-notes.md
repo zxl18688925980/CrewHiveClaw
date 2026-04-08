@@ -400,7 +400,7 @@ function isDuplicateMsg(msgId) {
 
 **背景**：Lucas 叫停开发任务时，任务可能已经在 Andy 规划阶段，阻断需要在 Lisa 开始实现前生效。
 
-**设计**：`task-registry.json`（`~/HomeAI/data/learning/`）存储所有任务状态（queued/running/cancelled/completed）。`trigger_lisa_implementation` 在调用 Lisa 之前检查 `isTaskCancelled(requirement_id)`，如果已取消则立即 abort 并通知用户，不触发 Lisa 实现。
+**设计**：`task-registry.json`（`~/HomeAI/Data/learning/`）存储所有任务状态（queued/running/cancelled/completed）。`trigger_lisa_implementation` 在调用 Lisa 之前检查 `isTaskCancelled(requirement_id)`，如果已取消则立即 abort 并通知用户，不触发 Lisa 实现。
 
 **关键约束**：Andy 必须把 `requirement_id` 传入 `trigger_lisa_implementation`（从 andyMessage 的 `【需求 ID: req_xxx】` 里读取）。如果 Andy 不传这个参数，叫停检查无法生效（回退到"叫停太晚"状态，Lisa 仍会启动）。
 
@@ -516,7 +516,7 @@ function isDuplicateMsg(msgId) {
 
 ### mlx_audio fish_qwen3_omni（Fish-Speech S2 Pro）输出噪音（2026-03-30）
 
-- **模型**：`mlx-community/fish-audio-s2-pro`，本地路径 `~/HomeAI/models/fish-audio/s2-pro`
+- **模型**：`mlx-community/fish-audio-s2-pro`，本地路径 `~/HomeAI/Models/fish-audio/s2-pro`
 - **症状**：`load_model` + `model.generate()` 推理完成，输出 WAV 文件大小正常（~384KB），但实际是噪音，振幅极低（max 0.087）
 - **根因**：mlx_audio 对 `fish_qwen3_omni` 模型类型支持不完整——加载时打印 "using a model of type `fish_qwen3_omni` to instantiate a model of type ``" 警告，说明 codec 编解码路径未正确初始化
 - **结论**：当前 mlx_audio 版本（2026-03-30）不支持 Fish-Speech S2 Pro 做正常推理，不要再尝试

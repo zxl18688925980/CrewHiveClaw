@@ -11,7 +11,7 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CACHE_FILE = Path("/Users/xinbinanshan/HomeAI/data/ai-box-cache.jsonl")
+CACHE_FILE = Path("/Users/xinbinanshan/HomeAI/Data/ai-box-cache.jsonl")
 
 
 def load_cache() -> List[Dict[str, Any]]:

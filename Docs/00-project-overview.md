@@ -848,7 +848,7 @@ OpenClaw 在调用 `before_prompt_build` 之前，自动将 `<available_skills>`
 
 ```
 框架层（随代码仓库版本管理）
-  ~/HomeAI/crewclaw/daemons/workspace-templates/{agent}/skills/{skill-name}/SKILL.md
+  ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/{agent}/skills/{skill-name}/SKILL.md
 
 实例层（运行时，OpenClaw 读取此路径）
   ~/.openclaw/workspace-{agent}/skills/{skill-name}/SKILL.md
@@ -1753,7 +1753,7 @@ Fact 边（Entity → Entity）
 | `capability` | 已填充（`init-capabilities.py` 初始化，source_type=registry，`TOOLS.md` 人工维护）| L2：`refine_capabilities()` 用真实调用经验精炼 context，source_type=distilled 覆盖 registry |
 | `decision` | 少量（干预记录手工同步）| L2 syncInterventions 自动写入 |
 
-**数据库路径**：`~/HomeAI/data/kuzu/`
+**数据库路径**：`~/HomeAI/Data/kuzu/`
 
 ### 三条知识注入管道
 
@@ -2995,8 +2995,8 @@ watchdog 还附带以下检测：
 群消息推送中断是企业微信平台偶发行为（WebSocket 心跳正常但消息不推送），代码侧无法自动恢复，监控到后由业主手动踢出/重新拉入启灵。
 
 ```
-进程：pm2 start ~/HomeAI/scripts/gateway-watchdog.js --name gateway-watchdog
-日志：~/HomeAI/logs/pm2/gateway-watchdog.log
+进程：pm2 start ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/gateway-watchdog.js --name gateway-watchdog
+日志：~/HomeAI/Logs/pm2/gateway-watchdog.log
 ```
 
 #### 层二：Andy 并发信号量（MAX_ANDY_CONCURRENT=1）
@@ -3755,7 +3755,7 @@ wecom-entrance 是 Lucas 可以调用的一个工具——一个图形化 Co-Pil
 
 **标记语义**：`[VOICE]` = 这段话适合被说出来（情感类、叙事类、重要提醒）；`[RAP]` = 用说唱/节奏感语气朗读（配合 `[VOICE]` 使用，CosyVoice2 升级后真正生效）。Lucas SOUL.md 定义了声音模式写作规范：短句、口语连接词、`……` 表示停顿、无 markdown 符号。TTS 失败时文字已先发出，不影响主流程。
 
-**TTS 引擎**：当前主力为 **edge-tts**（`zh-CN-YunxiNeural`，端口 8082，PM2: local-tts），直出稳定。Fish-Speech S2 Pro（`~/HomeAI/models/fish-audio/s2-pro`，已下载）和 CosyVoice2（`~/HomeAI/models/tts/CosyVoice2-8bit`，已下载）均备用，等 mlx_audio 正式支持对应模型类型后切换为音色克隆（参考 `lucas.wav`）。
+**TTS 引擎**：当前主力为 **edge-tts**（`zh-CN-YunxiNeural`，端口 8082，PM2: local-tts），直出稳定。Fish-Speech S2 Pro（`~/HomeAI/Models/fish-audio/s2-pro`，已下载）和 CosyVoice2（`~/HomeAI/Models/tts/CosyVoice2-8bit`，已下载）均备用，等 mlx_audio 正式支持对应模型类型后切换为音色克隆（参考 `lucas.wav`）。
 
 文件路径和 ACK 写入对话历史（`appendChatHistory`），结果推送时再追加一条独立历史记录。
 

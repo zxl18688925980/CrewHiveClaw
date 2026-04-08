@@ -2,7 +2,7 @@
 # check-plugin.sh — 修改 index.ts 后、重启 Gateway 前必须先跑这个
 #
 # 用法：
-#   bash ~/HomeAI/scripts/check-plugin.sh
+#   bash ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/check-plugin.sh
 #   exit 0 = 编译通过，可以重启
 #   exit 1 = 有语法/parse 错误，禁止重启
 

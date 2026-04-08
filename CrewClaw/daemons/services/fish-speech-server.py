@@ -5,8 +5,8 @@ POST /tts   {"text": "...", "style": "normal"}  → WAV bytes
 GET  /health → 200 ok
 
 使用 mlx-community/fish-audio-s2-pro（Fish Audio S2 Pro）
-音色克隆：ref_audio = ~/HomeAI/data/voice-samples/lucas.wav
-           ref_text  = ~/HomeAI/data/voice-samples/lucas.txt
+音色克隆：ref_audio = ~/HomeAI/Data/voice-samples/lucas.wav
+           ref_text  = ~/HomeAI/Data/voice-samples/lucas.txt
 
 style 参数：
   normal  → 默认，无额外控制标签
@@ -33,9 +33,9 @@ logging.basicConfig(
 )
 log = logging.getLogger('fish-tts')
 
-MODEL_PATH  = os.path.expanduser('~/HomeAI/models/fish-audio/s2-pro')
-REF_AUDIO   = os.path.expanduser('~/HomeAI/data/voice-samples/lucas.wav')
-REF_TEXT_F  = os.path.expanduser('~/HomeAI/data/voice-samples/lucas.txt')
+MODEL_PATH  = os.path.expanduser('~/HomeAI/Models/fish-audio/s2-pro')
+REF_AUDIO   = os.path.expanduser('~/HomeAI/Data/voice-samples/lucas.wav')
+REF_TEXT_F  = os.path.expanduser('~/HomeAI/Data/voice-samples/lucas.txt')
 PORT        = 8082
 
 _model        = None

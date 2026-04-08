@@ -133,7 +133,7 @@ curl localhost:18789/api/drone/status
 
 ```bash
 # 启动模拟器
-node ~/HomeAI/scripts/cloud-simulator.js
+node ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/cloud-simulator.js
 
 # 期望输出
 # [cloud-simulator] Listening on :4000
@@ -159,15 +159,15 @@ CLOUD_UPLOAD_URL_LISA=http://localhost:4000/corpus/lisa
 
 ```bash
 # 手动触发上传
-node ~/HomeAI/scripts/corpus-uploader.js --dry-run   # 先预览
-node ~/HomeAI/scripts/corpus-uploader.js             # 正式上传
+node ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/corpus-uploader.js --dry-run   # 先预览
+node ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/corpus-uploader.js             # 正式上传
 
 # 检查模拟器是否收到
 curl http://localhost:4000/corpus/lucas/summary
 # 期望：{ received: N, last_upload: "..." }
 
 # 检查上传日志
-tail -3 ~/HomeAI/data/corpus/upload-history.jsonl
+tail -3 ~/HomeAI/Data/corpus/upload-history.jsonl
 # 期望：status: "success"，lines_uploaded > 0
 ```
 
@@ -216,7 +216,7 @@ CLOUD_MODEL_URL=https://cloud.homeai.example.com/model/distilled
 CLOUD_API_KEY=your-real-api-key
 
 # 2. 触发一次上传验证
-node ~/HomeAI/scripts/corpus-uploader.js
+node ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/corpus-uploader.js
 
 # 3. 验证行为与模拟器阶段一致
 diff <(cat data/corpus/upload-history.jsonl | tail -1) \

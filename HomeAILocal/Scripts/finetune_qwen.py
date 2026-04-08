@@ -14,8 +14,8 @@ from pathlib import Path
 
 # 配置 - 使用更小的 7B 模型
 MODEL_NAME = "qwen/Qwen2.5-7B"  # 或使用本地模型
-OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/models/finetuned_qwen")
-TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/data/knowledge/corpus/readme_finetune.jsonl")
+OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/Models/finetuned_qwen")
+TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/Data/knowledge/corpus/readme_finetune.jsonl")
 
 def load_training_data():
     """加载训练数据"""

@@ -104,8 +104,8 @@
 | 对话历史缓冲 | `~/.homeai/chat-history/` | 禁止 | 禁止 |
 | ChromaDB 家庭记忆 | `~/HomeAI/chroma/` | 禁止 | 禁止 |
 | API Key | `.env` | 禁止 | 禁止 |
-| 语料数据（去标识化后） | `~/HomeAI/data/corpus/` | 允许 | 禁止 |
-| 架构/代码决策 | `~/HomeAI/data/decisions/` | 允许 | 禁止 |
+| 语料数据（去标识化后） | `~/HomeAI/Data/corpus/` | 允许 | 禁止 |
+| 架构/代码决策 | `~/HomeAI/Data/decisions/` | 允许 | 禁止 |
 
 ### 去标识化规则
 
@@ -441,7 +441,7 @@ HomeAI 系统的四个角色中，Lucas/Andy/Lisa 有明确的自进化路径（
       - 还没关闭的关键上下文（如等待外部条件、验证结论）
       - 本次会话的会话类型（A/B/C）
 3. 运行导出脚本写入 Obsidian：
-      `python3 ~/HomeAI/scripts/export-claude-session.py --type A --topic "主题描述"`（A/B 按当前子计划）
+      `python3 ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/export-claude-session.py --type A --topic "主题描述"`（A/B 按当前子计划）
       路径：~/Documents/Obsidian Vault/HomeAI/03-系统工程师工作日志/YYYY-MM/
 4. 如有新协作模式，追加到 08-claudecode-handbook 持续追加区
 ```

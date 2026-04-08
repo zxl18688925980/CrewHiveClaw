@@ -28,9 +28,9 @@
         <string>5</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>/Users/xinbinanshan/HomeAI/logs/lisa-daemon.stdout.log</string>
+    <string>/Users/xinbinanshan/HomeAI/Logs/lisa-daemon.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/xinbinanshan/HomeAI/logs/lisa-daemon.stderr.log</string>
+    <string>/Users/xinbinanshan/HomeAI/Logs/lisa-daemon.stderr.log</string>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>ThrottleInterval</key>

@@ -398,9 +398,9 @@ crewclaw-routing 插件内嵌语料采集器，运行时自动写入。
 
 | 角色 | 语料路径 | 云端目标 |
 |------|---------|---------|
-| Lucas | `~/HomeAI/data/corpus/lucas-corpus.jsonl` | 业务大师 |
-| Andy | `~/HomeAI/data/corpus/andy-corpus.jsonl` | 架构大师 |
-| Lisa | `~/HomeAI/data/corpus/lisa-corpus.jsonl` | 实现大师 |
+| Lucas | `~/HomeAI/Data/corpus/lucas-corpus.jsonl` | 业务大师 |
+| Andy | `~/HomeAI/Data/corpus/andy-corpus.jsonl` | 架构大师 |
+| Lisa | `~/HomeAI/Data/corpus/lisa-corpus.jsonl` | 实现大师 |
 
 ### 去标识化规则
 

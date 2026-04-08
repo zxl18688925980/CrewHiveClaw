@@ -10,7 +10,7 @@ import requests
 import datetime
 import random
 
-OUTPUT_DIR = os.path.expanduser('~/HomeAI/app/generated/ai-box-daily')
+OUTPUT_DIR = os.path.expanduser('~/HomeAI/App/generated/ai-box-daily')
 TARGET_USER_ID = 'ZiFeiYu'
 WECOM_SEND_URL = 'http://localhost:3003/api/wecom/send-message'
 

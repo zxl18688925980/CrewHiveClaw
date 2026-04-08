@@ -140,11 +140,11 @@ npm install -g openclaw
 验证：openclaw --version（应输出版本号）
 
 【步骤 2】安装 crewclaw-routing 插件依赖
-cd ~/HomeAI/crewclaw/crewclaw-routing && npm install
+cd ~/HomeAI/CrewHiveClaw/CrewClaw/crewclaw-routing && npm install
 验证：ls node_modules 应看到依赖包
 
 【步骤 3】安装 wecom-entrance 依赖
-cd ~/HomeAI/crewclaw/daemons && npm install
+cd ~/HomeAI/CrewHiveClaw/CrewClaw/daemons && npm install
 验证：node -e "require('./entrances/wecom/index.js')" 不报模块缺失
 
 【步骤 4】安装并启动 ChromaDB（本地，不用 Docker）
@@ -153,7 +153,7 @@ pip3 install chromadb
 mkdir -p ~/HomeAI/chroma
 
 # 启动 ChromaDB（端口 8001，避免与其他服务冲突）
-nohup chromadb run --host 127.0.0.1 --port 8001 --path ~/HomeAI/chroma > ~/HomeAI/logs/chromadb.log 2>&1 &
+nohup chromadb run --host 127.0.0.1 --port 8001 --path ~/HomeAI/chroma > ~/HomeAI/Logs/chromadb.log 2>&1 &
 
 # 或加入 PM2 管理（推荐）
 # ecosystem.config.js 中已包含 chromadb 进程配置
@@ -206,7 +206,7 @@ ollama pull qwen2.5:7b
 - 三角色 agent 定义（lucas / andy / lisa），workspace 路径指向新机器的 ~
 - 云端 model providers（deepseek / minimax / zai），apiKey 从 .env 读取
 - 本地 ollama provider（baseUrl: http://localhost:11434）
-- crewclaw-routing 插件路径（~/HomeAI/crewclaw/crewclaw-routing）
+- crewclaw-routing 插件路径（~/HomeAI/CrewHiveClaw/CrewClaw/crewclaw-routing）
 - Gateway auth token（自行生成一个随机字符串）
 
 【步骤 7】创建三角色 Workspace（身份配置）
@@ -217,17 +217,17 @@ mkdir -p ~/.openclaw/workspace
 
 # 每个角色从模板复制完整 8 文件体系
 for agent in lucas andy lisa; do
-  cp ~/HomeAI/crewclaw/daemons/workspace-templates/$agent/SOUL.md ~/.openclaw/workspace-$agent/
-  cp ~/HomeAI/crewclaw/daemons/workspace-templates/$agent/AGENTS.md ~/.openclaw/workspace-$agent/
-  cp ~/HomeAI/crewclaw/daemons/workspace-templates/$agent/IDENTITY.md ~/.openclaw/workspace-$agent/
-  cp ~/HomeAI/crewclaw/daemons/workspace-templates/$agent/MEMORY.md ~/.openclaw/workspace-$agent/
-  cp ~/HomeAI/crewclaw/daemons/workspace-templates/$agent/TOOLS.md ~/.openclaw/workspace-$agent/
-  cp ~/HomeAI/crewclaw/daemons/workspace-templates/$agent/USER.md ~/.openclaw/workspace-$agent/
-  cp ~/HomeAI/crewclaw/daemons/workspace-templates/$agent/HEARTBEAT.md ~/.openclaw/workspace-$agent/
+  cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/$agent/SOUL.md ~/.openclaw/workspace-$agent/
+  cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/$agent/AGENTS.md ~/.openclaw/workspace-$agent/
+  cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/$agent/IDENTITY.md ~/.openclaw/workspace-$agent/
+  cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/$agent/MEMORY.md ~/.openclaw/workspace-$agent/
+  cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/$agent/TOOLS.md ~/.openclaw/workspace-$agent/
+  cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/$agent/USER.md ~/.openclaw/workspace-$agent/
+  cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/$agent/HEARTBEAT.md ~/.openclaw/workspace-$agent/
 done
 
 # Andy 专属：DESIGN-PRINCIPLES.md + ARCH.md；Lisa 专属：CODEBASE.md
-cp ~/HomeAI/crewclaw/daemons/workspace-templates/andy/DESIGN-PRINCIPLES.md ~/.openclaw/workspace-andy/
+cp ~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/andy/DESIGN-PRINCIPLES.md ~/.openclaw/workspace-andy/
 # ARCH.md / CODEBASE.md 由系统工程师手工维护，首次部署需要创建：
 touch ~/.openclaw/workspace-andy/ARCH.md ~/.openclaw/workspace-lisa/CODEBASE.md
 
@@ -273,7 +273,7 @@ EOF
 【步骤 7.6】初始化知识图谱数据库（Kuzu）
 
 # 创建数据目录
-mkdir -p ~/HomeAI/data/kuzu ~/HomeAI/data/family
+mkdir -p ~/HomeAI/Data/kuzu ~/HomeAI/Data/family
 
 cd ~/HomeAI
 
@@ -299,7 +299,7 @@ ls ~/.openclaw/workspace-lucas/family/  # 应看到 {userId}.inject.md 文件
 
 【步骤 8】配置并启动 OpenClaw Gateway（launchd 服务）
 # 复制 plist 到用户 LaunchAgents
-cp ~/HomeAI/crewclaw/config/ai.openclaw.gateway.plist \
+cp ~/HomeAI/CrewHiveClaw/CrewClaw/config/ai.openclaw.gateway.plist \
    ~/Library/LaunchAgents/ai.openclaw.gateway.plist
 
 # 创建并编辑 wrapper script
@@ -317,7 +317,7 @@ launchctl start ai.openclaw.gateway
 - cat ~/.openclaw/logs/gateway.log（应无错误，显示监听 18789）
 
 【步骤 9】启动 PM2 进程（wecom-entrance + cloudflared）
-cd ~/HomeAI/crewclaw/daemons
+cd ~/HomeAI/CrewHiveClaw/CrewClaw/daemons
 pm2 start ecosystem.config.js
 pm2 save
 pm2 startup   # 配置开机自启
@@ -411,7 +411,7 @@ Setup 阶段完成标志：以下所有检查项均通过。
 | Lucas 回复乱码（`<\|im_start\|>`） | 本地模型 stop token 未配置 | 检查 crewclaw-routing 插件 stop token 设置 |
 | wecom-entrance offline | .env 变量缺失或路径错误 | `pm2 logs wecom-entrance --lines 50` |
 | 企业微信收不到消息 | Cloudflare Tunnel 未运行 | `pm2 logs cloudflared-tunnel --lines 20` |
-| ChromaDB 连接失败 | 本地进程未启动 | `ps aux \| grep chromadb`；手动启动：`nohup chromadb run --host 127.0.0.1 --port 8001 --path ~/HomeAI/chroma > ~/HomeAI/logs/chromadb.log 2>&1 &` |
+| ChromaDB 连接失败 | 本地进程未启动 | `ps aux \| grep chromadb`；手动启动：`nohup chromadb run --host 127.0.0.1 --port 8001 --path ~/HomeAI/chroma > ~/HomeAI/Logs/chromadb.log 2>&1 &` |
 | openclaw.json 报错 | JSON 格式错误 | `node -e "JSON.parse(require('fs').readFileSync(require('os').homedir()+'/.openclaw/openclaw.json','utf8'))"` |
 | 云端模型超时 | API Key 未配置或网络问题 | 直接 curl 测试对应 API |
 

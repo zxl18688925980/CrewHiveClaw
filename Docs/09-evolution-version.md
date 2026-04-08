@@ -279,7 +279,7 @@
 
 2. **TTS 服务重命名**：`fish-speech-server.py` → `tts-server.py`；PM2 进程 `fish-speech-tts` → `local-tts`；wecom/index.js 常量 `FISH_TTS_URL` → `LOCAL_TTS_URL`；日志文件前缀同步更新
 
-3. **CosyVoice2 备选**：同时尝试 CosyVoice2-0.5B-8bit（Alibaba，最优候选：中文+声音克隆+情感 instruct），但 mlx_audio 0.4.1 MODEL_REMAPPING 不含 `cosyvoice2`，暂无法运行；模型下载至 `~/HomeAI/models/tts/CosyVoice2-8bit`（929MB），等 mlx_audio 支持后升级
+3. **CosyVoice2 备选**：同时尝试 CosyVoice2-0.5B-8bit（Alibaba，最优候选：中文+声音克隆+情感 instruct），但 mlx_audio 0.4.1 MODEL_REMAPPING 不含 `cosyvoice2`，暂无法运行；模型下载至 `~/HomeAI/Models/tts/CosyVoice2-8bit`（929MB），等 mlx_audio 支持后升级
 
 4. **视觉模型升级**：Qwen2.5-VL-32B-4bit → Qwen3-VL-32B-4bit；mlx-vision PM2 进程用新模型路径重启；同步删除 Qwen2.5-VL 旧模型（20GB），并清理 HF cache 中无用旧模型（Qwen3-TTS-CustomVoice 3.7GB + DeepSeek-R1-14B 2.8GB + Qwen2.5-7B 1.0GB），共释放约 27.5GB
 
@@ -735,7 +735,7 @@ _后续干预记录由 Claude Code 在每次成功干预后主动追加。系统
 
 **L2.2：best-practice-evaluation Skill 双层部署**
 
-实例层（`~/.openclaw/workspace-andy/skills/best-practice-evaluation/SKILL.md`）已在 v490 创建，框架层（`~/HomeAI/crewclaw/daemons/workspace-templates/andy/skills/best-practice-evaluation/SKILL.md`）在本次补全。
+实例层（`~/.openclaw/workspace-andy/skills/best-practice-evaluation/SKILL.md`）已在 v490 创建，框架层（`~/HomeAI/CrewHiveClaw/CrewClaw/daemons/workspace-templates/andy/skills/best-practice-evaluation/SKILL.md`）在本次补全。
 
 Skill 内容：三步生态优先检查（① openclaw skills list → ② clawhub search → ③ 自定义实现），确保 Andy 出 spec 前不重复造轮子。框架层是新部署的基线，`initAgentSkillsDir` 启动时自动同步。
 

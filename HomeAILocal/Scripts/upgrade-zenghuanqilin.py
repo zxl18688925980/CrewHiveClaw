@@ -89,7 +89,7 @@ PARAMETER stop <｜User｜>
 PARAMETER stop <｜Assistant｜>"""
     
     # 保存 Modelfile
-    models_dir = os.path.expanduser("~/HomeAI/models")
+    models_dir = os.path.expanduser("~/HomeAI/Models")
     os.makedirs(models_dir, exist_ok=True)
     
     modelfile_path = os.path.join(models_dir, "Modelfile.zenghuanqilin")

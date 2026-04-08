@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 log = logging.getLogger('mlx-vision')
 
-MODEL_PATH = os.path.expanduser('~/HomeAI/models/mlx/Qwen2.5-VL-32B-4bit')
+MODEL_PATH = os.path.expanduser('~/HomeAI/Models/mlx/Qwen2.5-VL-32B-4bit')
 PORT = 8081
 
 log.info(f'Loading model: {MODEL_PATH}')

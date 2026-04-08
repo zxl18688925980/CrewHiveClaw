@@ -1,14 +1,14 @@
 #!/bin/bash
 # 全自动：下载 Qwen2.5-VL-32B MLX → 准备数据 → 微调 → 替换 homeai-assistant
-# 日志：~/HomeAI/logs/finetune-vl.log
+# 日志：~/HomeAI/Logs/finetune-vl.log
 # 用法：nohup bash scripts/finetune-vl-replace.sh &
 
 set -e
-LOG="/Users/xinbinanshan/HomeAI/logs/finetune-vl.log"
-MLX_MODEL_DIR="/Users/xinbinanshan/HomeAI/models/mlx/Qwen2.5-VL-32B-4bit"
-ADAPTER_DIR="/Users/xinbinanshan/HomeAI/models/adapters/vl"
-DATA_DIR="/Users/xinbinanshan/HomeAI/models/data-vl"
-CORPUS="/Users/xinbinanshan/HomeAI/data/corpus/lucas-corpus.jsonl"
+LOG="/Users/xinbinanshan/HomeAI/Logs/finetune-vl.log"
+MLX_MODEL_DIR="/Users/xinbinanshan/HomeAI/Models/mlx/Qwen2.5-VL-32B-4bit"
+ADAPTER_DIR="/Users/xinbinanshan/HomeAI/Models/adapters/vl"
+DATA_DIR="/Users/xinbinanshan/HomeAI/Models/data-vl"
+CORPUS="/Users/xinbinanshan/HomeAI/Data/corpus/lucas-corpus.jsonl"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
@@ -36,8 +36,8 @@ python3 - <<'PYEOF' 2>&1 | tee -a "$LOG"
 import json, random
 from pathlib import Path
 
-corpus_path = Path("/Users/xinbinanshan/HomeAI/data/corpus/lucas-corpus.jsonl")
-data_dir = Path("/Users/xinbinanshan/HomeAI/models/data-vl")
+corpus_path = Path("/Users/xinbinanshan/HomeAI/Data/corpus/lucas-corpus.jsonl")
+data_dir = Path("/Users/xinbinanshan/HomeAI/Models/data-vl")
 
 records = []
 with open(corpus_path) as f:
@@ -92,7 +92,7 @@ python3 -m mlx_lm.lora \
 
 # ── Step 4: 合并权重 ──────────────────────────────────────────────────────────
 log "=== Step 4: 合并 adapter 到模型权重 ==="
-FUSED_DIR="/Users/xinbinanshan/HomeAI/models/mlx/Qwen2.5-VL-32B-homeai-fused"
+FUSED_DIR="/Users/xinbinanshan/HomeAI/Models/mlx/Qwen2.5-VL-32B-homeai-fused"
 python3 -m mlx_lm.fuse \
   --model "$MLX_MODEL_DIR" \
   --adapter-path "$ADAPTER_DIR" \

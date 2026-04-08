@@ -10,7 +10,7 @@ from typing import Dict, Any
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REPORT_DIR = Path("/Users/xinbinanshan/HomeAI/app/generated/ai-box-reports")
+REPORT_DIR = Path("/Users/xinbinanshan/HomeAI/App/generated/ai-box-reports")
 
 
 def generate_report(analysis: Dict[str, Any]) -> str:

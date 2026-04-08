@@ -14,7 +14,7 @@ echo ""
 # 配置
 MODEL_BASE="qwen2.5-coder:14b"
 MODEL_NAME="homeai-assistant"
-MODELFILE_PATH="/Users/xinbinanshan/HomeAI/models/Modelfile-homeai"
+MODELFILE_PATH="/Users/xinbinanshan/HomeAI/Models/Modelfile-homeai"
 
 # 步骤1: 检查模型是否存在
 echo "[1/3] 检查基础模型..."

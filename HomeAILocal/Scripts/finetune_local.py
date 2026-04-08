@@ -11,8 +11,8 @@ from pathlib import Path
 
 # 配置
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"  # 使用更小的蒸馏模型
-OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/models/finetuned")
-TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/data/knowledge/corpus/readme_finetune.jsonl")
+OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/Models/finetuned")
+TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/Data/knowledge/corpus/readme_finetune.jsonl")
 
 # 微调参数
 MAX_seq_LENGTH = 2048

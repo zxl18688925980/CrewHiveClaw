@@ -11,7 +11,7 @@ import kuzu
 cypher = sys.argv[1]
 params = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
 
-db   = kuzu.Database(os.path.expanduser("~/HomeAI/data/kuzu"))
+db   = kuzu.Database(os.path.expanduser("~/HomeAI/Data/kuzu"))
 conn = kuzu.Connection(db)
 try:
     res  = conn.execute(cypher, params)

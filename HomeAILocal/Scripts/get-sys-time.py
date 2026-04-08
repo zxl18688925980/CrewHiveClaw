@@ -13,6 +13,6 @@ if __name__ == "__main__":
     print(formatted)
     
     # 追加写入 app/generated/sys-time.txt
-    output_path = "/Users/xinbinanshan/HomeAI/app/generated/sys-time.txt"
+    output_path = "/Users/xinbinanshan/HomeAI/App/generated/sys-time.txt"
     with open(output_path, "a") as f:
         f.write(formatted + "\n")

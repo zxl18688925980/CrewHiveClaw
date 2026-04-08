@@ -4,7 +4,7 @@
 
 set -e
 
-TARGET_DIR="/Users/xinbinanshan/HomeAI/models/huggingface/Qwen/Qwen2.5-Coder-32B-Instruct"
+TARGET_DIR="/Users/xinbinanshan/HomeAI/Models/huggingface/Qwen/Qwen2.5-Coder-32B-Instruct"
 
 echo "[$(date '+%H:%M:%S')] 开始下载 Qwen2.5-Coder-32B-Instruct"
 echo "目标路径: $TARGET_DIR"

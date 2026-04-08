@@ -14,8 +14,8 @@ from pathlib import Path
 
 # 配置
 MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"  # 使用蒸馏版，更适合 Mac
-OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/models/finetuned_deepseek_r1")
-TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/data/knowledge/corpus/deepseek_r1_finetune.jsonl")
+OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/Models/finetuned_deepseek_r1")
+TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/Data/knowledge/corpus/deepseek_r1_finetune.jsonl")
 
 
 def load_training_data():

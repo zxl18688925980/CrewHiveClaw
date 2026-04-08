@@ -16,7 +16,7 @@ const HEADERS = {
 // 用上次测试验证通过的视频 ID
 const TEST_URL = 'https://v.douyin.com/PYZxmAXw5Vw/';
 const WHISPER  = '/opt/homebrew/bin/whisper-cli';
-const MODEL    = '/Users/xinbinanshan/HomeAI/models/whisper/ggml-base.bin';
+const MODEL    = '/Users/xinbinanshan/HomeAI/Models/whisper/ggml-base.bin';
 
 async function extractDouyinStream(url) {
   // Step 1: 短链 → videoId

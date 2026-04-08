@@ -12,8 +12,8 @@ import os
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 import chromadb
 
-OUTPUT_REVIEW = os.path.expanduser("~/HomeAI/data/finetune/dpo-review.jsonl")
-OUTPUT_FINAL  = os.path.expanduser("~/HomeAI/data/finetune/dpo-final.jsonl")
+OUTPUT_REVIEW = os.path.expanduser("~/HomeAI/Data/finetune/dpo-review.jsonl")
+OUTPUT_FINAL  = os.path.expanduser("~/HomeAI/Data/finetune/dpo-final.jsonl")
 os.makedirs(os.path.dirname(OUTPUT_REVIEW), exist_ok=True)
 
 client = chromadb.HttpClient(host="localhost", port=8000)

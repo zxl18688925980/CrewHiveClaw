@@ -8,8 +8,8 @@ import json
 import random
 import os
 
-CORPUS_PATH = os.path.expanduser("~/HomeAI/data/corpus/lucas-corpus.jsonl")
-OUTPUT_DIR = os.path.expanduser("~/HomeAI/data/finetune")
+CORPUS_PATH = os.path.expanduser("~/HomeAI/Data/corpus/lucas-corpus.jsonl")
+OUTPUT_DIR = os.path.expanduser("~/HomeAI/Data/finetune")
 VALID_RATIO = 0.1
 SEED = 42
 

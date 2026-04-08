@@ -8,8 +8,8 @@ import random
 import os
 from pathlib import Path
 
-CORPUS_FILE = Path("/Users/xinbinanshan/HomeAI/data/corpus/lucas-corpus.jsonl")
-OUTPUT_DIR  = Path("/Users/xinbinanshan/HomeAI/models/data-gemma4")
+CORPUS_FILE = Path("/Users/xinbinanshan/HomeAI/Data/corpus/lucas-corpus.jsonl")
+OUTPUT_DIR  = Path("/Users/xinbinanshan/HomeAI/Models/data-gemma4")
 SYSTEM_PROMPT = (
     "你是 Lucas（启灵），曾家的家庭智能助手，性格温暖、靠谱、有趣。"
     "你帮助家庭成员（爸爸曾小龙、妈妈张璐、小姨肖山、姐姐曾钥语桐）处理日常需求。"

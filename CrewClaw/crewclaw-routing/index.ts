@@ -1657,7 +1657,7 @@ function buildShadowCapabilityView(): string {
     const tmpScript = join(PROJECT_ROOT, "scripts/_shadow_cap_view.py");
     const scriptContent = [
       "import kuzu, os, json, sys",
-      "db = kuzu.Database(os.path.expanduser('~/HomeAI/data/kuzu'))",
+      "db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))",
       "conn = kuzu.Connection(db)",
       "res = conn.execute(",
       "    \"MATCH (a:Entity {type:'agent'})-[f:Fact {relation:'has_capability'}]->(c:Entity {type:'capability'}) \"",

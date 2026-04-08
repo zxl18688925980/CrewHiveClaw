@@ -30,7 +30,7 @@ wecom-entrance（端口 3003，PM2 管理）
   └─ callGatewayAgent() → POST /v1/chat/completions + x-openclaw-agent-id header
         ↓
 OpenClaw Gateway（端口 18789，launchd 管理）
-  └─ crewclaw-routing 插件（~/HomeAI/crewclaw/crewclaw-routing/）
+  └─ crewclaw-routing 插件（~/HomeAI/CrewHiveClaw/CrewClaw/crewclaw-routing/）
        ├─ before_model_resolve：
        │   Layer 1 意图路由 → 对话 / 成员专属 Agent / 开发需求 / 工具 / 人工干预
        │   Layer 2 模型路由 → 本地置信度足够→ollama/homeai-assistant，不足→云端
@@ -50,7 +50,7 @@ OpenClaw Gateway（端口 18789，launchd 管理）
               ↓
         Lisa /api/chat（通过 Gateway proxy）
               ↓
-        代码输出到 ~/HomeAI/app/generated/
+        代码输出到 ~/HomeAI/App/generated/
               ↓
         Lucas 回复用户：交付完成
 
@@ -115,7 +115,7 @@ curl -X POST http://localhost:3003/api/wecom/forward \
 
 ```bash
 # 对话后查看路由事件记录
-cat ~/HomeAI/data/learning/route-events.jsonl | tail -5
+cat ~/HomeAI/Data/learning/route-events.jsonl | tail -5
 ```
 
 期望：每次对话都有一条路由记录，包含 `agentId`、`modelUsed`、`timestamp`。
@@ -155,10 +155,10 @@ curl -X POST http://localhost:3003/api/wecom/forward \
 
 ```bash
 # 检查是否有代码生成
-ls ~/HomeAI/app/generated/
+ls ~/HomeAI/App/generated/
 
 # 查看路由事件（应有 andy 和 lisa 的路由记录）
-cat ~/HomeAI/data/learning/route-events.jsonl | tail -10
+cat ~/HomeAI/Data/learning/route-events.jsonl | tail -10
 
 # 查看 Gateway 日志
 tail -50 ~/.openclaw/logs/gateway.log | grep -E "andy|lisa|pipeline"
@@ -174,7 +174,7 @@ triggerDevelopmentPipeline()
     ↓
 Andy 设计方案（通过 Gateway proxy）
     ↓
-Lisa 生成代码 → ~/HomeAI/app/generated/
+Lisa 生成代码 → ~/HomeAI/App/generated/
     ↓
 Lucas 回复用户：「已完成，代码在 app/generated/xxx/」
 ```
@@ -241,7 +241,7 @@ Lucas 语料写入 data/corpus/lucas-corpus.jsonl
 
 **流程层**：
 - [ ] 开发需求触发 Andy→Lisa 流水（Gateway 日志有记录）
-- [ ] 代码生成到 `~/HomeAI/app/generated/` 目录
+- [ ] 代码生成到 `~/HomeAI/App/generated/` 目录
 
 **学习层**：
 - [ ] 路由事件写入 `data/learning/route-events.jsonl`
@@ -259,7 +259,7 @@ Lucas 语料写入 data/corpus/lucas-corpus.jsonl
 | 响应超时（>3min） | 检查 `~/.openclaw/start-gateway.sh` API Key；本地模型关掉节省资源 |
 | Andy→Lisa 未触发 | 检查 crewclaw-routing 插件的意图识别日志；需求描述要更明确 |
 | 代码未生成 | 检查 `app/generated/` 目录权限；查 Gateway 日志 Lisa 部分 |
-| ChromaDB 连接失败 | `ps aux \| grep chromadb`；手动启动：`nohup chromadb run --host 127.0.0.1 --port 8001 --path ~/HomeAI/chroma > ~/HomeAI/logs/chromadb.log 2>&1 &` |
+| ChromaDB 连接失败 | `ps aux \| grep chromadb`；手动启动：`nohup chromadb run --host 127.0.0.1 --port 8001 --path ~/HomeAI/chroma > ~/HomeAI/Logs/chromadb.log 2>&1 &` |
 | 路由事件为空 | 检查 `data/learning/` 目录是否存在并有写权限 |
 | 企业微信无回复 | `pm2 logs wecom-entrance --lines 30`；检查 Cloudflare Tunnel 状态 |
 

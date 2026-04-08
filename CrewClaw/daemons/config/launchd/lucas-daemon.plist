@@ -28,9 +28,9 @@
         <string>5</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>/Users/xinbinanshan/HomeAI/logs/homeai-daemon.stdout.log</string>
+    <string>/Users/xinbinanshan/HomeAI/Logs/homeai-daemon.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/xinbinanshan/HomeAI/logs/homeai-daemon.stderr.log</string>
+    <string>/Users/xinbinanshan/HomeAI/Logs/homeai-daemon.stderr.log</string>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>ThrottleInterval</key>

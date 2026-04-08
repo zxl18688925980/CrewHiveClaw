@@ -102,7 +102,7 @@ def create_modelfile(role: str, base_model: str = "qwen2.5:7b"):
     )
 
     # 保存 Modelfile
-    models_dir = os.path.expanduser("~/HomeAI/models")
+    models_dir = os.path.expanduser("~/HomeAI/Models")
     os.makedirs(models_dir, exist_ok=True)
 
     modelfile_path = os.path.join(models_dir, f"Modelfile.{role}")
@@ -118,7 +118,7 @@ def run_finetune(role: str, base_model: str = "qwen2.5:7b"):
         return False
 
     model_name = f"homeai-{role}"
-    modelfile_path = os.path.expanduser(f"~/HomeAI/models/Modelfile.{role}")
+    modelfile_path = os.path.expanduser(f"~/HomeAI/Models/Modelfile.{role}")
 
     print(f"\nCreating model: {model_name}")
     print(f"Modelfile: {modelfile_path}")

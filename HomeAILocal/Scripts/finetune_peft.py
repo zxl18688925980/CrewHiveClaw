@@ -15,8 +15,8 @@ from pathlib import Path
 
 # 配置
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
-OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/models/finetuned")
-TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/data/knowledge/corpus/readme_finetune.jsonl")
+OUTPUT_DIR = Path("/Users/xinbinanshan/HomeAI/Models/finetuned")
+TRAINING_FILE = Path("/Users/xinbinanshan/HomeAI/Data/knowledge/corpus/readme_finetune.jsonl")
 
 # 启用 MPS
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"

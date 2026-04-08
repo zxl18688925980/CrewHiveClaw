@@ -13,8 +13,8 @@ import os as _os
 CHROMA_BASE = _os.environ.get("CHROMA_URL", "http://localhost:8001") + "/api/v2/tenants/default_tenant/databases/default_database/collections"
 OLLAMA_URL  = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
-ERRORS_FILE = "/Users/xinbinanshan/HomeAI/data/learning/memory-write-errors.jsonl"
-FINETUNE_FILE = "/Users/xinbinanshan/HomeAI/data/learning/finetune-queue.jsonl"
+ERRORS_FILE = "/Users/xinbinanshan/HomeAI/Data/learning/memory-write-errors.jsonl"
+FINETUNE_FILE = "/Users/xinbinanshan/HomeAI/Data/learning/finetune-queue.jsonl"
 
 def post(url, data):
     body = json.dumps(data).encode()
