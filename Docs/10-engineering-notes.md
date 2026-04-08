@@ -673,3 +673,17 @@ pm2 save
 pm2 env <id> | grep "out_file\|error_file\|pm_exec_path"
 ```
 出现旧路径即需重新注册。
+
+### monorepo 重构后 HOMEAI_ROOT 层数陷阱（2026-04-08）
+
+**现象**：视频转录无内容返回，无报错，Lucas 只回复视频元数据描述而无文字转录。
+
+**根因**：`wecom/index.js` 用 `path.join(__dirname, '../../../..')` 定义 `HOMEAI_ROOT`（上溯4层）。
+- 重构前路径：`~/HomeAI/crewclaw/daemons/entrances/wecom/` → 上溯4层 = `~/HomeAI/` ✅
+- 重构后路径：`~/HomeAI/CrewHiveClaw/CrewClaw/daemons/entrances/wecom/` → 上溯4层 = `~/HomeAI/CrewHiveClaw/` ❌
+
+`WHISPER_MODEL` 解析到 `~/HomeAI/CrewHiveClaw/Models/whisper/ggml-base.bin`（不存在），`fs.existsSync()` 返回 false，transcribe 被**静默跳过**，不报错。
+
+**修复**：`'../../../..'` → `'../../../../..'`（5层），同步修正 `WHISPER_MODEL`（`Models/`）和图片上传路径（`Data/`）。
+
+**教训**：monorepo 重构在路径中插入一层目录时，所有用 `__dirname` + 相对路径定义的根目录常量必须同步检查层数。`fs.existsSync` 为 false 时静默失败（不抛异常）是排查盲点，可在启动时加 warning log。

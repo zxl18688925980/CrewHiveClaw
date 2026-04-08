@@ -848,7 +848,7 @@ app.post('/wecom/callback', async (req, res) => {
             );
             const vidBuffer = Buffer.from(vidResp.data);
             const dateStr   = todayCST();
-            const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'videos');
+            const uploadDir = path.join(HOMEAI_ROOT, 'Data', 'uploads', dateStr, 'videos');
             fs.mkdirSync(uploadDir, { recursive: true });
             const vidFilename = `main-${Date.now()}.mp4`;
             const vidSavePath = path.join(uploadDir, vidFilename);
@@ -885,7 +885,7 @@ app.post('/wecom/callback', async (req, res) => {
             );
             const voiceBuffer = Buffer.from(voiceResp.data);
             const dateStr   = todayCST();
-            const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'voices');
+            const uploadDir = path.join(HOMEAI_ROOT, 'Data', 'uploads', dateStr, 'voices');
             fs.mkdirSync(uploadDir, { recursive: true });
             const voiceFilename = `main-${Date.now()}.amr`;
             const voiceSavePath = path.join(uploadDir, voiceFilename);
