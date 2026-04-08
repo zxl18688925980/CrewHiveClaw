@@ -4993,6 +4993,41 @@ const crewclawRoutingPlugin = {
         } catch { /* 读取失败不影响主流程 */ }
       }
 
+      // ── Andy HEARTBEAT：Lucas 知识投喂注入（按时序，不受语义竞争）──────────────
+      // knowledge_injection 由 Lucas.share_with_andy 写入，专供 Andy 消化。
+      // 语义搜索 topK=5 名额竞争激烈；直近投喂必须走专用时序通道，不依赖语义召回。
+      // 只在 Andy HEARTBEAT 时注入，避免干扰正常设计对话。
+      if (agentId === "andy" && /HEARTBEAT/i.test(event.prompt ?? "")) {
+        try {
+          const sevenDaysAgo = agoCST(7 * 24 * 3600 * 1000);
+          const injections = await chromaGet("decisions", {
+            "$and": [
+              { type:      { "$eq": "knowledge_injection" } },
+              { agent:     { "$eq": "andy" } },
+              { timestamp: { "$gt": sevenDaysAgo } },
+            ],
+          });
+          if (injections.length > 0) {
+            injections.sort((a, b) =>
+              String(b.metadata.timestamp ?? "").localeCompare(String(a.metadata.timestamp ?? ""))
+            );
+            const lines = injections.slice(0, 5).map(r => {
+              const ts    = toCST(r.metadata.timestamp as string);
+              const topic = r.metadata.topic ? `【${r.metadata.topic}】` : "";
+              return `[${ts}]${topic}\n${r.document.slice(0, 500)}`;
+            });
+            appendSystem.push(
+              `【Lucas 知识投喂（最近 7 天，共 ${injections.length} 条）】\n` +
+              `以下是 Lucas 主动路由给你的外部知识。请消化并判断是否有值得纳入系统设计的方向，` +
+              `有价值的洞察可写入 MEMORY.md 或形成 trigger_development_pipeline 改进提案。\n\n` +
+              lines.join("\n\n---\n\n")
+            );
+          }
+        } catch {
+          // 检索失败静默处理
+        }
+      }
+
       if (prepend.length === 0 && appendSystem.length === 0) return;
       const injectResult: { prependContext?: string; appendSystemContext?: string } = {};
       if (prepend.length > 0) injectResult.prependContext = prepend.join("\n\n");
