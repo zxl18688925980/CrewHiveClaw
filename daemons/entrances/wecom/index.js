@@ -465,7 +465,7 @@ async function scrapeWechatArticle(url) {
 }
 
 /**
- * 图片视觉描述：mlx-vision（主，8081）→ LOCAL_MODEL_NAME Ollama（备）→ GLM vision（降级）
+ * 图片视觉描述：mlx-vision（主，8081）→ Gemma 4 mlx_lm.server（备，8083）→ GLM vision（降级）
  */
 async function describeImageWithLlava(imagePath) {
   const base64Image = fs.readFileSync(imagePath).toString('base64');
@@ -496,37 +496,39 @@ async function describeImageWithLlava(imagePath) {
       return result;
     }
   } catch (e) {
-    logger.warn('mlx-vision 失败，降级 ollama', { error: e.message });
+    logger.warn('mlx-vision 失败，降级 gemma-4-lucas', { error: e.message });
   }
 
-  // 备用：本地 LOCAL_MODEL_NAME Ollama（qwen2.5vl）
-  const localModelName = process.env.LOCAL_MODEL_NAME || 'homeai-assistant';
+  // 备用：Gemma 4 本地微调模型（mlx_lm.server OpenAI 兼容接口，8083）
   try {
     const resp = await axios.post(
-      'http://localhost:11434/api/chat',
+      'http://127.0.0.1:8083/v1/chat/completions',
       {
-        model: localModelName,
+        model: 'gemma-4-lucas',
         messages: [{
           role: 'user',
-          content: prompt,
-          images: [base64Image],
+          content: [
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+            { type: 'text', text: prompt },
+          ],
         }],
-        stream: false,
+        max_tokens: 512,
+        temperature: 0,
       },
-      { timeout: 60000 }
+      { timeout: 120000 }
     );
-    const result = resp.data?.message?.content?.trim();
+    const result = resp.data?.choices?.[0]?.message?.content?.trim();
     // 有效性检验：模型无视觉能力时会返回托辞（"无法查看图片"等），视为失败继续降级
     const VISION_REFUSAL_RE = /无法(直接)?查看|没有(实际的?)?图片数据|无法(分析|处理)(图片|图像)|cannot (view|see|analyze|process) (the )?image/i;
     if (result && !VISION_REFUSAL_RE.test(result)) {
-      logger.info(`Ollama ${localModelName} 描述成功`);
+      logger.info('Gemma 4 (mlx_lm.server) 描述成功');
       return result;
     }
     if (result) {
-      logger.warn(`Ollama ${localModelName} 返回拒绝回复，降级 GLM`, { preview: result.slice(0, 80) });
+      logger.warn('Gemma 4 返回拒绝回复，降级 GLM', { preview: result.slice(0, 80) });
     }
   } catch (e) {
-    logger.warn('Ollama vision 失败，降级 GLM', { error: e.message });
+    logger.warn('Gemma 4 vision 失败，降级 GLM', { error: e.message });
   }
 
   // 降级：GLM vision

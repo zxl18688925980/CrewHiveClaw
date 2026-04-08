@@ -229,8 +229,8 @@ interface AgentEvolutionConfig {
   agentId: string;
   corpusFile: string;
   // Axis 1
-  localProvider: string;         // 本地路由 provider（ollama）
-  localModel: string;            // 本地路由模型（由 LOCAL_MODEL_NAME 环境变量设置）
+  localProvider: string;         // 本地路由 provider（mlx）
+  localModel: string;            // 本地路由模型（gemma-4-lucas，mlx_lm.server on :8083）
   cloudProvider: string;         // 云端路由 provider
   cloudModel: string;            // 云端路由模型
   /** 初始本地阈值（0.0=始终云端，1.0=始终本地） */
@@ -245,8 +245,8 @@ const AGENT_EVOLUTION_CONFIGS: AgentEvolutionConfig[] = [
   {
     agentId: "lucas",
     corpusFile: join(PROJECT_ROOT, "data/corpus/lucas-corpus.jsonl"),
-    localProvider: "ollama",
-    localModel: LOCAL_MODEL,
+    localProvider: "mlx",
+    localModel: "gemma-4-lucas",
     cloudProvider: LUCAS_PROVIDER,
     cloudModel: process.env.LUCAS_CLOUD_MODEL || "claude-sonnet-4-6",
     localThresholdInit: 0.0,       // 起点：全走云端，积累数据后再进化
@@ -256,8 +256,8 @@ const AGENT_EVOLUTION_CONFIGS: AgentEvolutionConfig[] = [
   {
     agentId: "andy",
     corpusFile: join(PROJECT_ROOT, "data/corpus/andy-corpus.jsonl"),
-    localProvider: "ollama",
-    localModel: LOCAL_MODEL,
+    localProvider: "mlx",
+    localModel: "gemma-4-lucas",
     cloudProvider: ANDY_PROVIDER,
     cloudModel: ANDY_MODEL,
     localThresholdInit: 0.0,       // Andy 以架构设计为主，起点保守
@@ -267,8 +267,8 @@ const AGENT_EVOLUTION_CONFIGS: AgentEvolutionConfig[] = [
   {
     agentId: "lisa",
     corpusFile: join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"),
-    localProvider: "ollama",
-    localModel: LOCAL_MODEL,
+    localProvider: "mlx",
+    localModel: "gemma-4-lucas",
     cloudProvider: LISA_PROVIDER,
     cloudModel: LISA_MODEL,
     localThresholdInit: 0.0,       // Lisa 实现类任务，起点保守

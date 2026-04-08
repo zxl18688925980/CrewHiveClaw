@@ -91,6 +91,25 @@ module.exports = {
       merge_logs: true
     },
     {
+      name: 'mlx-gemma4',
+      script: '/opt/homebrew/opt/python@3.11/bin/python3.11',
+      args: '-m mlx_lm server --model /Users/xinbinanshan/HomeAI/models/mlx/gemma-4-31B-lucas-fused --host 127.0.0.1 --port 8083',
+      interpreter: 'none',
+      cwd: path.join(require('os').homedir(), 'HomeAI'),
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      watch: false,
+      // 不设 max_memory_restart：Gemma 4 31B 4bit 占用约 16GB，不应被 PM2 杀掉
+      restart_delay: 10000,
+      min_uptime: '60s',  // 60s 内退出视为启动失败，避免模型加载失败时无限重启
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      error_file: path.join(LOGS_DIR, 'mlx-gemma4-error.log'),
+      out_file:   path.join(LOGS_DIR, 'mlx-gemma4-out.log'),
+      combine_logs: true,
+      merge_logs: true
+    },
+    {
       name: 'local-tts',
       script: '/Users/xinbinanshan/HomeAI/crewclaw/daemons/services/tts-server.py',
       interpreter: '/opt/homebrew/opt/python@3.11/bin/python3.11',
