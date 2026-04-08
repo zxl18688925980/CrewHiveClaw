@@ -43,77 +43,76 @@ HomeAI 采用**分层配置管理**，解决两个核心问题：
 
 ```
 ~/HomeAI/
-├── CLAUDE.md                        # Claude Code 工作记忆（纳入 Git）
-├── .gitignore                       # Git 忽略规则（纳入 Git）
-├── .env.example                     # 环境变量模板（纳入 Git，不含真实值）
+├── CLAUDE.md                        # Claude Code 工作记忆（不纳入 Git）
 ├── .env                             # 实际环境变量（不纳入 Git）
 │
-├── docs/                            # 项目文档（纳入 Git）
-│   ├── HomeAI Readme.md
-│   ├── 00-project-overview.md
-│   ├── 02-requirements-decomposition.md
-│   ├── 03-configuration-management.md  # 本文件
-│   ├── 04-project-constitution.md
-│   ├── 05-environment-setup.md
-│   ├── 06-basic-version.md
-│   ├── 07-advanced-version.md
-│   ├── 08-claudecode-handbook.md
-│   ├── 09-evolution-version.md
-│   └── 10-engineering-notes.md
+├── CrewHiveClaw/                    # 唯一代码仓（git remote: CrewHiveClaw.git）
+│   ├── CrewClaw/                    # CrewClaw 框架代码
+│   │   ├── crewclaw-routing/        # OpenClaw 插件（三层路由 + 工具实现）
+│   │   │   ├── index.ts             # 插件主体（jiti 热加载）
+│   │   │   ├── context-sources.ts   # 上下文注入源注册表
+│   │   │   └── config/              # 实例层配置（5 个 JSON）
+│   │   └── daemons/                 # PM2 服务
+│   │       ├── entrances/wecom/index.js  # 企业微信入口，端口 3003
+│   │       ├── workspace-templates/ # 框架层 Skill 模板（纳入 Git）
+│   │       │   ├── lucas/skills/{skill-name}/SKILL.md
+│   │       │   ├── andy/skills/{skill-name}/SKILL.md
+│   │       │   └── lisa/skills/{skill-name}/SKILL.md
+│   │       ├── services/            # mlx-vision-server.py / tts-server.py
+│   │       ├── ecosystem.config.js  # PM2 配置（纳入 Git）
+│   │       └── package.json
+│   │
+│   ├── HiveClaw/                    # 云端框架（占位，2026-05 启动）
+│   │
+│   ├── Docs/                        # 设计文档（纳入 Git）
+│   │   ├── HomeAI Readme.md
+│   │   ├── 00-project-overview.md
+│   │   ├── 03-configuration-management.md  # 本文件
+│   │   ├── 04-project-constitution.md
+│   │   ├── 05-environment-setup.md
+│   │   ├── 08-claudecode-handbook.md
+│   │   ├── 09-evolution-version.md
+│   │   └── 10-engineering-notes.md
+│   │
+│   ├── HomeAILocal/                 # HomeAI 本地实例代码（纳入 Git）
+│   │   ├── Scripts/                 # 工具脚本
+│   │   │   ├── gateway-watchdog.js  # Gateway 存活探测 + 自动重启（PM2 管理）
+│   │   │   ├── distill-memories.py  # 家人对话 → Kuzu 三元组蒸馏
+│   │   │   ├── distill-agent-memories.py
+│   │   │   ├── render-knowledge.py  # Kuzu → inject.md 渲染
+│   │   │   ├── export-claude-session.py
+│   │   │   ├── start-homeai.sh      # launchd 启动脚本
+│   │   │   └── check-plugin.sh      # 编译检查（改 index.ts 后必须先跑）
+│   │   └── Config/                  # 配置模板
+│   │       ├── openclaw.example.json
+│   │       └── machine-profile.json
+│   │
+│   └── HomeAICloud/                 # HomeAI 云端实例（占位）
 │
-├── crewclaw/                        # 唯一代码目录（纳入 Git）
-│   ├── crewclaw-routing/            # crewclaw-routing OpenClaw 插件（三层路由）
-│   └── daemons/                     # wecom-entrance + workspace 模板（纳入 Git）
-│       ├── entrances/
-│       │   └── wecom/index.js       # 企业微信入口，端口 3003（PM2 管理）
-│       ├── workspace-templates/     # 框架层 Skill 模板（纳入 Git）
-│       │   ├── lucas/skills/
-│       │   │   └── {skill-name}/
-│       │   │       └── SKILL.md    # frontmatter: name + description（必须）
-│       │   ├── andy/skills/
-│       │   │   └── {skill-name}/
-│       │   │       └── SKILL.md
-│       │   └── lisa/skills/
-│       │       └── {skill-name}/
-│       │           └── SKILL.md
-│       ├── ecosystem.config.js      # PM2 配置（纳入 Git）
-│       └── package.json
-│
-│   注：Lucas / Andy / Lisa 均为 OpenClaw embedded agent（Gateway 18789 常驻）
-│       不再有独立守护进程（andy-daemon:3001 / lisa-daemon:3002 已废弃）
-│
-│   注：Lucas 不再是守护进程，改为 OpenClaw embedded agent（Gateway 常驻）
-│
-├── scripts/                         # 工具脚本（纳入 Git）
-│   ├── gateway-watchdog.js          # Gateway 存活探测 + 自动重启（PM2 管理）
-│   ├── distill-memories.py          # 家人对话 → Kuzu 三元组蒸馏（每周日 2 点）
-│   ├── distill-agent-memories.py    # 三角色 ChromaDB → Kuzu pattern 蒸馏
-│   ├── render-knowledge.py          # Kuzu → inject.md / MEMORY.md 渲染
-│   ├── init-capabilities.py         # TOOLS.md → Kuzu capability 节点初始化
-│   ├── seed-constraints.py          # 平台约束 → ChromaDB decisions（type=constraint）
-│   ├── export-claude-session.py     # 会话导出到 Obsidian 工作日志
-│   ├── migrate-chroma-docker-to-local.py  # ChromaDB Docker→本地迁移（历史脚本）
-│   └── run-finetune.sh              # MLX LoRA 微调脚本
-│
-├── data/                            # 运行时数据（不纳入 Git）
-│   ├── kuzu/                        # Kuzu 知识图谱（家人事实 + 能力 + 模式）
+├── Data/                            # 运行时数据（不纳入 Git）
+│   ├── kuzu/                        # Kuzu 知识图谱
+│   ├── chroma/                      # ChromaDB 向量库（PM2 chromadb 进程管理）
 │   ├── family/                      # 家人档案渲染产物（{userId}.inject.md）
 │   ├── corpus/                      # 三角色语料（lucas/andy/lisa-corpus.jsonl）
-│   ├── learning/                    # 进化信号（route-events.jsonl / skill-candidates.jsonl）
-│   └── uploads/                     # 家人发送的文件（按日期 + 类型分目录）
+│   ├── learning/                    # 进化信号（route-events / skill-candidates 等）
+│   ├── main/                        # Main 对话历史持久化
+│   └── uploads/                     # 家人发送的文件
 │
-├── config/                          # 配置模板（纳入 Git）
-│   ├── openclaw.example.json       # OpenClaw 配置模板
-│   └── machine-profile.json        # 机器环境配置
+├── Models/                          # 本地模型文件（不纳入 Git，体积大）
+│   ├── mlx/gemma-4-31B-lucas-fused/ # Gemma 4 LoRA 融合模型（mlx_lm.server，端口 8083）
+│   ├── mlx/Qwen2.5-VL-32B-4bit/    # 视觉模型（mlx-vision，端口 8081）
+│   └── fish-audio/s2-pro/           # Fish-Speech（TTS 备用）
 │
-├── models/                          # 本地模型配置（纳入 Git）
-│   └── Modelfile                    # Ollama 模型定义
-│
-├── logs/                            # 运行日志（不纳入 Git）
+├── Logs/                            # 运行日志（不纳入 Git）
 │   └── pm2/                         # PM2 守护进程日志
 │
-└── wecom-bot-mcp-server/            # 企业微信 MCP Server（备用方案）
+├── App/                             # 小应用（ai-box-report / bill_tracker 等）
+├── Family/                          # 家人数据（不纳入 Git）
+├── OpenClaw/                        # OpenClaw 源码参考（不纳入 Git）
+└── Temp/                            # 临时文件（ChromaLegacy 归档等）
 ```
+
+> **注**：Lucas / Andy / Lisa 均为 OpenClaw embedded agent（Gateway 18789 常驻），无独立守护进程。
 
 ### 用户级目录（`~/`）
 
@@ -171,13 +170,13 @@ HomeAI 采用**分层配置管理**，解决两个核心问题：
 
 | 路径 | 内容 |
 |------|------|
-| `crewclaw/daemons/entrances/wecom/index.js` | 企业微信入口源码（含 Main 代理逻辑）|
-| `crewclaw/daemons/ecosystem.config.js` | PM2 启动配置 |
-| `crewclaw/daemons/workspace-templates/` | 框架层 Skill 模板目录 |
-| `crewclaw/crewclaw-routing/` | crewclaw-routing OpenClaw 插件 |
-| `.env.example` | 环境变量模板 |
-| `models/Modelfile` | Ollama 模型定义 |
-| `docs/` | 全部文档 |
+| `CrewHiveClaw/CrewClaw/daemons/entrances/wecom/index.js` | 企业微信入口源码（含 Main 代理逻辑）|
+| `CrewHiveClaw/CrewClaw/daemons/ecosystem.config.js` | PM2 启动配置 |
+| `CrewHiveClaw/CrewClaw/daemons/workspace-templates/` | 框架层 Skill 模板目录 |
+| `CrewHiveClaw/CrewClaw/crewclaw-routing/` | crewclaw-routing OpenClaw 插件 |
+| `CrewHiveClaw/HomeAILocal/Scripts/` | 运维脚本（watchdog / distill / render / export 等）|
+| `CrewHiveClaw/HomeAILocal/Config/` | 配置模板（openclaw.example.json / machine-profile.json）|
+| `CrewHiveClaw/Docs/` | 全部文档 |
 
 ### 第二层：私有配置（不纳入 Git）
 
@@ -190,13 +189,13 @@ HomeAI 采用**分层配置管理**，解决两个核心问题：
 | `~/.openclaw/workspace-lucas/skills/` | Lucas 家庭专属 Skill（成员偏好、记忆规则）| 中（含家庭成员信息） |
 | `~/.openclaw/workspace-andy/skills/` | Andy 家庭专属 Skill（技术环境约束）| 低（可参考公开信息重建） |
 | `~/.openclaw/workspace-lisa/skills/` | Lisa 家庭专属 Skill（运行环境约束）| 低（可参考公开信息重建） |
-| `~/HomeAI/data/memory/` | 对话历史 | 高（隐私数据） |
+| `~/HomeAI/Data/` | 对话历史、知识图谱、语料 | 高（隐私数据） |
 
 **Skill 的双层结构**：
 
 | 层 | 路径 | 内容 | 入 Git | 第二个部署者 |
 |----|------|------|--------|------------|
-| 框架层（通用）| `crewclaw/daemons/workspace-templates/{agent}/skills/` | 跨家庭通用最佳实践 | 是 | clone 即可获得 |
+| 框架层（通用）| `CrewHiveClaw/CrewClaw/daemons/workspace-templates/{agent}/skills/` | 跨家庭通用最佳实践 | 是 | clone 即可获得 |
 | 实例层（家庭专属）| `~/.openclaw/workspace-{agent}/skills/` | 家庭成员、环境约束等 | 否 | Setup 时按模板填写 |
 
 **Skills 注入由 OpenClaw 原生负责**，不经过 crewclaw-routing 插件。OpenClaw 在 `before_prompt_build` 之前自动将实例层 skills/ 下所有符合格式的 SKILL.md 构建为 `<available_skills>` 块注入 system prompt。插件在启动时通过 `initAgentSkillsDir` 将框架层模板同步到实例层（已有文件不覆盖）。
@@ -207,15 +206,17 @@ HomeAI 采用**分层配置管理**，解决两个核心问题：
 
 | 路径 | 内容 | 可重建 |
 |------|------|-------|
-| `~/HomeAI/chroma/` | ChromaDB 向量库 | 可重建 |
-| `~/.ollama/models/` | 本地模型文件 | 可重建（重新下载）|
-| `logs/pm2/` | PM2 日志 | 可清理 |
+| `~/HomeAI/Data/chroma/` | ChromaDB 向量库（PM2 chromadb 进程）| 可重建 |
+| `~/HomeAI/Data/kuzu/` | Kuzu 知识图谱 | 可重建（重跑蒸馏）|
+| `~/HomeAI/Models/` | 本地模型文件（Gemma 4 / Qwen VL / TTS）| 可重建（重新下载）|
+| `~/.ollama/models/` | Ollama 模型文件 | 可重建（重新下载）|
+| `~/HomeAI/Logs/pm2/` | PM2 日志 | 可清理 |
 
 ### 第四层：语料（去标识化后可上传）
 
 | 路径 | 内容 | 处理方式 |
 |------|------|---------|
-| `~/HomeAI/data/corpus/` | 语料文件（lucas/andy/lisa-corpus.jsonl）| 去标识化后上传 |
+| `~/HomeAI/Data/corpus/` | 语料文件（lucas/andy/lisa-corpus.jsonl）| 去标识化后上传 |
 
 ---
 
@@ -432,21 +433,18 @@ crewclaw-routing 插件内嵌语料采集器，运行时自动写入。
 # OpenClaw 运行时状态（含 SOUL.md 等私有人格文件）
 .openclaw/
 
-# 运行时数据
-data/
-chroma/
-crewclaw/daemons/node_modules/
+# 运行时数据（HomeAI 根目录级，不在本仓库内）
+# CrewHiveClaw 仓库内需忽略的：
+CrewClaw/daemons/node_modules/
 
 # 日志
-logs/
 *.log
 
 # 模型文件
-models/finetuned/
-models/checkpoints/
+*.safetensors
+*.gguf
 
 # 临时文件
-temp/
 *.tmp
 ```
 
@@ -467,60 +465,64 @@ grep -r "sk-\|api_key\|password\|secret" --include="*.js" --include="*.json" . \
 ### 快速部署步骤
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/zxl18688925980/HomeAI.git ~/HomeAI
-cd ~/HomeAI
+# 1. 克隆主仓
+git clone https://github.com/zxl18688925980/CrewHiveClaw.git ~/HomeAI/CrewHiveClaw
+cd ~/HomeAI/CrewHiveClaw
 
 # 2. 安装全局 OpenClaw + daemon 依赖
 npm install -g openclaw
-cd crewclaw/daemons && npm install && cd ../..
+cd CrewClaw/daemons && npm install && cd ../..
 
 # 3. 配置环境变量
-cp .env.example .env
-# 编辑 .env，填写真实 API Key
+cp .env.example ~/HomeAI/.env
+# 编辑 ~/HomeAI/.env，填写真实 API Key
 
 # 4. 初始化 OpenClaw workspace（SOUL.md + AGENTS.md 人格文件）
 mkdir -p ~/.openclaw/workspace-{lucas,andy,lisa}
 # 从模板复制后按家庭实际情况修改
-cp crewclaw/daemons/workspace-templates/lucas/SOUL.md \
+cp CrewClaw/daemons/workspace-templates/lucas/SOUL.md \
    ~/.openclaw/workspace-lucas/SOUL.md
-cp crewclaw/daemons/workspace-templates/lucas/AGENTS.md \
+cp CrewClaw/daemons/workspace-templates/lucas/AGENTS.md \
    ~/.openclaw/workspace-lucas/AGENTS.md
 # 编辑 ~/.openclaw/workspace-lucas/SOUL.md
 # 填写家庭成员姓名、偏好、Lucas 的名字
 
-# 5. 配置 ~/.openclaw/openclaw.json（embedded agent + plugin 路径）
-# 参考 docs/05-environment-setup.md 中的完整示例
+# 5. 配置 ~/.openclaw/openclaw.json
+# plugin 路径填写：~/HomeAI/CrewHiveClaw/CrewClaw/crewclaw-routing
+# 参考 HomeAILocal/Config/openclaw.example.json
 
 # 6. 启动 OpenClaw Gateway（launchd）
-# 参考 docs/05-environment-setup.md 配置 ai.openclaw.gateway.plist
+# 参考 Docs/05-environment-setup.md 配置 ai.openclaw.gateway.plist
 
-# 7. 安装 Python 依赖并启动 ChromaDB（本地，不需要 Docker）
+# 7. 安装 Python 依赖并初始化数据目录
 pip3 install chromadb kuzu openai edge-tts
-mkdir -p ~/HomeAI/chroma
-nohup chromadb run --host 127.0.0.1 --port 8001 --path ~/HomeAI/chroma \
-  > ~/HomeAI/logs/chromadb.log 2>&1 &
-curl http://localhost:8001/api/v2/heartbeat   # 验证
+mkdir -p ~/HomeAI/Data/{kuzu,chroma,family,corpus,learning,uploads}
+mkdir -p ~/HomeAI/Logs/pm2
 
-# 8. 启动 Ollama 并准备本地模型
+# 8. 启动 Ollama 并准备本地嵌入模型
 brew install ollama
 ollama serve &
 ollama pull nomic-embed-text   # 向量嵌入（必须）
 
-# 9. 初始化数据目录 + Kuzu 知识图谱
-mkdir -p ~/HomeAI/data/{kuzu,family,corpus,learning,uploads}
-python3 scripts/render-knowledge.py --seed
-python3 scripts/init-capabilities.py
+# 9. 初始化 Kuzu 知识图谱
+python3 HomeAILocal/Scripts/render-knowledge.py --seed
+python3 HomeAILocal/Scripts/init-capabilities.py
 
-# 10. 启动企业微信入口 + Watchdog（PM2）
-cd crewclaw/daemons && pm2 start ecosystem.config.js && cd ../..
-# 注：Andy/Lisa 是 OpenClaw embedded agent，无独立守护进程，无 3001/3002 端口
+# 10. 配置 launchd 自动启动（可选）
+# 参考 Docs/05-environment-setup.md 配置 com.homeai.startup.plist
+# ProgramArguments 脚本路径：~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/start-homeai.sh
 
-# 11. 验证
-pm2 status                            # wecom-entrance / cloudflared / gateway-watchdog online
-curl localhost:18789/health            # Gateway
-curl localhost:3003/api/health         # wecom-entrance
-curl localhost:8001/api/v2/heartbeat   # ChromaDB
+# 11. 启动 PM2 服务
+cd CrewClaw/daemons && pm2 start ecosystem.config.js
+# 包含：chromadb / wecom-entrance / gateway-watchdog / cloudflared-tunnel
+# 注：Andy/Lisa 是 OpenClaw embedded agent，无独立守护进程
+
+# 12. 验证
+pm2 status                            # 所有服务 online
+curl localhost:18789/health            # Gateway ✓
+curl localhost:3003/api/health         # wecom-entrance ✓
+curl localhost:8001/api/v2/heartbeat   # ChromaDB ✓
+bash HomeAILocal/Scripts/check-plugin.sh  # 插件编译 ✓
 ```
 
 ### 从旧设备迁移
@@ -544,20 +546,22 @@ rsync -av old_device:~/HomeAI/chroma/ ~/HomeAI/chroma/
 
 | 配置类型 | 路径 | 纳入 Git |
 |---------|------|---------|
-| 环境变量模板 | `.env.example` | 是 |
-| 环境变量实际值 | `.env` | 否 |
-| PM2 配置 | `crewclaw/daemons/ecosystem.config.js` | 是 |
-| wecom-entrance 入口代码 | `crewclaw/daemons/entrances/wecom/index.js` | 是 |
-| crewclaw-routing 插件 | `crewclaw/crewclaw-routing/` | 是 |
-| 共享模块 | `crewclaw/daemons/shared/` | 是 |
-| 企业微信入口 | `crewclaw/daemons/entrances/wecom/index.js` | 是 |
-| Lucas 人格文件 | `~/.openclaw/workspace-lucas/SOUL.md` + `AGENTS.md` | 否 |
-| Skill 通用模板 | `crewclaw/daemons/workspace-templates/skills/skill-template.md` | 是 |
-| Skill 通用最佳实践 | `crewclaw/daemons/workspace-templates/{agent}/skills/` | 是 |
+| 环境变量模板 | `CrewHiveClaw/HomeAILocal/Config/openclaw.example.json` | 是 |
+| 环境变量实际值 | `~/HomeAI/.env` | 否 |
+| PM2 配置 | `CrewHiveClaw/CrewClaw/daemons/ecosystem.config.js` | 是 |
+| wecom-entrance 入口代码 | `CrewHiveClaw/CrewClaw/daemons/entrances/wecom/index.js` | 是 |
+| crewclaw-routing 插件 | `CrewHiveClaw/CrewClaw/crewclaw-routing/` | 是 |
+| 实例层配置（5 个 JSON）| `CrewHiveClaw/CrewClaw/crewclaw-routing/config/` | 是 |
+| 运维脚本 | `CrewHiveClaw/HomeAILocal/Scripts/` | 是 |
+| launchd 启动脚本 | `CrewHiveClaw/HomeAILocal/Scripts/start-homeai.sh` | 是 |
+| 编译检查脚本 | `CrewHiveClaw/HomeAILocal/Scripts/check-plugin.sh` | 是 |
+| Skill 框架层模板 | `CrewHiveClaw/CrewClaw/daemons/workspace-templates/{agent}/skills/` | 是 |
 | Skill 家庭专属 | `~/.openclaw/workspace-{agent}/skills/` | 否 |
+| Lucas 人格文件 | `~/.openclaw/workspace-lucas/SOUL.md` + `AGENTS.md` | 否 |
 | OpenClaw 主配置 | `~/.openclaw/openclaw.json` | 否 |
-| ChromaDB 向量库 | `~/HomeAI/chroma/` | 否 |
-| 语料文件 | `~/HomeAI/data/corpus/` | 否 |
+| ChromaDB 向量库 | `~/HomeAI/Data/chroma/` | 否 |
+| Kuzu 知识图谱 | `~/HomeAI/Data/kuzu/` | 否 |
+| 语料文件 | `~/HomeAI/Data/corpus/` | 否 |
 
 ### 服务端口速查
 
@@ -568,6 +572,7 @@ rsync -av old_device:~/HomeAI/chroma/ ~/HomeAI/chroma/
 | ChromaDB | 8001 | 本地进程（Python 包）| 向量检索服务；`chromadb run --host 127.0.0.1 --port 8001` |
 | mlx-vision | 8081 | PM2（mlx-vision）| 图片描述主力；Qwen2.5-VL-32B-4bit |
 | 本地 TTS | 8082 | PM2（local-tts）| edge-tts zh-CN-YunxiNeural；Fish-Speech S2 Pro 已下载备用 |
+| mlx-gemma4 | 8083 | PM2（mlx-gemma4）| Gemma 4 31B 4bit LoRA 微调本地模型；OpenAI 兼容接口；Lucas 本地路由备用 |
 | Ollama 本地模型 | 11434 | launchd / ollama serve | 本地推理 + 向量嵌入（nomic-embed-text）|
 
 ### 敏感级别速查
