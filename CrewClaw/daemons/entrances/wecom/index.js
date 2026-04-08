@@ -43,8 +43,8 @@ const nowCST   = () => new Date(Date.now() + 8 * 3600000).toISOString().replace(
 const todayCST = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 
 // ─── 全局路径常量（必须在任何函数定义之前）────────────────────────────────────
-const HOMEAI_ROOT    = path.join(__dirname, '../../../..');
-const WHISPER_MODEL  = path.join(HOMEAI_ROOT, 'models/whisper/ggml-base.bin');
+const HOMEAI_ROOT    = path.join(__dirname, '../../../../..');
+const WHISPER_MODEL  = path.join(HOMEAI_ROOT, 'Models/whisper/ggml-base.bin');
 const COOKIES_FILE   = path.join(HOMEAI_ROOT, 'config/douyin-cookies.txt');
 
 // 视频平台 URL 正则
@@ -807,7 +807,7 @@ app.post('/wecom/callback', async (req, res) => {
             mainImageMime = ct.includes('png') ? 'image/png' : 'image/jpeg';
             // 落盘
             const dateStr   = todayCST();
-            const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'images');
+            const uploadDir = path.join(HOMEAI_ROOT, 'Data', 'uploads', dateStr, 'images');
             fs.mkdirSync(uploadDir, { recursive: true });
             const imgExt      = mainImageMime === 'image/png' ? '.png' : '.jpg';
             const imgFilename = `main-${Date.now()}${imgExt}`;
@@ -975,10 +975,11 @@ app.post('/wecom/callback', async (req, res) => {
 app.post('/api/wecom/push-reply', async (req, res) => {
   res.json({ success: true }); // 立即 ack
 
-  const { response, replyTo, success: taskSuccess } = req.body;
+  const { response, replyTo, success: taskSuccess, alert: isAlert } = req.body;
   if (!response) return;
 
-  const rawText = taskSuccess === false ? `❌ 处理失败：${response}` : response;
+  // alert: true（alert_owner 告警）时不加 "❌ 处理失败：" 前缀——消息已有 ⚠️/🚨 图标，加前缀反而误导
+  const rawText = taskSuccess === false && !isAlert ? `❌ 处理失败：${response}` : response;
   const text = stripMarkdownForWecom(rawText);
 
   // 解析 replyTo：支持两种格式

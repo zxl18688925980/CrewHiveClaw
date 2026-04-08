@@ -6608,7 +6608,11 @@ const crewclawRoutingPlugin = {
             }
           } catch (e: unknown) {
             const errMsg = e instanceof Error ? e.message : String(e);
-            responseText = `❌ Lisa 异常：${errMsg}`;
+            // 超时/中断用用户友好描述，其他异常保留技术细节供工程师排查
+            const isTimeout = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError" || errMsg.includes("timeout") || errMsg.includes("aborted"));
+            responseText = isTimeout
+              ? "Lisa 这次实现时间比预期长，任务已暂停。我稍后会重新评估并告知进展。"
+              : `Lisa 实现遇到问题：${errMsg.slice(0, 100)}`;
             // ② Lisa→Andy 失败通知：Andy 同样需要知道 spec 未落地
             void addDecisionMemory({
               decision_id: `req_${Date.now()}-andy-outcome`,
