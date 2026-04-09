@@ -1142,6 +1142,32 @@ function archiveVisitorInKuzu(visitorToken) {
   }
 }
 
+function markVisitorDormantInKuzu(visitorToken) {
+  // 生成临时脚本将 Kuzu shadow_status 设为 dormant，fire-and-forget
+  const entityId  = `visitor:${visitorToken.toUpperCase()}`;
+  const scriptContent = [
+    'import kuzu, os, sys',
+    `db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))`,
+    'conn = kuzu.Connection(db)',
+    `conn.execute("MATCH (e:Entity {id: '${entityId}'}) SET e.shadow_status = 'dormant'")`,
+    `sys.stdout.write('dormant ${entityId}\\n')`,
+    'sys.stdout.flush()',
+    'os._exit(0)',
+  ].join('\n');
+  const tmpPath = path.join(__dirname, `_dormant_visitor_${visitorToken}.py`);
+  try {
+    fs.writeFileSync(tmpPath, scriptContent, 'utf8');
+    const proc = spawn(PYTHON3, [tmpPath], {
+      detached: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    proc.unref();
+    setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch {} }, 30_000);
+  } catch (e) {
+    log(`[VisitorSilence] Kuzu dormant 标记失败 ${visitorToken}: ${e.message}`);
+  }
+}
+
 function runVisitorDistill(visitorUserId) {
   if (!fs.existsSync(DISTILL_SCRIPT)) return;
   const logPath = path.join(__dirname, '../logs/distill-visitor.log');
@@ -1152,6 +1178,9 @@ function runVisitorDistill(visitorUserId) {
   proc.unref();
   log(`[VisitorSilence] 蒸馏已启动 ${visitorUserId}（PID ${proc.pid}）`);
 }
+
+const DORMANT_SILENCE_MS   = 30 * 24 * 60 * 60 * 1000;  // 30 天无对话 → dormant
+const DORMANT_ARCHIVE_MS   = 90 * 24 * 60 * 60 * 1000;  // dormant 后再 90 天 → archived
 
 function checkVisitorSilence() {
   if (!shouldRunVisitorSilenceScan()) return;
@@ -1174,21 +1203,43 @@ function checkVisitorSilence() {
   for (const [token, entry] of Object.entries(registry)) {
     if (!entry || entry.status === 'archived') continue;
 
+    // ── 路径1：邀请到期 → archived（不论当前 status）────────────────────────
     const expired = entry.expiresAt && now > entry.expiresAt;
-    if (!expired) continue;
+    if (expired) {
+      log(`[VisitorSilence] 邀请已过期，归档访客 ${token}（名：${entry.name || '未知'}）`);
+      registry[token].status     = 'archived';
+      registry[token].archivedAt = now;
+      changed = true;
+      archiveVisitorInKuzu(token);
+      runVisitorDistill(`visitor:${token.toUpperCase()}`);
+      continue;
+    }
 
-    log(`[VisitorSilence] 邀请已过期，归档访客 ${token}（名：${entry.name || '未知'}）`);
+    // ── 路径2：dormant 超 90 天 → archived（蒸馏留档）────────────────────────
+    if (entry.status === 'dormant') {
+      const dormantAge = entry.dormantAt ? now - entry.dormantAt : 0;
+      if (dormantAge > DORMANT_ARCHIVE_MS) {
+        log(`[VisitorSilence] dormant 超 90 天，归档访客 ${token}（名：${entry.name || '未知'}）`);
+        registry[token].status     = 'archived';
+        registry[token].archivedAt = now;
+        changed = true;
+        archiveVisitorInKuzu(token);
+        runVisitorDistill(`visitor:${token.toUpperCase()}`);
+      }
+      continue;
+    }
 
-    // 1. 更新 registry
-    registry[token].status    = 'archived';
-    registry[token].archivedAt = now;
-    changed = true;
-
-    // 2. 更新 Kuzu shadow_status
-    archiveVisitorInKuzu(token);
-
-    // 3. 触发蒸馏（留档）
-    runVisitorDistill(`visitor:${token.toUpperCase()}`);
+    // ── 路径3：active 且 30 天无对话 → dormant（不蒸馏，仅标记）─────────────
+    if (entry.status === 'active' && entry.lastInteractionAt) {
+      const silenceAge = now - entry.lastInteractionAt;
+      if (silenceAge > DORMANT_SILENCE_MS) {
+        log(`[VisitorSilence] 30 天无对话，标记 dormant 访客 ${token}（名：${entry.name || '未知'}）`);
+        registry[token].status    = 'dormant';
+        registry[token].dormantAt = now;
+        changed = true;
+        markVisitorDormantInKuzu(token);
+      }
+    }
   }
 
   if (changed) {
@@ -1252,6 +1303,6 @@ log('Andy HEARTBEAT：每日凌晨 2 点自动触发（结晶候选评估 + skil
 log('个人化蒸馏：每周日凌晨 1 点自动触发（Track A 设计判断/代码库认知 + Track C 学习目标）');
 log(`长流程任务扫描：每 ${TASK_SCAN_INTERVAL_MS / 1000}s 扫描 processing 超时任务（阈值 ${TASK_STUCK_MS / 60000} 分钟）`);
 log(`群消息推送检测：每 ${GROUP_SILENCE_SCAN_MS / 60000} 分钟扫描（静默阈值 ${GROUP_SILENCE_THRESHOLD_MS / 3_600_000} 小时，告警间隔 ${GROUP_SILENCE_ALERT_INTERVAL_MS / 3_600_000} 小时）`);
-log('访客沉寂检测：每小时扫描一次，凌晨 3 点执行——expiresAt 到期 → 蒸馏 + 归档（shadow_status=archived）');
+log('访客沉寂检测：每小时扫描一次，凌晨 3 点执行——30 天无对话 → dormant；expiresAt 到期或 dormant 超 90 天 → 蒸馏 + 归档（shadow_status=archived）');
 check(); // 启动时立即检查一次
 setInterval(check, CHECK_INTERVAL_MS);

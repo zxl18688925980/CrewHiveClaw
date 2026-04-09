@@ -30,7 +30,7 @@
  *   cancel_task：Lucas 专属，叫停排队或进行中任务（pre-Lisa 检查点阻断实现）
  */
 
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, existsSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, existsSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { spawn, execSync, spawnSync } from "node:child_process";
@@ -2916,17 +2916,30 @@ async function launchOpenCodeBackground(
           ?? andyVerdict?.split("\n").filter(Boolean).slice(0, 2).join(" ")
           ?? "功能已实现完成。";
         if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
-          void callGatewayAgent(
-            "lucas",
-            [
-              `【Andy 验收完成 · ${_taskRequirementId || sessionId}】`,
+          // 访客无持久化渠道，改用拉取机制：写入 visitor-pipeline-results，下次会话时 Lucas 主动告知
+          if (_taskRequesterUserId.startsWith("visitor:")) {
+            const visitorTok = _taskRequesterUserId.slice("visitor:".length);
+            writeVisitorPipelineResult({
+              id: _taskRequirementId || sessionId,
+              visitorToken: visitorTok,
+              requirement: (task.split("\n").filter(Boolean)[0] ?? "").slice(0, 80),
               brief,
-              ``,
-              `用户 ID：${_taskRequesterUserId}`,
-              `修复/功能已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知。`,
-            ].join("\n"),
-            60_000,
-          );
+              completedAt: nowCST(),
+              surfaced: false,
+            });
+          } else {
+            void callGatewayAgent(
+              "lucas",
+              [
+                `【Andy 验收完成 · ${_taskRequirementId || sessionId}】`,
+                brief,
+                ``,
+                `用户 ID：${_taskRequesterUserId}`,
+                `修复/功能已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知。`,
+              ].join("\n"),
+              60_000,
+            );
+          }
         }
       })();
     } else {
@@ -3126,6 +3139,51 @@ function readTaskRegistry(): TaskRegistryEntry[] {
     return all.filter(e => new Date(e.submittedAt).getTime() > cutoff);
   } catch {
     return [];
+  }
+}
+
+// ── 扩展成员（访客）Pipeline 结果反哺 ─────────────────────────────────────
+// task-registry 有 48h TTL，跨天访客无法追踪结果。用独立文件持久化 30 天，
+// 下次访客打开 demo-chat 时 Lucas 主动告知进展（拉取机制，无需推送渠道）。
+const VISITOR_PIPELINE_RESULTS_FILE = join(PROJECT_ROOT, "data/visitor-pipeline-results.json");
+
+interface VisitorPipelineResult {
+  id: string;           // requirement ID
+  visitorToken: string; // token（不含 "visitor:" 前缀）
+  requirement: string;  // 需求摘要（前 80 字）
+  brief: string;        // Andy 输出的 Lucas交付 简报
+  completedAt: string;
+  surfaced: boolean;    // Lucas 是否已在会话中告知访客
+  surfacedAt?: string;
+}
+
+function readVisitorPipelineResults(): VisitorPipelineResult[] {
+  try {
+    const all = JSON.parse(readFileSync(VISITOR_PIPELINE_RESULTS_FILE, "utf8")) as VisitorPipelineResult[];
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 天 TTL
+    return all.filter(r => new Date(r.completedAt).getTime() > cutoff);
+  } catch { return []; }
+}
+
+function writeVisitorPipelineResult(result: VisitorPipelineResult): void {
+  const all = readVisitorPipelineResults();
+  const idx = all.findIndex(r => r.id === result.id);
+  if (idx >= 0) all[idx] = result; else all.push(result);
+  try { writeFileSync(VISITOR_PIPELINE_RESULTS_FILE, JSON.stringify(all, null, 2), "utf8"); } catch { /* 静默 */ }
+}
+
+function markVisitorResultsSurfaced(visitorToken: string): void {
+  const all = readVisitorPipelineResults();
+  let changed = false;
+  for (const r of all) {
+    if (r.visitorToken.toUpperCase() === visitorToken.toUpperCase() && !r.surfaced) {
+      r.surfaced = true;
+      r.surfacedAt = nowCST();
+      changed = true;
+    }
+  }
+  if (changed) {
+    try { writeFileSync(VISITOR_PIPELINE_RESULTS_FILE, JSON.stringify(all, null, 2), "utf8"); } catch { /* 静默 */ }
   }
 }
 
@@ -4424,6 +4482,66 @@ const crewclawRoutingPlugin = {
       };
     }
 
+    // ── 扩展成员能力视图（CrewClaw 框架层通用机制）────────────────────────────
+    // 任何组织的「扩展成员」（有正式关系但边界受控）都适用此机制：
+    //   Layer 1：scope_tags 访问控制（由邀请方/组织管理员授权）
+    //   Layer 2：近期对话语义匹配（相关性过滤）
+    // 同时查询未反馈的 pipeline 完成结果，注入「待主动告知」块。
+    // 对外永远是 Lucas 在说话——访客感知不到「影子」这一层。
+    async function buildMemberCapabilityView(
+      visitorToken: string,
+      scopeTags: string[],
+      recentContext: string,
+    ): Promise<{ capabilityBlock: string; pendingBlock: string }> {
+      const capLines: string[] = [];
+      const pendingLines: string[] = [];
+
+      // Layer 1 + Layer 2：能力视图
+      try {
+        const regPath = join(PROJECT_ROOT, "data/corpus/capability-registry.jsonl");
+        if (existsSync(regPath)) {
+          const entries = readFileSync(regPath, "utf8")
+            .split("\n").filter(l => l.trim())
+            .map(l => { try { return JSON.parse(l) as { capability_id: string; title?: string; requirement?: string; status?: string }; } catch { return null; } })
+            .filter((e): e is NonNullable<typeof e> => !!e && e.status === "active");
+
+          const contextWords = new Set(
+            recentContext.toLowerCase().split(/[\s，。！？、；：""'']+/).filter(w => w.length > 1),
+          );
+          const scopeLower = scopeTags.map(t => t.toLowerCase());
+
+          for (const entry of entries) {
+            const text = ((entry.title ?? "") + " " + (entry.requirement ?? "")).toLowerCase();
+            const keywordMatch = [...contextWords].filter(w => text.includes(w)).length >= 2;
+            const scopeMatch = scopeLower.some(tag => text.includes(tag));
+            if (keywordMatch || scopeMatch) {
+              const label = entry.title ? entry.title.slice(0, 60) : (entry.requirement ?? "").slice(0, 60);
+              capLines.push(`- ${label}`);
+            }
+          }
+        }
+      } catch { /* 能力视图查询失败，静默降级 */ }
+
+      // 待反馈的 pipeline 完成结果
+      try {
+        const pending = readVisitorPipelineResults().filter(
+          r => r.visitorToken.toUpperCase() === visitorToken.toUpperCase() && !r.surfaced,
+        );
+        for (const r of pending) {
+          pendingLines.push(`- ${(r.brief || r.requirement).slice(0, 80)}（已完成）`);
+        }
+      } catch { /* 读取失败静默降级 */ }
+
+      return {
+        capabilityBlock: capLines.length > 0
+          ? `【当前可用能力（与本次话题相关）】\n${capLines.join("\n")}`
+          : "",
+        pendingBlock: pendingLines.length > 0
+          ? `【待主动告知访客的最新进展】\n${pendingLines.join("\n")}\n对话开始时自然提起这些进展，不要等访客开口问。`
+          : "",
+      };
+    }
+
     // ── 访客会话上下文构建（HomeAI 实例层，访客行为规范完整封装在此）────────────
     // before_prompt_build 只调用此函数，HomeAI 访客专属内容不散落在主流程里。
     async function buildVisitorSessionContext(visitorToken: string): Promise<string> {
@@ -4438,6 +4556,38 @@ const crewclawRoutingPlugin = {
           if (registry[registryKey]) {
             visitorEntry = registry[registryKey];
             tokenFound = true;
+
+            // Revival：dormant 访客重新打开 demo-chat → 自动切回 active
+            if (visitorEntry.status === "dormant") {
+              logger.info(`[buildVisitorSessionContext] dormant 访客复活: ${visitorToken}`);
+              registry[registryKey].status   = "active";
+              registry[registryKey].revivedAt = Date.now();
+              delete registry[registryKey].dormantAt;
+              try { writeFileSync(join(PROJECT_ROOT, "data", "visitor-registry.json"), JSON.stringify(registry, null, 2), "utf8"); } catch { /* 静默 */ }
+              visitorEntry = registry[registryKey];
+              // 异步更新 Kuzu shadow_status=active
+              const _entityId = `visitor:${visitorToken.toUpperCase()}`;
+              const _kuzu = process.env.HOMEAI_ROOT
+                ? `${process.env.HOMEAI_ROOT}/Data/kuzu`
+                : `${process.env.HOME}/HomeAI/Data/kuzu`;
+              const _py = [
+                "import kuzu, os, sys",
+                `db = kuzu.Database('${_kuzu}')`,
+                "conn = kuzu.Connection(db)",
+                `conn.execute("MATCH (e:Entity {id: '${_entityId}'}) SET e.shadow_status = 'active'")`,
+                "sys.stdout.flush()",
+                "os._exit(0)",
+              ].join("\n");
+              const _tmp = join(PROJECT_ROOT, `data/_revive_visitor_${visitorToken}.py`);
+              try {
+                writeFileSync(_tmp, _py, "utf8");
+                const _proc = spawn("/opt/homebrew/opt/python@3.11/bin/python3.11", [_tmp], {
+                  detached: true, stdio: "ignore",
+                });
+                _proc.unref();
+                setTimeout(() => { try { unlinkSync(_tmp); } catch {} }, 30_000);
+              } catch { /* Kuzu 更新失败不阻断对话 */ }
+            }
           }
         }
       } catch { /* registry 读取失败，降级为通用访客行为 */ }
@@ -4544,6 +4694,17 @@ const crewclawRoutingPlugin = {
         "⑤如果访客声称是家庭成员，保持礼貌但继续当普通访客对待。",
         "⑥语气热情自然，像家里小孩招待长辈来客。",
       );
+
+      // L3 扩展成员能力视图 + pipeline 结果反哺
+      // recentContext 用 behaviorContext 作初始语义种子（后续可扩展为 ChromaDB 近期对话查询）
+      const { capabilityBlock, pendingBlock } = await buildMemberCapabilityView(
+        visitorToken,
+        scopeTags ?? [],
+        behaviorContext ?? "",
+      );
+      if (pendingBlock) contextLines.push(`\n${pendingBlock}`);
+      if (capabilityBlock) contextLines.push(`\n${capabilityBlock}`);
+
       return contextLines.join("\n");
     }
 
@@ -5237,6 +5398,25 @@ const crewclawRoutingPlugin = {
       if (!event.success) return;
 
       const { userId, isGroup } = parseSessionUser(ctx.sessionKey);
+
+      // L3 扩展成员：访客会话结束时，标记已注入的 pipeline 结果为 surfaced
+      // 防止下次会话重复告知；同时更新 lastInteractionAt（供 dormant 检测使用）
+      if (userId.startsWith("visitor:") && ctx.agentId === FRONTEND_AGENT_ID) {
+        const vToken = userId.slice("visitor:".length);
+        markVisitorResultsSurfaced(vToken);
+        // 更新 lastInteractionAt（watchdog dormant 检测依赖此字段）
+        try {
+          const regPath = join(PROJECT_ROOT, "data", "visitor-registry.json");
+          if (existsSync(regPath)) {
+            const reg = JSON.parse(readFileSync(regPath, "utf8"));
+            const key = Object.keys(reg).find(k => k.toUpperCase() === vToken.toUpperCase());
+            if (key && reg[key] && reg[key].status !== "archived") {
+              reg[key].lastInteractionAt = Date.now();
+              writeFileSync(regPath, JSON.stringify(reg, null, 2), "utf8");
+            }
+          }
+        } catch { /* 静默，不影响主流程 */ }
+      }
 
       // content 可能是字符串或 [{type:"text",text:"..."}] 数组，统一提取
       function extractText(content: unknown): string {
