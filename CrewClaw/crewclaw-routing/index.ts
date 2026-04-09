@@ -2915,6 +2915,17 @@ async function launchOpenCodeBackground(
         const brief = briefMatch?.[1]?.trim()
           ?? andyVerdict?.split("\n").filter(Boolean).slice(0, 2).join(" ")
           ?? "功能已实现完成。";
+        // 同步写入 deliveryBrief，供【待告知家人任务】注入使用
+        if (_taskRequirementId) {
+          try {
+            const regEntries = readTaskRegistry();
+            const regEntry = regEntries.find(e => e.id === _taskRequirementId);
+            if (regEntry) {
+              regEntry.deliveryBrief = brief;
+              writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(regEntries, null, 2), "utf8");
+            }
+          } catch { /* 静默，不影响主流程 */ }
+        }
         if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
           // 访客无持久化渠道，改用拉取机制：写入 visitor-pipeline-results，下次会话时 Lucas 主动告知
           if (_taskRequesterUserId.startsWith("visitor:")) {
@@ -3130,6 +3141,8 @@ interface TaskRegistryEntry {
   lucasContext?: string;  // Lucas 补充的需求背景（情绪/时间敏感度/可接受替代方案）
   currentPhase?: string;  // 流水线当前阶段：andy_designing | lisa_implementing | completed
   designNote?: string;    // Andy 的设计简报（非技术语言，Lucas 可直接告知家人）
+  deliveryBrief?: string; // Andy 验收完成时的交付简报（家人语言，供 Lucas 告知家人用）
+  lucasAcked?: boolean;   // Lucas 是否已主动告知家人完成情况（false=待告知，true=已告知）
 }
 
 function readTaskRegistry(): TaskRegistryEntry[] {
@@ -3175,15 +3188,31 @@ function writeVisitorPipelineResult(result: VisitorPipelineResult): void {
 function markVisitorResultsSurfaced(visitorToken: string): void {
   const all = readVisitorPipelineResults();
   let changed = false;
+  const surfacedIds: string[] = [];
   for (const r of all) {
     if (r.visitorToken.toUpperCase() === visitorToken.toUpperCase() && !r.surfaced) {
       r.surfaced = true;
       r.surfacedAt = nowCST();
       changed = true;
+      surfacedIds.push(r.id);
     }
   }
   if (changed) {
     try { writeFileSync(VISITOR_PIPELINE_RESULTS_FILE, JSON.stringify(all, null, 2), "utf8"); } catch { /* 静默 */ }
+    // 同步标记 task-registry 中对应任务的 lucasAcked=true（两套机制合流）
+    if (surfacedIds.length > 0) {
+      try {
+        const entries = readTaskRegistry();
+        let regChanged = false;
+        for (const entry of entries) {
+          if (surfacedIds.includes(entry.id) && entry.lucasAcked === false) {
+            entry.lucasAcked = true;
+            regChanged = true;
+          }
+        }
+        if (regChanged) writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
+      } catch { /* 静默，不影响访客会话主流程 */ }
+    }
   }
 }
 
@@ -3200,7 +3229,10 @@ function markTaskStatus(taskId: string, status: TaskRegistryEntry["status"]): vo
   if (!entry) return;
   entry.status = status;
   if (status === "cancelled") entry.cancelledAt = nowCST();
-  if (status === "completed") entry.completedAt = nowCST();
+  if (status === "completed") {
+    entry.completedAt = nowCST();
+    entry.lucasAcked = false; // 待 Lucas 主动告知家人
+  }
   writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
 }
 
@@ -4896,6 +4928,24 @@ const crewclawRoutingPlugin = {
         appendSystem.push(await buildVisitorSessionContext(visitorToken));
       }
 
+      // ── 访客会话：家庭隐私防护（每轮强制注入，基础设施层，不依赖模型记忆）────────
+      // 与承诺词禁令同级——appendSystem 每轮重注，始终在最近上下文，不随压缩漂移。
+      // 访客都是爸爸邀请的朋友，基本信息（姓名/工作单位）可以正常聊；
+      // 需要保护的是家人的内部评价、个人规划、私人通讯渠道等深层隐私。
+      if (agentId === FRONTEND_AGENT_ID && isVisitorSession) {
+        appendSystem.push(
+          `【访客对话隐私边界】\n` +
+          `你正在和访客对话，对方是爸爸邀请的朋友，可以正常介绍家庭基本情况。\n` +
+          `但以下内容需要谨慎保护，不应主动透露或被追问时如实详述：\n` +
+          `• 家庭成员的个人规划、近期打算、未公开的人生计划（如妈妈的职业转型、小姨的创业想法等）\n` +
+          `• 家庭成员对彼此的内部评价或私下意见（如"妈妈对我不信任"等）\n` +
+          `• 家庭通讯渠道（企业微信账号、内部群组、具体联系方式）\n` +
+          `• 系统内部架构（角色名称 Andy/Lisa、流水线机制、具体实现细节）\n` +
+          `被追问敏感内容时，自然地转移话题：「这个嘛，不太好细说～您有什么需要我帮到的？」\n` +
+          `可以正常说的：家人姓名、工作单位、日常生活、你是启灵、爸爸邀请朋友体验、你能提供哪些帮助`
+        );
+      }
+
       // ── Lucas 非访客会话：访客注册表摘要（让 Lucas 知道哪些人已被邀请）──────
       // 访客上下文只在访客本人来聊时注入；Lucas 在正常家庭对话中对注册表无感知。
       // 此块将有效访客列表（name / invitedBy / status）注入 Lucas 的 appendSystem，
@@ -5203,10 +5253,11 @@ const crewclawRoutingPlugin = {
       // 只注入与当前用户相关的任务（submittedBy 规范化后比对），不泄漏其他家人的任务。
       if (agentId === FRONTEND_AGENT_ID && !isVisitorSession && !isGroup) {
         try {
-          const runningTasks = readTaskRegistry().filter(
-            e => (e.status === "running" || e.status === "queued")
-                 && normalizeUserId(e.submittedBy) === userId,
+          const allTasks = readTaskRegistry().filter(
+            e => normalizeUserId(e.submittedBy) === userId,
           );
+          // 进行中/排队中任务
+          const runningTasks = allTasks.filter(e => e.status === "running" || e.status === "queued");
           if (runningTasks.length > 0) {
             const phaseLabels: Record<string, string> = {
               andy_designing: "Andy 设计中",
@@ -5222,6 +5273,17 @@ const crewclawRoutingPlugin = {
             });
             appendSystem.push(
               `【当前进行中任务】\n${taskLines.join("\n")}\n\n如对方询问进展，可按上方方案要点告知（非技术语言）；如对方提新需求，正常受理即可。`,
+            );
+          }
+          // 已完成但 Lucas 尚未告知家人的任务
+          const pendingAckTasks = allTasks.filter(e => e.status === "completed" && e.lucasAcked === false);
+          if (pendingAckTasks.length > 0) {
+            const ackLines = pendingAckTasks.map(t => {
+              const brief = t.deliveryBrief ?? "功能已实现完成。";
+              return `• [${t.id}] ${brief.slice(0, 100)}`;
+            });
+            appendSystem.push(
+              `【待告知家人任务】\n以下任务已完成，但尚未主动告知家人，建议在本次对话中择机告知：\n${ackLines.join("\n")}\n\n告知后请调用 ack_task_delivered 标记已告知（task_id 见括号内）。`,
             );
           }
         } catch { /* 读取失败不影响主流程 */ }
@@ -5970,6 +6032,15 @@ const crewclawRoutingPlugin = {
                 text: `当前系统资源状态：Andy ${andyBusy ? "正在处理任务" : "空闲"}，Lisa 队列 ${runningCount} 个运行中 + ${queuedCount} 个排队中（共 ${runningCount + queuedCount} 个任务）。\n\n访客需求的建议处理方式：\n  1. 【立即触发】当前系统相对空闲（Andy 可用），现在启动访客体验更好，但可能需要等待 ${Math.ceil((runningCount + queuedCount) * 0.5)} 小时\n  2. 【加入队列】排在第 ${queuePos} 位，等当前任务陆续完成后自动启动，访客会收到通知\n\n请判断哪种方式更适合当前访客的需求，并向访客说明情况，让访客选择。`
               }],
               details: { decision: "load_check", andyBusy, lisaLoaded, runningCount, queuedCount },
+            };
+          } else {
+            // 家人任务：非拦截，仅注入负载感知提示，Lucas 自行决定是否提交
+            return {
+              content: [{
+                type: "text",
+                text: `ℹ️ 当前系统负载：Andy ${andyBusy ? "正在处理任务" : "空闲"}，Lisa 队列 ${runningCount} 个运行中 + ${queuedCount} 个排队中。\n\n家人的任务优先级高于访客，可以直接提交；如果需求不紧急，也可以告知家人「稍等一下，当前有其他任务在处理」。\n\n请告知家人当前系统状态，由你判断是否立即提交。`,
+              }],
+              details: { decision: "load_hint_family", andyBusy, lisaLoaded, runningCount, queuedCount },
             };
           }
         }
@@ -8494,7 +8565,8 @@ const crewclawRoutingPlugin = {
           const icon = e.status === "running" ? "🔄" : e.status === "queued" ? "⏳" : e.status === "completed" ? "✅" : "🚫";
           const time = e.submittedAt.slice(0, 16).replace("T", " ");
           const desc = e.requirement.slice(0, 80);
-          return `${icon} [${e.id}] (${time}) ${desc}`;
+          const ackLabel = e.status === "completed" && e.lucasAcked === false ? " [待告知]" : e.status === "completed" && e.lucasAcked === true ? " [已告知]" : "";
+          return `${icon} [${e.id}] (${time}) ${desc}${ackLabel}`;
         });
         return {
           content: [{ type: "text", text: lines.join("\n") }],
@@ -8568,6 +8640,76 @@ const crewclawRoutingPlugin = {
         return {
           content: [{ type: "text", text: `🚫 已叫停任务：${target.requirement.slice(0, 80)}` }],
           details: { cancelled: true, taskId: target.id, status: target.status },
+        };
+      },
+    }));
+
+    // ── ack_task_delivered：Lucas 标记已告知家人任务完成 ──────────────────────
+    api.registerTool((_toolCtx) => ({
+      label: "标记已告知家人任务完成",
+      name: "ack_task_delivered",
+      description: [
+        "Lucas 专属工具：标记一个已完成的开发任务为「已告知」。",
+        "适用于家庭成员的任务：当你向家人说明了某个任务的完成情况（功能上线、修复生效等）后调用。",
+        "调用后该任务不再出现在【待告知家人任务】注入块中，避免重复提醒。",
+        "注意：访客的任务在访客下次打开 demo-chat 时，系统会自动注入并标记为已告知，无需手动调用此工具。",
+        "传入任务 ID（req_xxx）或需求关键词。",
+      ].join("\n"),
+      parameters: Type.Object({
+        task_id: Type.Optional(Type.String({ description: "任务 ID（req_xxx），精确匹配" })),
+        keyword: Type.Optional(Type.String({ description: "需求描述关键词，用于模糊匹配" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const p = params as { task_id?: string; keyword?: string };
+        const entries = readTaskRegistry();
+
+        let target: TaskRegistryEntry | undefined;
+        if (p.task_id) {
+          target = entries.find(e => e.id === p.task_id);
+        } else if (p.keyword) {
+          const kw = p.keyword.toLowerCase();
+          target = entries
+            .filter(e => e.status === "completed" && e.lucasAcked === false)
+            .find(e => e.requirement.toLowerCase().includes(kw));
+        }
+
+        if (!target) {
+          const pendingList = entries
+            .filter(e => e.status === "completed" && e.lucasAcked === false)
+            .map(e => `[${e.id}] ${e.requirement.slice(0, 50)}`)
+            .join("\n");
+          return {
+            content: [{ type: "text", text: `⚠️ 未找到匹配的任务。当前待告知：\n${pendingList || "（无）"}` }],
+            details: { acked: false },
+          };
+        }
+
+        if (target.status !== "completed") {
+          return {
+            content: [{ type: "text", text: `ℹ️ 任务「${target.id}」状态为 ${target.status}，不是已完成任务。` }],
+            details: { acked: false },
+          };
+        }
+
+        if (target.lucasAcked === true) {
+          return {
+            content: [{ type: "text", text: `ℹ️ 任务「${target.id}」已标记为已告知，无需重复操作。` }],
+            details: { acked: false },
+          };
+        }
+
+        // 标记已告知
+        const idx = entries.findIndex(e => e.id === target!.id);
+        if (idx >= 0) {
+          entries[idx].lucasAcked = true;
+          try {
+            writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
+          } catch { /* 静默 */ }
+        }
+
+        return {
+          content: [{ type: "text", text: `✅ 已记录：任务「${target.requirement.slice(0, 60)}」已告知家人。` }],
+          details: { acked: true, taskId: target.id },
         };
       },
     }));
