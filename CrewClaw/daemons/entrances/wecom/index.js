@@ -1557,6 +1557,105 @@ app.post('/api/demo-proxy/stt', async (req, res) => {
   }
 });
 
+// ─── Demo 语音对话端点（双向语音闭环）───────────────────────────────────────────
+// 接受语音，STT → Lucas pipeline → TTS → 返回文字+语音
+app.post('/api/demo-proxy/voice-chat', async (req, res) => {
+  if (isDemoDisabled()) return res.status(503).json({ error: 'demo_disabled', message: '演示功能暂时关闭' });
+  const sessionToken = req.headers['x-session-uuid'];
+  if (!sessionToken) return res.status(401).json({ error: 'session_required' });
+  const { audio, mimeType } = req.body || {};
+  if (!audio || typeof audio !== 'string') {
+    return res.status(400).json({ ok: false, error: 'audio base64 required' });
+  }
+
+  const ext = (mimeType && mimeType.includes('ogg')) ? 'ogg' : 'webm';
+  const tmpIn  = `/tmp/demo-vc-in-${Date.now()}.${ext}`;
+  const tmpWav = `/tmp/demo-vc-${Date.now()}.wav`;
+  const tmpMp3 = `/tmp/demo-vc-tts-${Date.now()}.mp3`;
+
+  try {
+    // Step 1: STT
+    fs.writeFileSync(tmpIn, Buffer.from(audio, 'base64'));
+    await execFileAsync('/opt/homebrew/bin/ffmpeg', [
+      '-y', '-loglevel', 'error',
+      '-i', tmpIn,
+      '-ar', '16000', '-ac', '1', '-f', 'wav',
+      tmpWav,
+    ], { timeout: 30000 });
+
+    const sttResult = await execFileAsync(WHISPER_CLI, [
+      '--model', WHISPER_MODEL,
+      '--language', 'zh',
+      '--no-timestamps',
+      '-f', tmpWav,
+    ], { timeout: 60000, encoding: 'utf8' });
+    const sttText = sttResult.trim().replace(/^\[.*?\]\s*/gm, '').trim().slice(0, 500);
+    logger.info('Demo voice-chat STT ok', { chars: sttText.length });
+
+    // Step 2: Send to Lucas pipeline
+    const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '696673d08d0ee98f3e66a30698ab4c1152b7c8784ae424d0';
+    const gatewayUrl = process.env.GATEWAY_URL || 'http://localhost:18789';
+    const inviteCode = req.headers['x-invite-code'];
+    const resolvedInviteCode = inviteCode
+      ? (resolveInviteCode(loadInvites(), inviteCode) || inviteCode)
+      : null;
+
+    const chatResp = await fetch(`${gatewayUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${gatewayToken}`,
+        'x-openclaw-agent-id': 'lucas',
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'user', content: sttText }
+        ],
+        user: `visitor:${resolvedInviteCode || sessionToken}`,
+        stream: false,
+      }),
+    });
+
+    if (!chatResp.ok) {
+      throw new Error(`Gateway returned ${chatResp.status}`);
+    }
+
+    const chatData = await chatResp.json();
+    const replyText = chatData?.choices?.[0]?.message?.content || '';
+    logger.info('Demo voice-chat reply ok', { chars: replyText.length });
+
+    // Step 3: TTS
+    const safeText = replyText.trim().slice(0, 300);
+    await new Promise((resolve, reject) => {
+      const proc = require('child_process').spawn(
+        TTS_PYTHON,
+        ['-m', 'edge_tts', '--voice', TTS_VOICE, '--text', safeText, '--write-media', tmpMp3]
+      );
+      proc.on('close', code => code === 0 ? resolve() : reject(new Error(`edge-tts exit ${code}`)));
+      proc.on('error', reject);
+      setTimeout(() => { proc.kill(); reject(new Error('edge-tts timeout')); }, 15000);
+    });
+
+    const audioBuf = fs.readFileSync(tmpMp3);
+    const audioB64 = audioBuf.toString('base64');
+
+    res.json({ ok: true, text: replyText, audio: audioB64 });
+    logger.info('Demo voice-chat ok', { sttChars: sttText.length, replyChars: replyText.length });
+  } catch (err) {
+    logger.warn('Demo voice-chat failed', { error: err.message });
+    if (err.message.includes('Gateway returned')) {
+      res.status(502).json({ ok: false, error: 'gateway_error' });
+    } else {
+      res.status(500).json({ ok: false, error: 'voice_chat_failed' });
+    }
+  } finally {
+    try { fs.unlinkSync(tmpIn); } catch {}
+    try { fs.unlinkSync(tmpWav); } catch {}
+    try { fs.unlinkSync(tmpMp3); } catch {}
+  }
+});
+
 // ─── Demo Vision 端点（访客图片理解）────────────────────────────────────────────
 // 接受 base64 图片，复用 describeImageWithLlava，返回中文描述
 app.post('/api/demo-proxy/vision', async (req, res) => {

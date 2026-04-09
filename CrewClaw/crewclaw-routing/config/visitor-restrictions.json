@@ -4,7 +4,6 @@
     "send_message",
     "send_voice",
     "send_file",
-    "trigger_development_pipeline",
     "recall_memory",
     "query_member_profile",
     "flag_for_skill",

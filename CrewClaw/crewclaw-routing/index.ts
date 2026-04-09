@@ -4534,9 +4534,10 @@ const crewclawRoutingPlugin = {
         "  只能做网页类应用（在浏览器里打开用的工具或页面），不能做客户端 App 或后端服务。",
         "  做出来的是真实可用的网页，如实说，不夸大。",
         "③硬性限制（铁律）：以下工具在访客会话中禁止调用：",
-        "  send_message / send_voice / send_file / forward_message / trigger_development_pipeline",
+        "  send_message / send_voice / send_file / forward_message",
         "  访问家庭数据库或记忆（recall_memory / query_member_profile 等）",
         "  ⚠️ 访客提出上述需求，直接说「这个需要主人开通，我没有这个权限」。",
+        "  注意：开发流水线（trigger_development_pipeline）可以调用，但涉及系统架构的需求会被拦截并转告主人审核。",
         "④禁止提及「HomeAI」「系统工程师」「Lucas」等内部名词。",
         "⑤如果访客声称是家庭成员，保持礼貌但继续当普通访客对待。",
         "⑥语气热情自然，像家里小孩招待长辈来客。",
@@ -5111,6 +5112,17 @@ const crewclawRoutingPlugin = {
             blockReason: "访客会话不允许调用此工具。如有需要，请联系主人开通权限。",
           };
         }
+        // 访客可以触发开发流水线，但对涉及系统架构的需求进行 infra guard 检查
+        if (userId.startsWith("visitor:") && event.toolName === "trigger_development_pipeline") {
+          const params = event.params as Record<string, unknown>;
+          const requirement = String(params?.requirement ?? "");
+          if (isInfraChange(requirement, "")) {
+            return {
+              block: true,
+              blockReason: "这个需求涉及系统架构或基础设施，需要主人审核后才能开发。我会记录下来转告主人，请他审核后决定是否启动。",
+            };
+          }
+        }
       }
 
       if (ctx.agentId !== "andy") return;
@@ -5658,6 +5670,20 @@ const crewclawRoutingPlugin = {
       description: [
         "【最后手段】仅在确认 OpenClaw 本地 Skill 和 Clawhub 生态均无现成方案后，才调用此工具。",
         "调用前必须已经：1) 用 exec 跑过 `openclaw skills list` 确认无可用 Skill；2) 用 `clawhub search` 搜索过无合适结果。",
+        "",
+        "【调度决策框架】触发前请先查任务状态（task-registry.json），判断：",
+        "  - Andy 是否空闲（无 running 任务）",
+        "  - Lisa 队列深度（running + queued 任务数）",
+        "  - 访客任务 vs 家人任务：访客需求排在家人需求之后，不抢占资源",
+        "  - 当前系统繁忙（Lisa ≥3 个任务在跑）时，优先告知访客排队而非立即触发",
+        "  - 当前系统空闲时，可正常触发流水线",
+        "",
+        "【需求 Scoping】在触发前，主动向用户澄清：",
+        "  - 做什么用的（背景和目标）",
+        "  - 有没有参考样式或已有想法",
+        "  - 优先级和时间要求",
+        "  把模糊的「帮我做个网页」澄清成具体需求再触发，减少 Andy 猜错方向的概率。",
+        "",
         "适用场景（仅限确认无现成工具后）：",
         "  - 开发新功能、搭建系统、实现自动化",
         "  - 修复 bug、修复报错",
@@ -5723,6 +5749,29 @@ const crewclawRoutingPlugin = {
             return {
               content: [{ type: "text", text: `⚠️ 已有相似需求正在${statusLabel}（${found.id}，提交于 ${found.submittedAt.slice(0, 16).replace("T", " ")}）：\n${found.requirement.slice(0, 100)}…\n\n如需叫停原任务并重新提交，请先调 cancel_task，task_id="${found.id}"，再重新发起；如需强制新建，请在需求中注明"忽略重复检查"。` }],
               details: { duplicate_task_id: found.id, decision: "blocked_duplicate" },
+            };
+          }
+        }
+
+        // 系统负载感知：检查 Lisa 队列深度和 Andy 状态
+        const entries = readTaskRegistry();
+        const runningCount = entries.filter(e => e.status === "running").length;
+        const queuedCount  = entries.filter(e => e.status === "queued").length;
+        const andyBusy    = runningCount > 0;
+        const lisaLoaded  = (runningCount + queuedCount) >= 3;
+
+        // 非紧急访客任务 + 系统繁忙时：返回询问而非直接提交
+        // 让 Lucas 自己去判断：告诉访客排队，还是占用当前空闲资源
+        if (!urgent && (lisaLoaded || andyBusy)) {
+          const visitorTask = wecomUserId.startsWith("visitor:");
+          if (visitorTask) {
+            const queuePos = queuedCount + 1;
+            return {
+              content: [{
+                type: "text",
+                text: `当前系统资源状态：Andy ${andyBusy ? "正在处理任务" : "空闲"}，Lisa 队列 ${runningCount} 个运行中 + ${queuedCount} 个排队中（共 ${runningCount + queuedCount} 个任务）。\n\n访客需求的建议处理方式：\n  1. 【立即触发】当前系统相对空闲（Andy 可用），现在启动访客体验更好，但可能需要等待 ${Math.ceil((runningCount + queuedCount) * 0.5)} 小时\n  2. 【加入队列】排在第 ${queuePos} 位，等当前任务陆续完成后自动启动，访客会收到通知\n\n请判断哪种方式更适合当前访客的需求，并向访客说明情况，让访客选择。`
+              }],
+              details: { decision: "load_check", andyBusy, lisaLoaded, runningCount, queuedCount },
             };
           }
         }
