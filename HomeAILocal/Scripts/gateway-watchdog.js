@@ -213,6 +213,56 @@ async function checkMlxVision() {
   }
 }
 
+// ── ChromaDB 保活 ────────────────────────────────────────────────────────────
+
+const CHROMADB_PORT       = 8001;
+const CHROMADB_TIMEOUT_MS = 10_000;
+
+function probeChromaDB() {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: CHROMADB_PORT,
+      path: '/api/v2/heartbeat',
+      method: 'GET',
+    }, (res) => {
+      clearTimeout(timer);
+      resolve({ ok: res.statusCode === 200, status: res.statusCode });
+      res.resume();
+    });
+    req.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+    const timer = setTimeout(() => { req.destroy(); resolve({ ok: false, error: `timeout ${CHROMADB_TIMEOUT_MS}ms` }); }, CHROMADB_TIMEOUT_MS);
+    req.end();
+  });
+}
+
+function restartChromaDB() {
+  log('ChromaDB 异常，通过 PM2 重新注册启动...');
+  try {
+    execSync(`pm2 delete chromadb 2>/dev/null || true`, { shell: true });
+    execSync(`pm2 start "${ECOSYSTEM_CONFIG}" --only chromadb`, { shell: true });
+    log('ChromaDB PM2 重新注册完成');
+  } catch (e) {
+    log(`ChromaDB 重启失败: ${e.message}`);
+  }
+}
+
+async function checkChromaDB() {
+  const result = await probeChromaDB();
+  if (result.ok) {
+    log(`ChromaDB 正常 (HTTP ${result.status})`);
+  } else {
+    log(`ChromaDB 异常: ${result.error || result.status} → 触发重启`);
+    restartChromaDB();
+    await new Promise(r => setTimeout(r, 8_000));
+    const recheck = await probeChromaDB();
+    log(recheck.ok
+      ? `ChromaDB 重启后恢复正常 (HTTP ${recheck.status})`
+      : `ChromaDB 重启后仍异常: ${recheck.error || recheck.status}`
+    );
+  }
+}
+
 // ── cloudflared tunnel 保活 ───────────────────────────────────────────────────
 // 探测 metrics 端口（默认 20241）；进程存在且端口响应 = 正常
 // 重启用 pm2 delete + start，避免旧注册状态导致 pid 显示 N/A 的问题
@@ -1151,6 +1201,49 @@ function checkVisitorSilence() {
 }
 
 setInterval(checkVisitorSilence, VISITOR_SILENCE_SCAN_MS);
+
+// ─── Coordinator pipeline 目录清理 ──────────────────────────────────────────
+// data/pipeline/{reqId}/ 目录 15 天后自动删除，防止长期积累。
+// 每日凌晨 4 点执行一次。
+const PIPELINE_ROOT = path.join(
+  process.env.HOMEAI_ROOT || path.join(process.env.HOME, 'HomeAI'),
+  'data', 'pipeline'
+);
+const PIPELINE_TTL_MS = 15 * 24 * 3_600_000; // 15 天
+
+function cleanPipelineDirs() {
+  if (!fs.existsSync(PIPELINE_ROOT)) return;
+  const now = Date.now();
+  let removed = 0;
+  try {
+    for (const entry of fs.readdirSync(PIPELINE_ROOT)) {
+      const dirPath = path.join(PIPELINE_ROOT, entry);
+      try {
+        const stat = fs.statSync(dirPath);
+        if (stat.isDirectory() && now - stat.mtimeMs > PIPELINE_TTL_MS) {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+          removed++;
+        }
+      } catch (_) {}
+    }
+    if (removed > 0) log(`pipeline 清理：删除 ${removed} 个超过 15 天的目录`);
+  } catch (e) {
+    log(`pipeline 清理失败：${e.message}`);
+  }
+}
+
+function schedulePipelineCleanup() {
+  const now = new Date();
+  const next4am = new Date(now);
+  next4am.setHours(4, 0, 0, 0);
+  if (next4am <= now) next4am.setDate(next4am.getDate() + 1);
+  const msUntil4am = next4am - now;
+  setTimeout(() => {
+    cleanPipelineDirs();
+    setInterval(cleanPipelineDirs, 24 * 3_600_000); // 之后每天执行
+  }, msUntil4am);
+}
+schedulePipelineCleanup();
 
 log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama + mlx-vision，Gateway 超时阈值 ${PROBE_TIMEOUT_MS / 1000}s`);
 log('记忆蒸馏：每周日凌晨 2 点自动触发（distill-memories.py + distill-agent-memories.py 同批）');

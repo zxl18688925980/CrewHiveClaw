@@ -2225,6 +2225,7 @@ async function spawnParallelLisa(
       appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
         timestamp: nowCST(), source: "coordinator", reqId, taskId, content: result,
       });
+      void notifyEngineer(`【${reqId}·${taskId}】✅ ${title} 完成`, "pipeline", "lisa");
       return { taskId, title, result, success: true };
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
@@ -2232,6 +2233,7 @@ async function spawnParallelLisa(
         join(pipelineDir, `${taskId}.json`),
         JSON.stringify({ taskId, title, status: "failed", error: errMsg, timestamp: nowCST() }, null, 2),
       );
+      void notifyEngineer(`【${reqId}·${taskId}】❌ ${title} 失败：${errMsg.slice(0, 200)}`, "pipeline", "lisa");
       return { taskId, title, result: errMsg, success: false };
     }
   });
@@ -6341,7 +6343,7 @@ const crewclawRoutingPlugin = {
                       `【角色说明】你是技术验收方，不直接联系用户。验收完成后请输出固定格式（插件层提取后交给 Lucas 决定是否通知用户）：`,
                       `Lucas交付：[用家人听得懂的语言描述：做了什么 / 注意事项（无则省略）/ 下次这类需求可以这样说]`,
                     ].join("\n");
-                    const andyAggregateResult = await callGatewayAgent("andy", andyAggregatePrompt, 300_000);
+                    const andyAggregateResult = await callGatewayAgent("andy", andyAggregatePrompt, 600_000);
                     // 提取 Lucas交付：简报，告知 Lucas
                     if (wecomUserId && wecomUserId !== "unknown") {
                       const deliveryMatch = (andyAggregateResult ?? "").match(/Lucas交付[：:]\s*([\s\S]+?)(?:\n\n|\n[^\s]|$)/);
@@ -6363,6 +6365,7 @@ const crewclawRoutingPlugin = {
                     }
                   } catch (e) {
                     const errMsg = e instanceof Error ? e.message : String(e);
+                    void notifyEngineer(`【${reqId}】Coordinator 执行异常：${errMsg.slice(0, 300)}`, "pipeline", "andy");
                     if (wecomUserId && wecomUserId !== "unknown") {
                       void pushToChannel(`Coordinator 执行异常：${errMsg}`, wecomUserId, false);
                     }
