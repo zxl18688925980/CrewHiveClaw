@@ -4659,7 +4659,20 @@ async function runLucasProactiveLoop() {
       markCommitmentNotified(c.id).catch(() => {});
       // 异步发出，不等结果
       callGatewayAgent('lucas', message, realUserId)
-        .then(reply => logger.info('Lucas 主动跟进完成', { userId: realUserId, reply: (reply || '').slice(0, 100) }))
+        .then(reply => {
+          logger.info('Lucas 主动跟进完成', { userId: realUserId, reply: (reply || '').slice(0, 100) });
+          // 通知工程师：Lucas 主动触达了哪位家人、说了什么
+          if (WECOM_OWNER_ID) {
+            const notifyText = [
+              `📋 [Lucas → 系统工程师]`,
+              `[主动跟进] 对象：${realUserId}`,
+              `承诺：${requirement.slice(0, 100)}`,
+              ``,
+              `Lucas 回复摘要：${(reply || '（无回复）').slice(0, 200)}`,
+            ].join('\n');
+            sendLongWeComMessage(WECOM_OWNER_ID, notifyText).catch(() => {});
+          }
+        })
         .catch(e  => logger.error('Lucas 主动跟进失败', { userId: realUserId, error: e.message }));
     }
   } catch (e) {
@@ -4877,18 +4890,14 @@ ${precomputedSkillCandidates}
     // 调用 Andy（独立 session，不影响正常流水线）
     logger.info('Andy HEARTBEAT：发送巡检 prompt', { patternCount: precomputedPatterns === '无高置信度候选（confidence >= 0.8）' ? 0 : 'N/A' });
     callGatewayAgent('andy', heartbeatPrompt, 'heartbeat-cron')
-      .then(async reply => {
+      .then(reply => {
         logger.info('Andy HEARTBEAT 巡检完成', { reply: (reply || '').slice(0, 150) });
 
-        // 有主动行动时推送工程师通道（非 HEARTBEAT_OK = Andy 做了某些决策/行动）
-        // 基础设施层保障：不依赖 Andy 主动调 notify_engineer，确保工程师可跟进介入
+        // 有主动行动时推送工程师通道（fire-and-forget，不阻塞时间戳更新）
         if (reply && !reply.toUpperCase().includes('HEARTBEAT_OK') && WECOM_OWNER_ID) {
-          try {
-            await sendLongWeComMessage(WECOM_OWNER_ID, `📋 [Andy → 系统工程师]\n[HEARTBEAT 巡检报告 · ${now}]\n\n${reply}`);
-            logger.info('Andy HEARTBEAT：巡检报告已推送工程师');
-          } catch (e) {
-            logger.warn('Andy HEARTBEAT：推送工程师失败', { error: e.message });
-          }
+          sendLongWeComMessage(WECOM_OWNER_ID, `📋 [Andy → 系统工程师]\n[HEARTBEAT 巡检报告 · ${now}]\n\n${reply}`)
+            .then(() => logger.info('Andy HEARTBEAT：巡检报告已推送工程师'))
+            .catch(e => logger.warn('Andy HEARTBEAT：推送工程师失败', { error: e.message }));
         }
 
         // 更新 Andy HEARTBEAT.md 时间戳

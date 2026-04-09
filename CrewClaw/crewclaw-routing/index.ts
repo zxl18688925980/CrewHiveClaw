@@ -7105,6 +7105,16 @@ const crewclawRoutingPlugin = {
           };
         }
 
+        // 通知工程师：Lisa 主动上报阻塞，可能需要介入
+        void notifyEngineer(
+          [
+            `【Lisa 遇阻·上报 Andy】${p.requirement_id ? `[${p.requirement_id}]` : ""}`,
+            `问题：${p.issue.slice(0, 200)}`,
+            p.options ? `Lisa 备选方案：${p.options.slice(0, 100)}` : "",
+          ].filter(Boolean).join("\n"),
+          "pipeline", "lisa",
+        );
+
         // Lucas 知情：Lisa 遇到实现阻塞，Andy 在决策（用户可能在等，Lucas 可告知"正在处理"）
         if (p.requirement_id) {
           const issueTask = readTaskRegistry().find(t => t.id === p.requirement_id);
@@ -7137,6 +7147,11 @@ const crewclawRoutingPlugin = {
         try {
           // 300s：DeepSeek-R1 CoT 推理需要时间，60s 几乎必超时
           const andyReply = await callGatewayAgent("andy", parts, 300_000, threadId);
+          // 通知工程师：Andy 的决策结果（Lisa 遇阻回路）
+          void notifyEngineer(
+            `【Andy 决策·Lisa 遇阻回路】${p.requirement_id ? `[${p.requirement_id}]` : ""}\n${(andyReply ?? "无回复").slice(0, 300)}`,
+            "pipeline", "andy",
+          );
           void addDecisionMemory({
             decision_id: `lisa-issue-${Date.now()}`,
             agent: "lisa",
@@ -7472,9 +7487,20 @@ const crewclawRoutingPlugin = {
           `请对照 spec 逐项验收，输出 PASS / FAIL 结论和具体检查项。`,
         ].filter(Boolean).join("\n");
 
+        // 通知工程师：Lisa 发起独立验收
+        void notifyEngineer(
+          `【Lisa 请求验收】${p.requirement_id ? `[${p.requirement_id}]` : ""}\n${p.spec_summary.slice(0, 150)}`,
+          "pipeline", "lisa",
+        );
+
         try {
           const evalReply = await callGatewayAgent("andy-evaluator", evalPrompt, 300_000, threadId);
           const passed = evalReply.includes("PASS") && !evalReply.includes("FAIL");
+          // 通知工程师：验收结论
+          void notifyEngineer(
+            `【验收结论】${p.requirement_id ? `[${p.requirement_id}]` : ""} ${passed ? "PASS ✅" : "FAIL ❌"}\n${evalReply.slice(0, 300)}`,
+            "pipeline", "lisa",
+          );
           // Evaluator FAIL → 立即通知 Lucas（需求方），避免需求方空等
           if (!passed) {
             const lucasNotifyPrompt = [
