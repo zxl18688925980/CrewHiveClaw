@@ -4828,6 +4828,26 @@ os._exit(0)
       precomputedSkillCandidates = `读取失败：${e.message.slice(0, 60)}`;
     }
 
+    // 预计算3：andy-goals.jsonl 上轮 in_progress 条目（Loop 2 目标闭环）
+    let precomputedInProgressGoals = '无上轮进行中目标';
+    const goalsPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'andy-goals.jsonl');
+    try {
+      if (fs.existsSync(goalsPath)) {
+        const lines = fs.readFileSync(goalsPath, 'utf8').split('\n').filter(l => l.trim());
+        const inProgress = lines
+          .map(l => { try { return JSON.parse(l); } catch { return null; } })
+          .filter(Boolean)
+          .filter(g => g.status === 'in_progress');
+        if (inProgress.length > 0) {
+          precomputedInProgressGoals = inProgress.map(g =>
+            `- [${g.id}] ${g.description}\n  触发：${g.trigger}，时间：${(g.generatedAt || '').slice(0, 10)}\n  当前行动：${g.actionTaken}`
+          ).join('\n');
+        }
+      }
+    } catch (e) {
+      precomputedInProgressGoals = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
     // 读 Andy HEARTBEAT.md 作为行为规则上下文
     const andyHbPath = path.join(process.env.HOME, '.openclaw', 'workspace-andy', 'HEARTBEAT.md');
     let andyHeartbeatContent = '';
@@ -4839,6 +4859,9 @@ ${andyHeartbeatContent}
 
 ---
 
+【预计算数据 - 检查 0 前置：上轮进行中目标（Loop 2 闭环）】
+${precomputedInProgressGoals}
+
 【预计算数据 - 检查 1：Kuzu 结晶候选（has_pattern, confidence >= 0.8）】
 ${precomputedPatterns}
 
@@ -4849,13 +4872,25 @@ ${precomputedSkillCandidates}
 当前 skill-candidates pending 数量：${precomputedSkillCandidates.startsWith('无') ? 0 : precomputedSkillCandidates.split('\n').filter(l => l.startsWith('-')).length}
 最后 HEARTBEAT 巡检时间：${now}
 
-请按 HEARTBEAT.md 中的检查流程执行巡检，重点关注检查 1 和检查 2 中的结晶候选。`;
+请按 HEARTBEAT.md 中的检查流程执行巡检，重点关注检查 0 前置（目标状态更新）和检查 1、2 的结晶候选。`;
 
     // 调用 Andy（独立 session，不影响正常流水线）
     logger.info('Andy HEARTBEAT：发送巡检 prompt', { patternCount: precomputedPatterns === '无高置信度候选（confidence >= 0.8）' ? 0 : 'N/A' });
     callGatewayAgent('andy', heartbeatPrompt, 'heartbeat-cron')
-      .then(reply => {
+      .then(async reply => {
         logger.info('Andy HEARTBEAT 巡检完成', { reply: (reply || '').slice(0, 150) });
+
+        // 有主动行动时推送工程师通道（非 HEARTBEAT_OK = Andy 做了某些决策/行动）
+        // 基础设施层保障：不依赖 Andy 主动调 notify_engineer，确保工程师可跟进介入
+        if (reply && !reply.toUpperCase().includes('HEARTBEAT_OK') && WECOM_OWNER_ID) {
+          try {
+            await sendLongWeComMessage(WECOM_OWNER_ID, `📋 [Andy → 系统工程师]\n[HEARTBEAT 巡检报告 · ${now}]\n\n${reply}`);
+            logger.info('Andy HEARTBEAT：巡检报告已推送工程师');
+          } catch (e) {
+            logger.warn('Andy HEARTBEAT：推送工程师失败', { error: e.message });
+          }
+        }
+
         // 更新 Andy HEARTBEAT.md 时间戳
         try {
           const nowIso = nowCST();
