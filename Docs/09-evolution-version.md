@@ -3,8 +3,45 @@
 > **文档定位**：持续增长的干预日志。每次系统工程师发现自进化机制不足、成功矫正后，由 Claude Code 主动追加一条记录。
 > **目标读者**：后来者——接手这个系统或搭建新实例的人，用这些记录少踩坑、优化自进化机制。
 > **维护方式**：Claude Code 主动追加，不删不改，时间倒序（最新在前）。
-> **版本**: v581
-> **最后更新**: 2026-04-04
+> **版本**: v618
+> **最后更新**: 2026-04-09
+
+---
+
+## v618 · L2/L3 边界重新划定 + L3 设计方向对齐 + 生态 Skill 查找机制修复（2026-04-09）
+
+**干预类型**：架构认知校正 + 设计方向对齐 + 数据质量修复
+
+**背景**：系统工程师在 L2 基本完成后启动 L3 设计评审，发现两个问题：① 之前被标注为「L3 已完成」的内容（Andy↔Lisa 多轮协作、Coordinator 并行等）实际属于 L2（流水线效率提升），不改变组织拓扑，需要重新定性；② `context-sources.ts` 中 Andy/Lisa 各有一个 `capabilities` chromadb source 注入了 tool usage stats 而非能力描述，给角色带来误导性「已有能力参考」。
+
+**变更1：L2/L3 边界重新划定（认知对齐）**
+
+L2 = 流水线效率提升，组织拓扑不变：
+- Andy↔Lisa 多轮协作（consult_lisa / request_evaluation / report_implementation_issue）
+- Coordinator 并行任务模式（Andy 召唤 Lisa 小弟并行执行）
+- Spec 结构化 + 双评估器
+- 上述均已完成，属于 L2
+
+L3 = 组织拓扑改变，影子 Agent 加入后触发源增加、信息流向改变、协调成本上升：
+- **核心约束（已对齐）**：对外永远是 Lucas，影子是内部架构实现细节，访客/成员感知不到「专属助手」层
+- 影子做的是让 Lucas 更懂这个人、更主动，不是对外增加一个身份
+
+**变更2：访客影子作为 L3 最小验证切口（设计方向对齐）**
+
+用访客系统验证 L3 的三件事（内部架构，对外无感）：
+1. 影子层内部路由决策（能力视图内直接回，超出走完整 Lucas 上下文）
+2. 能力视图维护（初始化方式、新能力入库后如何判断纳入、pipeline 结果 surface 机制）
+3. 上行通道（影子无法处理时明确上报 Lucas；访客 pipeline 触发的责任链和优先级排序）
+
+具体机制待下次会话设计落地。
+
+**变更3：capabilities ChromaDB source 移除（data quality fix）**
+
+- `context-sources.ts` Andy 处（~第 372 行）和 Lisa 处（~第 469 行）各有一个 `id: "capabilities"` chromadb source
+- 问题：这个 source 注入的是 tool usage stats（格式如「andy 使用工具 exec 5 次」，共 3295 条），不是能力描述
+- 影响：Andy/Lisa 每轮上下文中出现误导性「已有能力参考」，实际内容对「避免重复造轮子」毫无帮助
+- 修复：两处 source 均已移除；正确的能力清单注入来源是 Kuzu `active-capabilities` source（已工作）
+- 同时更新 Andy AGENTS.md spec JSON 模板：加入 `registers_capability` 字段（Fix 1），解决 capability-registry bigram 防重复检查永远为空的根因
 
 ---
 

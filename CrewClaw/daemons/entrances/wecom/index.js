@@ -4473,7 +4473,7 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
         logger.info('notify-engineer 已发送 (bot fallback)', { type, length: message.length });
         res.json({ success: true, channel: 'bot' });
       } catch (botErr) {
-        const botErrMsg = botErr instanceof Error ? botErr.message : String(botErr);
+        const botErrMsg = botErr instanceof Error ? botErr.message : JSON.stringify(botErr);
         logger.error('notify-engineer 两通道均失败', { appError: errMsg, botError: botErrMsg });
         res.status(500).json({ success: false, error: errMsg, botError: botErrMsg });
       }

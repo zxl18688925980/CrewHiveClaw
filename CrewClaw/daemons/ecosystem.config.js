@@ -36,7 +36,7 @@ module.exports = {
     // 只保留 Channel 层（wecom-entrance）和基础设施（cloudflared）
     {
       name: 'chromadb',
-      script: '/opt/homebrew/bin/chroma',
+      script: '/Users/xinbinanshan/HomeAI/App/chromadb-venv/bin/chroma',
       args: `run --path ${path.join(require('os').homedir(), 'HomeAI/Data/chroma')} --port 8001`,
       cwd: path.join(require('os').homedir(), 'HomeAI'),
       interpreter: 'none',

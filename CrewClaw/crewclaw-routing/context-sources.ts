@@ -34,7 +34,7 @@
  *
  * 迁移路线：
  *   家人档案（file user-profile）   → person-realtime Kuzu source ready=true 后，此条删除
- *   能力清单（chromadb capabilities）→ active-capabilities Kuzu source ready=true 后，chromadb 条目删除
+ *   能力清单（chromadb capabilities）→ ✅ 已删除（2026-04-09）：capabilities 集合存的是 tool usage stats 而非能力描述，已由 active-capabilities Kuzu source 替代
  *   agent-patterns（Kuzu）          → distill-agent-memories.py write_kuzu_patterns() 完成后 ready=true
  */
 
@@ -369,13 +369,6 @@ export const contextSources: Record<string, ContextSource[]> = {
       ready: true,
     },
 
-    // 已有能力（过渡态：active-capabilities Kuzu source ready=true 后删除此条）
-    {
-      source: "chromadb", id: "capabilities",
-      collection: "capabilities", queryMode: "semantic", agentFilter: "andy",
-      topK: 5, label: "已有能力参考", inject: "prepend",
-    },
-
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）
     // 新增能力：修改 scripts/init-capabilities.py 的 CAPABILITY_REGISTRY，重新运行
     {
@@ -464,13 +457,6 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "code-history",
       collection: "code_history", queryMode: "code-history",
       topK: 5, label: "实现历史", inject: "prepend",
-    },
-
-    // 已有能力（过渡态：active-capabilities Kuzu source ready=true 后删除此条）
-    {
-      source: "chromadb", id: "capabilities",
-      collection: "capabilities", queryMode: "semantic", agentFilter: "lisa",
-      topK: 5, label: "已有能力参考", inject: "prepend",
     },
 
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）

@@ -940,6 +940,7 @@ function runPersonalizationDistill() {
 async function check() {
   await checkGateway();
   await checkOllama();
+  await checkChromaDB();
   await checkCloudflared();
   // mlx-vision 暂停（2026-04-08）：等 mlx_vlm 支持 gemma4 后恢复
   // await checkMlxVision();
@@ -1245,7 +1246,7 @@ function schedulePipelineCleanup() {
 }
 schedulePipelineCleanup();
 
-log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama + mlx-vision，Gateway 超时阈值 ${PROBE_TIMEOUT_MS / 1000}s`);
+log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama + ChromaDB + cloudflared，Gateway 超时阈值 ${PROBE_TIMEOUT_MS / 1000}s`);
 log('记忆蒸馏：每周日凌晨 2 点自动触发（distill-memories.py + distill-agent-memories.py 同批）');
 log('Andy HEARTBEAT：每日凌晨 2 点自动触发（结晶候选评估 + skill-candidates + 需求覆盖）');
 log('个人化蒸馏：每周日凌晨 1 点自动触发（Track A 设计判断/代码库认知 + Track C 学习目标）');
