@@ -962,8 +962,8 @@ app.post('/wecom/callback', async (req, res) => {
       return;
     }
 
-    // 回复单聊
-    await sendWeComMessage(fromUser, reply);
+    // 回复单聊（加身份前缀，企业应用显示「系统工程师」，需明示发言者）
+    await sendWeComMessage(fromUser, `[Main]\n${reply}`);
 
   } catch (e) {
     logger.error('WeCom POST processing error', { error: e.message });
@@ -2078,6 +2078,19 @@ const MAIN_TOOLS = [
       required: ['operation'],
     },
   },
+  {
+    name: 'log_improvement_task',
+    description: '记录系统改进建议到 Claude Code CLI 任务队列（~/HomeAI/Data/main-pending-tasks.json）。供工程师下次打开 CLI 时处理。适用于：发现架构缺口、质量积累性问题、优化机会——不是立即告警的紧急问题，而是值得工程师在下次工作周期处理的改进点。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: '改进点标题（一句话，≤40字）' },
+        description: { type: 'string', description: '详细描述：发现了什么问题、影响是什么、建议如何处理' },
+        priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'low: 优化机会 | medium: 影响体验但不紧急 | high: 架构缺口或持续积累的系统性问题' },
+      },
+      required: ['title', 'description', 'priority'],
+    },
+  },
 ];
 
 // OpenAI function-call 格式（由 MAIN_TOOLS Anthropic 格式转换）
@@ -2519,6 +2532,43 @@ async function executeMainTool(toolName, toolInput) {
       return `未知 operation：${operation}`;
     } catch (e) {
       return `update_heartbeat 失败：${e.message}`;
+    }
+  }
+
+  if (toolName === 'log_improvement_task') {
+    const tasksPath = path.join(HOMEAI_ROOT, 'Data', 'main-pending-tasks.json');
+    try {
+      const { title, description, priority = 'medium' } = toolInput;
+      if (!title || !description) return '错误：title 和 description 必填';
+
+      // 读取现有任务文件（不存在则初始化）
+      let data = { tasks: [] };
+      if (fs.existsSync(tasksPath)) {
+        try { data = JSON.parse(fs.readFileSync(tasksPath, 'utf8')); } catch {}
+      }
+      if (!Array.isArray(data.tasks)) data.tasks = [];
+
+      // 生成任务 ID（日期+序号）
+      const today = todayCST();
+      const todayCount = data.tasks.filter(t => t.id.startsWith(`mt-${today}`)).length;
+      const id = `mt-${today}-${String(todayCount + 1).padStart(3, '0')}`;
+
+      const task = {
+        id,
+        createdAt: nowCST(),
+        priority,
+        title,
+        description,
+        status: 'pending',
+        source: 'main_monitor',
+      };
+      data.tasks.push(task);
+
+      fs.mkdirSync(path.dirname(tasksPath), { recursive: true });
+      fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+      return `✅ 已记录改进任务 [${id}]：${title}（优先级：${priority}）`;
+    } catch (e) {
+      return `log_improvement_task 失败：${e.message}`;
     }
   }
 
@@ -4637,7 +4687,7 @@ async function runMainMonitorLoop() {
     } catch {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n请按三层监控协议执行：\n\nStep 1：调用 scan_pipeline_health\n- 任何进程不在线 / Gateway 不可达 → 立即推送工程师，一句话描述问题（不用等 Step 2/3）\n- 一切正常 → 继续 Step 2\n\nStep 2：质量扫描（若「上次质量扫描」不是今天）\n- 调用 scan_lucas_quality\n- 5条以上质量问题 → 立即推送工程师\n- 1-4条质量问题 → 追加到 HEARTBEAT.md「待汇总观察」节，格式：- [${now}] 具体描述\n- 无问题 → 不记录\n\nStep 3：日报判断\n- 若「上次日报发送」字段距今超过 20 小时，且「待汇总观察」节非空 → 发送日报给工程师（列出所有积累观察），更新「上次日报发送」为当前时间，清空「待汇总观察」节\n\nStep 4：完成\n- 已推送或发日报 → 简述操作\n- 什么都没做 → 回复 HEARTBEAT_OK`;
+    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n请按四层监控协议执行：\n\nStep 1：调用 scan_pipeline_health\n- 任何进程不在线 / Gateway 不可达 → 立即推送工程师，一句话描述问题（不用等后续步骤）\n- 一切正常 → 继续 Step 2\n\nStep 2：质量扫描（若「上次质量扫描」不是今天）\n- 调用 scan_lucas_quality\n- 5条以上质量问题 → 立即推送工程师\n- 1-4条质量问题 → 追加到 HEARTBEAT.md「待汇总观察」节，格式：- [${now}] 具体描述\n- 无问题 → 不记录\n\nStep 3：日报判断\n- 若「上次日报发送」字段距今超过 20 小时，且「待汇总观察」节非空 → 发送日报给工程师（列出所有积累观察），更新「上次日报发送」为当前时间，清空「待汇总观察」节\n\nStep 4：系统改进点识别\n- 综合 Step 1~3 结果及 HEARTBEAT.md 历史，判断是否存在值得工程师在下次工作周期处理的改进点（非紧急告警、非日报级问题，而是架构缺口 / 持续积累的模式性问题 / 优化机会）\n- 发现改进点 → 调用 log_improvement_task（priority: high=架构缺口, medium=影响体验, low=优化机会）\n- 无改进点 → 跳过\n\nStep 5：完成\n- 已推送或发日报或记录改进任务 → 简述操作\n- 什么都没做 → 回复 HEARTBEAT_OK`;
 
     // 使用独立消息历史，不污染业主会话
     const messages = [{ role: 'user', content: heartbeatPrompt }];
@@ -4676,7 +4726,7 @@ async function runMainMonitorLoop() {
 
     // 只在有异常时推送（非 HEARTBEAT_OK）
     if (reply && !reply.toUpperCase().includes('HEARTBEAT_OK')) {
-      const alertText = `[系统监控]\n${reply}`;
+      const alertText = `📋 [Main → 系统工程师]\n${reply}`;
       // bot 协议不支持 userId，只走 HTTP API
       try {
         await sendWeComMessage(WECOM_OWNER_ID, alertText);

@@ -5018,6 +5018,22 @@ const crewclawRoutingPlugin = {
         }
       }
 
+      // ── Loop 1：外部知识感知提醒（主动路由给 Andy）──────────────────────────
+      // 检测对方分享外部知识/洞察时，提醒 Lucas 考虑调用 share_with_andy。
+      // 不强制——Lucas 自主判断是否值得系统消化；只是把这个决策点主动推到视野里。
+      // 触发条件：Lucas 私聊 + 非访客 + 非群聊 + 消息含外部知识分享信号
+      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession && !isGroup) {
+        const kPrompt = sessionPrompt.get(ctx.sessionKey ?? "") ?? (event.prompt ?? "");
+        const KNOWLEDGE_SHARE_RE = /(分享|转发).{0,20}(文章|资料|研究|论文|报告|教程|知识)|(这篇|这份|这个).{0,10}(文章|资料|内容)|(领域|专业|行业).{0,10}(知识|经验|洞察|见解)|系统.{0,15}(能不能|可以|支持|边界|局限)|值得(了解|学习|关注)/;
+        if (KNOWLEDGE_SHARE_RE.test(kPrompt)) {
+          appendSystem.push(
+            `【知识感知提示】\n` +
+            `检测到对方可能在分享外部知识或洞察。如果这是值得 Andy 系统消化的内容（而非即时请求），` +
+            `回复后可调用 share_with_andy 将内容路由给 Andy。`
+          );
+        }
+      }
+
       // ── 会话开口当前状态感知（进行中任务注入）────────────────────────────────
       // Lucas 私聊 + 非访客时，检查是否有正在进行的开发任务并注入状态。
       // 让 Lucas 在对话开头就知道「这个人有任务在跑」，无需等对方主动问。
