@@ -6596,6 +6596,123 @@ const crewclawRoutingPlugin = {
       },
     }));
 
+    // ━━ Layer 1：ask_andy（Lucas 专属，直接向 Andy 咨询，不触发流水线）━━━━━━━━━
+
+    api.registerTool((toolCtx) => ({
+      label: "询问 Andy",
+      name: "ask_andy",
+      description: [
+        "Lucas 专属：直接向 Andy 发出技术/设计问题，不触发开发流水线，Andy 直接回答。",
+        "适用：了解系统现状、确认技术可行性、询问 Andy 对某方案的看法、澄清设计意图、了解某需求的进展。",
+        "不适用：正式提交开发需求（用 trigger_development_pipeline）、Bug 修复（用 report_bug）。",
+        "注意：这是双向协作通道——Andy 也可以主动通过 query_requirement_owner 找 Lucas 澄清需求（见触发 5）。",
+      ].join("\n"),
+      parameters: Type.Object({
+        question: Type.String({ description: "问题内容，可以是技术咨询、方案评估、系统状态确认等" }),
+        context: Type.Optional(Type.String({ description: "背景说明（可选），帮助 Andy 理解问题来源" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return {
+            content: [{ type: "text", text: "❌ ask_andy 是 Lucas 专属工具。" }],
+            details: { error: "wrong_agent" },
+          };
+        }
+        const p = params as { question: string; context?: string };
+        const prompt = [
+          `【Lucas 直接咨询】`,
+          p.context ? `背景：${p.context}` : "",
+          ``,
+          `问题：${p.question}`,
+          ``,
+          `请直接回答。这不是开发需求，不需要写 spec，也不需要触发 trigger_lisa_implementation。`,
+          `简洁回复（100~300 字），给 Lucas 能理解的答案即可。`,
+        ].filter(Boolean).join("\n");
+
+        try {
+          const andyReply = await callGatewayAgent(DESIGNER_AGENT_ID, prompt, 120_000);
+          if (!andyReply) {
+            return {
+              content: [{ type: "text", text: "Andy 暂无回复，可能正在处理其他任务，请稍后再试。" }],
+              details: { replied: false },
+            };
+          }
+          void notifyEngineer(
+            `【Lucas→Andy 直接咨询】\n问：${p.question.slice(0, 200)}\n\n━━ Andy 回复 ━━\n${andyReply.slice(0, 400)}`,
+            "info",
+            FRONTEND_AGENT_ID,
+          );
+          return {
+            content: [{ type: "text", text: andyReply }],
+            details: { replied: true },
+          };
+        } catch (e) {
+          return {
+            content: [{ type: "text", text: `Andy 查询超时，请稍后再试。错误：${(e as Error).message}` }],
+            details: { error: "andy_query_failed" },
+          };
+        }
+      },
+    }));
+
+    // ━━ Layer 1：ask_lisa（Lucas 专属，直接向 Lisa 咨询实现细节，不触发流水线）━━━━━━━━━
+
+    api.registerTool((toolCtx) => ({
+      label: "询问 Lisa",
+      name: "ask_lisa",
+      description: [
+        "Lucas 专属：直接向 Lisa 咨询实现/进展/代码相关问题，不触发开发流水线，Lisa 直接回答。",
+        "适用：了解某个功能的实现进展、确认技术细节是否已完成、询问 Lisa 对某实现方案的看法、了解当前代码库状态。",
+        "不适用：正式提交开发需求（用 trigger_development_pipeline）、Bug 修复（用 report_bug）、设计/架构问题（用 ask_andy）。",
+      ].join("\n"),
+      parameters: Type.Object({
+        question: Type.String({ description: "问题内容，可以是实现进展、技术细节、代码状态确认等" }),
+        context: Type.Optional(Type.String({ description: "背景说明（可选），帮助 Lisa 理解问题来源" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return {
+            content: [{ type: "text", text: "❌ ask_lisa 是 Lucas 专属工具。" }],
+            details: { error: "wrong_agent" },
+          };
+        }
+        const p = params as { question: string; context?: string };
+        const prompt = [
+          `【Lucas 直接咨询 Lisa】`,
+          p.context ? `背景：${p.context}` : "",
+          ``,
+          `问题：${p.question}`,
+          ``,
+          `请直接回答。这不是开发需求，不需要写 spec，也不需要启动 opencode。`,
+          `简洁回复（100~300 字），给 Lucas 能理解的答案即可。`,
+        ].filter(Boolean).join("\n");
+
+        try {
+          const lisaReply = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, prompt, 120_000);
+          if (!lisaReply) {
+            return {
+              content: [{ type: "text", text: "Lisa 暂无回复，可能正在处理其他任务，请稍后再试。" }],
+              details: { replied: false },
+            };
+          }
+          void notifyEngineer(
+            `【Lucas→Lisa 直接咨询】\n问：${p.question.slice(0, 200)}\n\n━━ Lisa 回复 ━━\n${lisaReply.slice(0, 400)}`,
+            "info",
+            FRONTEND_AGENT_ID,
+          );
+          return {
+            content: [{ type: "text", text: lisaReply }],
+            details: { replied: true },
+          };
+        } catch (e) {
+          return {
+            content: [{ type: "text", text: `Lisa 查询超时，请稍后再试。错误：${(e as Error).message}` }],
+            details: { error: "lisa_query_failed" },
+          };
+        }
+      },
+    }));
+
     // ━━ Layer 1：trigger_lisa_implementation（Andy 专属）━━━━━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
