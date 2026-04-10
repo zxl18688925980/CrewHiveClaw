@@ -94,6 +94,9 @@ const DISTILL_COOLDOWN_MS               = 30 * 60 * 1000;
 const lastDistillTrigger                = new Map<string, number>();
 const ACTIVE_THREAD_DISTILL_COOLDOWN_MS  = 6 * 60 * 60 * 1000;
 const lastActiveThreadDistillTrigger     = new Map<string, number>();
+// 主动积压排干：Lucas 对话结束时事件驱动触发，补充 off-peak 定时机制，6h 全局冷却
+const PROACTIVE_DISPATCH_COOLDOWN_MS     = 6 * 60 * 60 * 1000;
+let lastProactiveDispatchAt              = 0;
 // 盲区蒸馏：recall_memory 找不到记录时按需触发，4 小时/用户冷却
 const BLIND_SPOT_DISTILL_COOLDOWN_MS     = 4 * 60 * 60 * 1000;
 const lastBlindSpotDistillTrigger        = new Map<string, number>();
@@ -1155,13 +1158,27 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
     // 记忆召回策略（三分支）：
     // 1. 群聊：全量 human 对话，fromType=human 已排除 pipeline 对话
     // 2. 访客私聊（visitor:TOKEN）：严格按 userId 过滤，访客不可见家人对话
+    //    注意：ChromaDB 存储时 userId = 访客真实姓名（convFromId），不是 "visitor:token"
+    //    因此过滤器要用真实姓名；找不到姓名时 fallback 到 token（历史数据可能用 token 存）
     // 3. 家人私聊：Lucas 有完整人类记忆，不锁 userId——「有缺口」设计
     //    fromType=human 自然排除访客(visitor)和 Agent pipeline(agent) 对话
     const isVisitorQuery = userId.startsWith("visitor:");
+    let visitorRealName: string | null = null;
+    if (isVisitorQuery) {
+      const visitTok = userId.slice("visitor:".length); // 已 lowercase
+      try {
+        const regPath = join(PROJECT_ROOT, "data", "visitor-registry.json");
+        const reg = JSON.parse(readFileSync(regPath, "utf8")) as Record<string, { name?: string | null }>;
+        const regKey = Object.keys(reg).find(k => k.toLowerCase() === visitTok);
+        visitorRealName = (regKey && reg[regKey].name) ? reg[regKey].name! : null;
+      } catch { /* registry 读取失败，fallback 到 token */ }
+    }
+    // 访客过滤：优先用真实姓名（与写入时 convFromId 一致），找不到时用 token 格式
+    const visitorUserIdFilter = visitorRealName ?? userId;
     const where: Record<string, unknown> = isGroup
       ? humanFilter
       : isVisitorQuery
-        ? { $and: [humanFilter, { userId: { $eq: userId } }] }   // 访客只能看自己的对话，不可见群聊/家人对话
+        ? { $and: [humanFilter, { userId: { $eq: visitorUserIdFilter.toLowerCase() } }] }
         : humanFilter;
     const raw     = await chromaQuery("conversations", searchEmbedding, MEMORY_CONTEXT_SIZE * 2, isGroup ? undefined : where);
     const results = timeWeightedRerank(raw, MEMORY_CONTEXT_SIZE);
@@ -4658,11 +4675,15 @@ const crewclawRoutingPlugin = {
 
       const contextLines: string[] = [
         "【访客会话】",
-        `当前对话对象是${invitedBy}邀请来的朋友/同事，通过邀请码进入体验页面。启灵以晚辈身份和访客交流，访客是长辈。不要透露家庭成员的任何私人信息。`,
+        // ⚠️ 明确写出"当前对话对象"防止模型把 invitedBy 误认为对话方
+        visitorName
+          ? `⚠️ 当前对话对象：${visitorName}（访客，非家庭成员）。ta 通过邀请码进入，由${invitedBy}邀请。`
+          : `⚠️ 当前对话对象是访客（非家庭成员），通过邀请码进入，由${invitedBy}邀请。`,
+        "启灵以晚辈身份和访客交流，访客是长辈。不要透露家庭成员的任何私人信息。",
       ];
-      if (visitorName) contextLines.push(`\n访客姓名：${visitorName}（${invitedBy}事先提供）`);
+      if (visitorName) contextLines.push(`\n对话对象姓名：${visitorName}。请直接用其姓名或恰当称呼，不要用家庭成员称谓（如"爸爸"）称呼访客。`);
       if (behaviorContext) contextLines.push(`访客背景：${behaviorContext}`);
-      if (scopeTags) contextLines.push(`可聊话题范围：${scopeTags.join("、")}（${invitedBy}授权的知识边界，其他家庭事务不主动展开）`);
+      if (scopeTags) contextLines.push(`可聊话题范围：${scopeTags.join("、")}（${invitedBy}授权；其他家庭事务不主动展开）`);
 
       // D4 revival path：若访客有历史蒸馏档案（曾归档后再入），注入摘要
       const safeToken   = visitorToken.replace(/:/g, "_");
@@ -5942,6 +5963,49 @@ const crewclawRoutingPlugin = {
         intent: sessionIntent.get(ctx.sessionKey ?? ""),
         totalToolCalls,
       });
+
+      // ── Lucas 事件驱动积压排干（补充 off-peak 定时机制）──────────────────────
+      //
+      // 当前 off-peak 定时器（22:00-08:00，每 30 分钟）只在空闲时段处理积压任务。
+      // 系统负载不高时，白天对话结束后也可以主动排干队列，提升资源利用率。
+      //
+      // 触发条件（同时满足）：
+      //   1. Lucas 真实家庭对话（非访客、非测试）
+      //   2. task-queue.jsonl 有积压任务
+      //   3. task-registry 无 running 任务（Andy/Lisa 当前空闲）
+      //   4. 6h 全局冷却未超时（防止每轮对话都触发）
+      if (ctx.agentId === FRONTEND_AGENT_ID && !isTestSession && !userId.startsWith("visitor:")) {
+        const nowTs = Date.now();
+        if (nowTs - lastProactiveDispatchAt >= PROACTIVE_DISPATCH_COOLDOWN_MS) {
+          void (async () => {
+            try {
+              if (!existsSync(TASK_QUEUE_FILE)) return;
+              const queuedTasks = readJsonlEntries(TASK_QUEUE_FILE);
+              if (queuedTasks.length === 0) return;
+              // 检查负载：有 running 任务时不抢占（Andy/Lisa 正在工作）
+              const activeTasks = readTaskRegistry().filter(t => t.status === "running");
+              if (activeTasks.length > 0) return;
+              // 条件满足：立即排干队列，不等 22:00
+              lastProactiveDispatchAt = nowTs;
+              writeFileSync(TASK_QUEUE_FILE, "", "utf8");
+              logger.info(`[Dispatch] 主动排干任务队列：${queuedTasks.length} 个任务，系统空闲，由对话结束触发`);
+              void notifyEngineer(
+                `🚀 [主动调度] Lucas 对话结束，发现 ${queuedTasks.length} 个积压任务，系统空闲，主动启动处理（6h 冷却）`
+              );
+              queuedTasks.forEach((task, i) => {
+                setTimeout(() => {
+                  runAndyPipeline({
+                    requirement: (task as { requirement: string }).requirement,
+                    intentType:  ((task as { intentType?: string }).intentType) ?? "develop_feature",
+                    wecomUserId: ((task as { wecomUserId?: string }).wecomUserId) ?? "unknown",
+                    originalSymptom: ((task as { originalSymptom?: string }).originalSymptom) ?? (task as { requirement: string }).requirement,
+                  }).catch(() => {});
+                }, i * 2 * 60 * 1000); // 每任务间隔 2 分钟，避免并发雪崩
+              });
+            } catch { /* 静默，不影响主流程 */ }
+          })();
+        }
+      }
     });
 
     // ━━ Layer 1：trigger_development_pipeline（Lucas 专属）━━━━━━━━━━━
