@@ -7,8 +7,79 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v621
+> **版本**: v623
 > **最后更新**: 2026-04-09
+
+---
+
+## v623 · ChromaDB watchdog IPv6 探测根因修复 + 访客上下文泄漏修复 + GLM Vision API Key 修复（2026-04-09）
+
+**干预类型**：基础设施稳定性根因修复 + 安全边界修复 + 配置修复
+
+**背景**：系统工程师发现 ChromaDB 在 PM2 中持续重启（从 v622 修后的 0 次又涨回 120+ 次），watchdog 日志显示每小时探测 ChromaDB 失败后执行 `pm2 delete + start` 重启。同时发现访客上下文注入了家庭群聊内容（含"爸爸"），GLM Vision API 报 401。
+
+**变更1：ChromaDB watchdog IPv6 探测根因修复**
+
+根因链条（三层叠加）：
+1. **根因**：`gateway-watchdog.js` `probeChromaDB()` 写死 `hostname: '127.0.0.1'`（IPv4），但 ChromaDB（Python HTTP server）在 macOS 上只绑定 IPv6（`::`），Node.js `http.request` 用 IPv4 地址连接时 ECONNREFUSED
+2. **为什么以前没事**：watchdog 在 2026-04-04 才补录到 PM2（之前 ecosystem.config.js 遗漏了 watchdog 条目），4月4日前 watchdog 从未运行，ChromaDB 没人杀它。**不是 ChromaDB 变了，是"杀手"上岗了。**
+3. **v622 为什么没修住**：v622 只做了 PM2 entry 清理（删除旧 max_memory_restart），没触及探测逻辑。watchdog 下次运行照样用 IPv4 探测失败 → 又开始杀 ChromaDB
+
+修复（`gateway-watchdog.js`）：
+- **Fix 1（probeChromaDB）**：`127.0.0.1` → `localhost`（IPv4/IPv6 双栈兼容）
+- **Fix 2（checkChromaDB）**：单次探测 → 三次重试（5s 间隔），确认真正挂了才重启
+- **Fix 3（restartChromaDB）**：等待从 8s → 20s（ChromaDB 启动需 ~10s 加载 20 集合），重启后 `pm2 save` 持久化干净 entry
+
+**变更2：访客上下文泄漏修复**
+
+- **根因**：`index.ts` `queryMemories` 访客过滤器包含 `{ source: { $eq: "group" } }`，泄漏家庭群聊内容（含"爸爸"等家庭内部称呼）到访客上下文
+- **修复**：移除 `source: "group"` 条件，访客严格只能看自己的对话
+
+**变更3：GLM Vision 401 修复**
+
+- **根因**：shell 环境变量 `ZHIPU_API_KEY` 是旧 key，dotenv 不覆盖已有环境变量，PM2 继承了旧 key
+- **修复**：`export` 新 key + `pm2 delete + start` wecom-entrance 重建进程环境
+
+**变更4：访客 demo-chat URL 自动可点击**
+
+- `buildMsgEl()` 新增 URL 正则检测，自动替换为 `<a>` 标签
+
+**变更5：邀请码延期**
+
+- 6420C5（顾月峰）、B97E8E（王炜琦）有效期延至 30 天（2026-05-09）
+
+**教训**：
+- IPv4 vs IPv6 双栈问题是 macOS + Python HTTP server 的经典陷阱：Python 默认绑定 `::`（IPv6 any），Node.js 用 `127.0.0.1` 强制走 IPv4 栈。`localhost` 是正确选择——操作系统决定走哪条栈
+- "为什么以前没问题"的答案经常是"触发条件不存在"，不是代码变了
+
+---
+
+## v622 · 非法 userId 推送过滤 + ChromaDB PM2 残留配置修复（2026-04-09）
+
+**干预类型**：消息路由质量修复 + 基础设施稳定性修复
+
+**背景**：系统工程师发现企业微信 AiBot 日志中存在大量 errcode=93006（invalid chatid）错误（38 次，自 3 月 22 日起）。根因是流水线工具（trigger_development_pipeline / report_bug / Coordinator 等）在记录或推送消息时，将系统会话的内部标识（`system`/`system-scheduler`/UUID/`group`/`owner`/`heartbeat-cron`/`test`）当作真实企业微信 userId 推送到 AiBotSDK `sendMessage()`，触发无效 chatId 错误。同时，ChromaDB 在 PM2 中累计重启 71 次（平均 uptime ~19s），根因是 PM2 残留了旧版 `max_memory_restart` 配置（ecosystem.config.js 已移除但 PM2 运行时未同步）。
+
+**变更1：非法 userId 三层过滤（消息路由质量修复）**
+
+三层过滤统一使用相同的非法 userId 判定规则（`isNonHumanUser()`）：
+
+1. **index.ts `pushToChannel()`**（上游预防）：`pushToChannel` / `pushEventDriven` 调用前，非法 userId 直接 return，不发起 HTTP 请求
+2. **wecom/index.js `/api/wecom/send-message`**（工具调用验证）：`send_message` 工具触发的消息发送端点，非法 userId 返回 `{ success: true, skipped: true, reason: 'non-human-user' }`
+3. **wecom/index.js `/api/wecom/push-reply`**（回调验证）：`pushToChannel` → CHANNEL_PUSH_URL 的接收端点，非法 chatId/fromUser 静默跳过
+
+非法 userId 判定规则：
+- 空值 / `unknown` / `test` / `group` / `owner` / `heartbeat-cron`
+- `system` 前缀（含 `system-scheduler`）
+- UUID 格式（`/^[0-9a-f]{8}-...-[0-9a-f]{12}$/i`）
+
+**影响**：Lucas 通过流水线工具（`send_message`）向家人推送消息不受影响；所有非法推送（系统会话状态通知、HEARTBEAT 反馈、流水线内部状态同步）不再触发企微 API 调用，消除 93006 和 81013 错误。
+
+**变更2：ChromaDB PM2 残留配置修复**
+
+- `pm2 delete chromadb && pm2 start ecosystem.config.js --only chromadb && pm2 save`
+- 修复后：0 次重启，稳定运行
+- **教训**：PM2 的 `ecosystem.config.js` 修改后，`pm2 restart` 不会重新读取配置，必须 `pm2 delete + start` 重新注册进程
 
 ---
 

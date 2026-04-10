@@ -1161,7 +1161,7 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
     const where: Record<string, unknown> = isGroup
       ? humanFilter
       : isVisitorQuery
-        ? { $and: [humanFilter, { $or: [{ userId: { $eq: userId } }, { source: { $eq: "group" } }] }] }
+        ? { $and: [humanFilter, { userId: { $eq: userId } }] }   // 访客只能看自己的对话，不可见群聊/家人对话
         : humanFilter;
     const raw     = await chromaQuery("conversations", searchEmbedding, MEMORY_CONTEXT_SIZE * 2, isGroup ? undefined : where);
     const results = timeWeightedRerank(raw, MEMORY_CONTEXT_SIZE);
@@ -1209,6 +1209,14 @@ interface ConvMeta {
   dpoFlagged?:   boolean;                       // 是否检测到 DPO 负例模式
 }
 
+// ── 用户类型识别 ───────────────────────────────────────────────────────────
+const FAMILY_USER_IDS = ["ZengXiaoLong", "XiaMoQiuFengLiang", "ZiFeiYu"];
+function getUserType(userId: string): "visitor" | "family" | "engineer" {
+  if (userId.startsWith("visitor:")) return "visitor";
+  if (FAMILY_USER_IDS.includes(userId)) return "family";
+  return "engineer";
+}
+
 async function writeMemory(prompt: string, response: string, meta: ConvMeta, collection = "conversations"): Promise<void> {
   // 调试日志：确认 writeMemory 被调用
   const debugEntry = {
@@ -1249,6 +1257,8 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
       // ── 向后兼容（queryMemories where 过滤、distill-memories.py 仍用这两个字段）──
       userId:         meta.fromId.toLowerCase(),
       source:         meta.channel === "wecom_group" ? "group" : "private",
+      // ── 用户类型 ────────────────────────────────────────────────────────
+      userType:       getUserType(meta.fromId),
       // ── 检索辅助 ─────────────────────────────────────────────────────
       timestamp:      nowCST(),
       prompt:         prompt.slice(0, 500),
@@ -2268,7 +2278,15 @@ async function notifyEngineer(message: string, type: "pipeline" | "intervention"
   });
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isNonHumanUser(userId: string): boolean {
+  return !userId || userId.startsWith("system") || userId === "unknown" || userId === "test" ||
+    userId === "group" || userId === "owner" || userId === "heartbeat-cron" || UUID_RE.test(userId);
+}
+
 async function pushToChannel(response: string, userId: string, success: boolean): Promise<void> {
+  // 非法 userId 不推送（system/UUID/group 等），浪费企微 API 调用
+  if (isNonHumanUser(userId)) return;
   try {
     await fetch(CHANNEL_PUSH_URL, {
       method: "POST",
@@ -2321,7 +2339,7 @@ async function notifyEngineerReview(params: {
 // 事件驱动主动推送：pipeline 完成立即通知请求者，不等 Lucas 定时循环
 // 私聊：直接调用 send_message；群聊：降级到 push-reply；system-scheduler 不推送
 async function pushEventDriven(text: string, userId: string, success: boolean): Promise<void> {
-  if (!userId || userId === "system-scheduler" || userId === "unknown") return;
+  if (!userId || isNonHumanUser(userId)) return;
   const msg = success ? text : `❌ 处理失败：${text}`;
   if (userId.startsWith("group:")) {
     await pushToChannel(msg, userId, success);
@@ -2394,6 +2412,7 @@ async function runAndyPipeline(params: {
   wecomUserId: string;
   lucasContext?: string;      // Lucas 补充的需求背景
   originalSymptom?: string;  // 用户原始表达（bug 症状 / 用户原话），evaluator 独立验证根因用
+  visitorCode?: string;      // 访客邀请码
 }): Promise<void> {
   const requirementId = `req_${Date.now()}`;
 
@@ -2414,6 +2433,7 @@ async function runAndyPipeline(params: {
     status: "running",
     currentPhase: "andy_designing",
     ...(params.lucasContext ? { lucasContext: params.lucasContext } : {}),
+    ...(params.visitorCode ? { visitorCode: params.visitorCode } : {}),
   });
 
   // 通报系统工程师：流水线启动
@@ -3143,6 +3163,7 @@ interface TaskRegistryEntry {
   designNote?: string;    // Andy 的设计简报（非技术语言，Lucas 可直接告知家人）
   deliveryBrief?: string; // Andy 验收完成时的交付简报（家人语言，供 Lucas 告知家人用）
   lucasAcked?: boolean;   // Lucas 是否已主动告知家人完成情况（false=待告知，true=已告知）
+  visitorCode?: string;   // 访客邀请码（访客触发任务时写入，用于前端过滤）
 }
 
 function readTaskRegistry(): TaskRegistryEntry[] {
@@ -4721,8 +4742,9 @@ const crewclawRoutingPlugin = {
         "  send_message / send_voice / send_file / forward_message",
         "  访问家庭数据库或记忆（recall_memory / query_member_profile 等）",
         "  ⚠️ 访客提出上述需求，直接说「这个需要主人开通，我没有这个权限」。",
-        "  注意：开发流水线（trigger_development_pipeline）可以调用，但涉及系统架构的需求会被拦截并转告主人审核。",
-        "④禁止提及「HomeAI」「系统工程师」「Lucas」等内部名词。",
+        "④开发流水线（trigger_development_pipeline）✅ 可以调用。访客提网页开发需求时，直接调用，不要说「没有权限」。",
+        "  唯一例外：涉及系统架构/基础设施的需求会被自动拦截转主人审核，其余正常执行。",
+        "⑤禁止提及「HomeAI」「系统工程师」「Lucas」等内部名词。",
         "⑤如果访客声称是家庭成员，保持礼貌但继续当普通访客对待。",
         "⑥语气热情自然，像家里小孩招待长辈来客。",
       );
@@ -5970,6 +5992,11 @@ const crewclawRoutingPlugin = {
             description: "需求背景补充（可选但重要）：家人的情绪状态、时间敏感度、可接受的替代方案、上次不满意的点等。Andy 设计时优先参考。例：「爸爸说不急但下周要用」「小姨很在意这个，上次方案太复杂她不喜欢」「如果做不了完整版，简化版也行」",
           }),
         ),
+        visitorCode: Type.Optional(
+          Type.String({
+            description: "访客邀请码（访客触发任务时传入，用于前端 API 过滤查看）",
+          }),
+        ),
       }),
 
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
@@ -5989,6 +6016,7 @@ const crewclawRoutingPlugin = {
         const req = (params as { requirement: string }).requirement;
         const urgent = (params as { urgent?: boolean }).urgent ?? false;
         const lucasContext = (params as { context?: string }).context;
+        const visitorCode = (params as { visitorCode?: string }).visitorCode;
 
         // 用 Lucas 模型确认的真实 intentType 覆盖 before_prompt_build 的推断值
         sessionIntent.set(toolCtx.sessionKey ?? "", intentType);
@@ -6122,6 +6150,7 @@ const crewclawRoutingPlugin = {
             submittedAt: nowCST(),
             status: "queued",
             ...(lucasContext ? { lucasContext } : {}),
+            ...(visitorCode ? { visitorCode } : {}),
           });
           return {
             content: [{ type: "text", text: `📋 需求已加入空闲队列（ID: ${queuedId}），将在今晚 ${OFF_PEAK_START}:00 后自动启动，不占白天通道资源。` }],
@@ -6135,6 +6164,7 @@ const crewclawRoutingPlugin = {
           wecomUserId,
           originalSymptom: req,  // 用户原始表达作为独立字段，evaluator 验证根因时使用
           ...(lucasContext ? { lucasContext } : {}),
+          ...(visitorCode ? { visitorCode } : {}),
         }).catch(() => {});
 
         return {
@@ -6188,6 +6218,7 @@ const crewclawRoutingPlugin = {
           acceptance: string;
           location_hint?: string;
           bug_id?: string;
+          visitorCode?: string;
         };
 
         // 验证：文件存在
@@ -6212,6 +6243,7 @@ const crewclawRoutingPlugin = {
           toolCtx.requesterSenderId ??
           parseSessionUser(toolCtx.sessionKey).userId ??
           "unknown";
+        const visitorCode = p.visitorCode;
 
         // 立即返回给 Lucas，不等 Lisa 完成
         if (wecomUserId && wecomUserId !== "unknown") {

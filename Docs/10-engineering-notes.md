@@ -687,3 +687,28 @@ pm2 env <id> | grep "out_file\|error_file\|pm_exec_path"
 **修复**：`'../../../..'` → `'../../../../..'`（5层），同步修正 `WHISPER_MODEL`（`Models/`）和图片上传路径（`Data/`）。
 
 **教训**：monorepo 重构在路径中插入一层目录时，所有用 `__dirname` + 相对路径定义的根目录常量必须同步检查层数。`fs.existsSync` 为 false 时静默失败（不抛异常）是排查盲点，可在启动时加 warning log。
+
+### PM2 max_memory_restart 单位解析 Bug 导致 ChromaDB 无限重启（2026-04-09）
+
+**现象**：ChromaDB 每 ~25 秒被 SIGKILL 一次，PM2 autorestart 立刻重启，↺ 计数快速积累到 100+。手动前台运行完全稳定，PM2 管理必崩。
+
+**根因**：`ecosystem.config.js` 中 `max_memory_restart: '512M'` 被 PM2 误解析为 **100MB（104857600 bytes）** 而非 512MB。这是 PM2 对非标准单位字符串的已知解析 Bug。ChromaDB 稳定运行内存约 106MB，每次都超过误解析的 100MB 阈值，PM2 发 SIGKILL，autorestart 重启，再 SIGKILL，无限循环。
+
+**诊断路径**：
+1. 手动运行稳定 → PM2 管理崩溃 → 排除代码 bug，锁定 PM2 行为
+2. `~/.pm2/pm2.log` 是关键：`pm2 log <name>` 看不到，需直接 `cat ~/.pm2/pm2.log | tail -30`
+3. 关键日志行：`Process 8 restarted because it exceeds --max-memory-restart value (current_memory=111132672 max_memory_limit=104857600 [octets])`
+
+**次生问题**：PM2 快速重启循环导致多个 chroma 进程残留，全部占用 8001 端口 → 新进程绑定失败（`Address localhost:8001 is not available`）→ exit 1 → 更多重启。手动测试时 `kill $BGPID` 没清干净子进程，进一步放大了端口冲突。
+
+**修复**：移除 `max_memory_restart`，chromadb 内存平稳不需要此限制。清理残留进程：
+```bash
+pkill -f "chromadb-venv/bin/chroma"
+pm2 delete chromadb && pm2 start ecosystem.config.js --only chromadb
+```
+
+**推广结论**：
+- `max_memory_restart` 单位用数字（bytes）最安全，如 `536870912`（512MB）；字符串单位解析行为不可信
+- PM2 管理的进程出现神秘崩溃，**第一步查 `~/.pm2/pm2.log`**，不要只看自定义日志文件
+- 快速重启循环会留下僵尸进程占端口，清理时用 `pkill -f <进程特征>` 确保全杀干净
+- 附带修复：ChromaDB 迁移到 venv（`~/HomeAI/App/chromadb-venv/`），防止 Homebrew 升级破坏 numpy ABI

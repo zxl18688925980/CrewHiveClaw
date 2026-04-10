@@ -221,7 +221,7 @@ const CHROMADB_TIMEOUT_MS = 10_000;
 function probeChromaDB() {
   return new Promise((resolve) => {
     const req = http.request({
-      hostname: '127.0.0.1',
+      hostname: 'localhost',   // 用 localhost 而非 127.0.0.1，兼容 IPv4/IPv6 双栈
       port: CHROMADB_PORT,
       path: '/api/v2/heartbeat',
       method: 'GET',
@@ -241,26 +241,45 @@ function restartChromaDB() {
   try {
     execSync(`pm2 delete chromadb 2>/dev/null || true`, { shell: true });
     execSync(`pm2 start "${ECOSYSTEM_CONFIG}" --only chromadb`, { shell: true });
-    log('ChromaDB PM2 重新注册完成');
+    execSync(`pm2 save`, { shell: true });  // 持久化干净 entry，防止 resurrect 恢复旧 max_memory_restart
+    log('ChromaDB PM2 重新注册完成（已持久化）');
   } catch (e) {
     log(`ChromaDB 重启失败: ${e.message}`);
   }
 }
 
 async function checkChromaDB() {
-  const result = await probeChromaDB();
+  // 首次探测：短暂失败不等同于崩溃，可能正在启动中，先重试 3 次
+  let result = await probeChromaDB();
   if (result.ok) {
     log(`ChromaDB 正常 (HTTP ${result.status})`);
-  } else {
-    log(`ChromaDB 异常: ${result.error || result.status} → 触发重启`);
-    restartChromaDB();
-    await new Promise(r => setTimeout(r, 8_000));
-    const recheck = await probeChromaDB();
-    log(recheck.ok
-      ? `ChromaDB 重启后恢复正常 (HTTP ${recheck.status})`
-      : `ChromaDB 重启后仍异常: ${recheck.error || recheck.status}`
-    );
+    return;
   }
+  // 第一次失败，等 5 秒重试
+  log(`ChromaDB 首次探测失败: ${result.error || result.status}，5s 后重试...`);
+  await new Promise(r => setTimeout(r, 5_000));
+  result = await probeChromaDB();
+  if (result.ok) {
+    log(`ChromaDB 重试恢复正常 (HTTP ${result.status})`);
+    return;
+  }
+  // 第二次失败，再等 5 秒重试
+  log(`ChromaDB 二次探测仍失败: ${result.error || result.status}，5s 后最后一次重试...`);
+  await new Promise(r => setTimeout(r, 5_000));
+  result = await probeChromaDB();
+  if (result.ok) {
+    log(`ChromaDB 第三次探测恢复正常 (HTTP ${result.status})`);
+    return;
+  }
+  // 三次都失败，确认需要重启
+  log(`ChromaDB 三次探测均失败: ${result.error || result.status} → 触发重启`);
+  restartChromaDB();
+  await new Promise(r => setTimeout(r, 20_000));  // ChromaDB 启动需 ~10s（20 集合 + 81MB SQLite）
+  const recheck = await probeChromaDB();
+  log(recheck.ok
+    ? `ChromaDB 重启后恢复正常 (HTTP ${recheck.status})`
+    : `ChromaDB 重启后仍异常: ${recheck.error || recheck.status}`
+  );
 }
 
 // ── cloudflared tunnel 保活 ───────────────────────────────────────────────────

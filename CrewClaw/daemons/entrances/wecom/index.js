@@ -1006,6 +1006,19 @@ app.post('/api/wecom/push-reply', async (req, res) => {
     return;
   }
 
+  // 非法 userId 过滤：群聊 chatId 为 "group" / 私聊 fromUser 为 system/UUID 等都不可达
+  const _UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const isInvalidUser = (u) => !u || u.startsWith('system') || u === 'unknown' || u === 'test' ||
+    u === 'group' || u === 'owner' || u === 'heartbeat-cron' || _UUID_RE.test(u);
+  if (isGroup && isInvalidUser(chatId)) {
+    logger.info('push-reply: 跳过非法群 chatId', { chatId });
+    return;
+  }
+  if (!isGroup && isInvalidUser(fromUser)) {
+    logger.info('push-reply: 跳过非法私聊 userId', { fromUser });
+    return;
+  }
+
   try {
     if (isGroup) {
       // 群聊：优先走 bot 通道（显示「启灵」），bot 未就绪时降级到企业应用（显示「系统工程师」）
@@ -1444,6 +1457,23 @@ app.post('/api/demo-proxy/gen-invite', (req, res) => {
   const registry = loadInvites();
   const now = Date.now();
 
+  // personId 自动生成：若未传入，基于姓名生成稳定 ID（如 zhangsan-001），确保影子记忆可激活
+  let resolvedPersonId = personId;
+  if (!resolvedPersonId && name) {
+    const slug = name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '').slice(0, 8);
+    const existingSlugs = Object.values(registry)
+      .map(e => e.personId || '')
+      .filter(p => p.includes('-'));
+    let idx = 1;
+    let candidate = `${slug}-${String(idx).padStart(3, '0')}`;
+    while (existingSlugs.includes(candidate)) {
+      idx++;
+      candidate = `${slug}-${String(idx).padStart(3, '0')}`;
+    }
+    resolvedPersonId = candidate;
+    logger.info('gen-invite: auto-generated personId', { name, personId: resolvedPersonId });
+  }
+
   // 若提供 personId，从同 personId 的已有条目继承 conversationCount 和 shadowActive
   let conversationCount = 0;
   let shadowActive = false;
@@ -1464,7 +1494,7 @@ app.post('/api/demo-proxy/gen-invite', (req, res) => {
     createdAt: now,
     expiresAt: now + Math.max(1, Math.min(30, expiresInDays)) * 24 * 60 * 60 * 1000,
     shadowMemoryPath: null,
-    personId,
+    personId: resolvedPersonId,
     conversationCount,
     shadowActive,
   };
@@ -4504,6 +4534,119 @@ app.get('/api/demo-proxy/pending', (req, res) => {
   res.json({ messages: msgs });
 });
 
+// GET /api/demo-proxy/visitor-tasks — 访客查看自己的任务列表
+app.get('/api/demo-proxy/visitor-tasks', (req, res) => {
+  const inviteCode = (req.headers['x-invite-code'] || '').trim().toUpperCase();
+  if (!inviteCode) {
+    return res.status(401).json({ success: false, message: '缺少邀请码' });
+  }
+  try {
+    const TASK_FILE = path.join(HOMEAI_ROOT, 'data/learning/task-registry.json');
+    if (!fs.existsSync(TASK_FILE)) {
+      return res.json({ success: true, tasks: [] });
+    }
+    const raw = fs.readFileSync(TASK_FILE, 'utf8');
+    const entries = JSON.parse(raw);
+    const tasks = entries.filter(e =>
+      (e.visitorCode || '').toUpperCase() === inviteCode &&
+      ['completed', 'running', 'failed', 'queued'].includes(e.status)
+    ).map(e => ({
+      id: e.id,
+      title: (e.requirement || e.desc || '未知需求').slice(0, 60),
+      status: e.status,
+      submittedAt: e.submittedAt,
+      completedAt: e.completedAt,
+      cancelledAt: e.cancelledAt,
+      failureReason: e.failureReason || null,
+    }));
+    res.json({ success: true, tasks });
+  } catch (e) {
+    logger.error('visitor-tasks error', { error: e.message });
+    res.status(500).json({ success: false, message: '获取任务失败' });
+  }
+});
+
+// POST /api/demo-proxy/submit-requirement — 访客提交开发需求
+app.post('/api/demo-proxy/submit-requirement', async (req, res) => {
+  const { requirement, visitorCode } = req.body || {};
+  if (!requirement || !visitorCode) {
+    return res.status(400).json({ success: false, message: '缺少 requirement 或 visitorCode' });
+  }
+  const code = visitorCode.trim().toUpperCase();
+  try {
+    // 验证邀请码是否有效
+    const invites = loadInvites();
+    const inviteEntry = Object.entries(invites).find(([token]) => token.toUpperCase() === code);
+    if (!inviteEntry) {
+      return res.status(401).json({ success: false, message: '邀请码无效' });
+    }
+    const visitorName = inviteEntry[1].name;
+    const wecomUserId = `visitor:${code}`;
+
+    // 生成需求 ID（与 trigger_development_pipeline 保持一致）
+    const requirementId = `req_${Date.now()}`;
+
+    // 写入 task-registry.json（模拟 upsertTaskRegistry）
+    const TASK_REGISTRY_FILE = path.join(HOMEAI_ROOT, 'data/learning/task-registry.json');
+    let entries = [];
+    try {
+      if (fs.existsSync(TASK_REGISTRY_FILE)) {
+        entries = JSON.parse(fs.readFileSync(TASK_REGISTRY_FILE, 'utf8'));
+      }
+    } catch {}
+    const nowCST = new Date(Date.now() + 8 * 3600000).toISOString().replace('Z', '+08:00');
+    const idx = entries.findIndex(e => e.id === requirementId);
+    const entry = {
+      id: requirementId,
+      requirement,
+      submittedBy: wecomUserId,
+      submittedAt: nowCST,
+      status: 'running',
+      currentPhase: 'andy_designing',
+      visitorCode: code,
+    };
+    if (idx >= 0) entries[idx] = entry; else entries.push(entry);
+    fs.writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), 'utf8');
+
+    // 异步触发 Andy 流水线（fire-and-forget）
+    const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:18789';
+    const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+    const andyMessage = [
+      `【访客开发需求 · ${requirementId}】`,
+      `访客：${visitorName}（${code}）`,
+      ``,
+      requirement,
+      ``,
+      `请按顺序完成以下步骤：`,
+      `1. 调用 research_task 调研技术背景和可行性`,
+      `2. 输出完整 Implementation Spec`,
+      `3. 调用 trigger_lisa_implementation，传入 spec、user_id="${wecomUserId}"、requirement_id="${requirementId}"`,
+      ``,
+      `完成后用一句话总结规划方案。`,
+    ].join('\n');
+
+    fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'x-openclaw-agent-id': 'andy',
+      },
+      body: JSON.stringify({
+        model: 'andy',
+        messages: [{ role: 'user', content: andyMessage }],
+        stream: false,
+      }),
+    }).catch(err => logger.error('submit-requirement: Andy trigger failed', { err: err.message }));
+
+    logger.info('访客需求已提交', { visitorCode: code, visitorName, requirementId, requirement: requirement.slice(0, 50) });
+    res.json({ success: true, message: '需求已提交，我们会尽快处理' });
+  } catch (e) {
+    logger.error('submit-requirement error', { error: e.message, visitorCode: code });
+    res.status(500).json({ success: false, message: '提交失败，请稍后重试' });
+  }
+});
+
 app.post('/api/wecom/send-message', async (req, res) => {
   const { userId, text, voiceText } = req.body || {};
   if (!userId || !text) {
@@ -4521,6 +4664,16 @@ app.post('/api/wecom/send-message', async (req, res) => {
     logger.info('访客消息已推送到队列', { visitorName, token });
     return res.json({ success: true, userId, channel: 'visitor-push' });
   }
+
+  // 非法 userId 过滤：系统会话 / UUID / 群聊简写 / 测试用户 → 静默跳过，不发企微
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (userId.startsWith('system') || userId === 'unknown' || userId === 'test' ||
+      userId === 'group' || userId === 'owner' || userId === 'heartbeat-cron' ||
+      UUID_RE.test(userId)) {
+    logger.info('send-message: 跳过非法 userId', { userId, textLen: text.length });
+    return res.json({ success: true, skipped: true, reason: 'non-human-user' });
+  }
+
   // [VOICE]/[RAP] 自动检测：Lucas 工具发消息时正文含标记，自动触发语音
   const hasVoiceTag = text.includes('[VOICE]');
   const hasRapTag   = text.includes('[RAP]');

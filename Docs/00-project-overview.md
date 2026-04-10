@@ -3715,6 +3715,7 @@ fromUser != WECOM_OWNER_ID  → 拒绝，提示「此通道仅供系统工程师
 | 群消息接收 | 企业应用 callback **只推**业主主动发的单聊，不推群消息；群消息只能靠 aibot 被@触发 |
 | 群里不带@的消息 | 两条通道均收不到，Lucas 无法感知；未来企业版 + MSGAUDIT 可解决（等小姨公司开业升级）|
 | sendMessage msgtype | `sendMessage` 只支持 `msgtype: 'markdown'`，**不支持 `text`**（40008 错误）；私聊和群聊均如此 |
+| sendMessage chatId 限制 | `sendMessage(chatid, ...)` 的 chatId **必须是真实群聊 ID**，传入内部标识（system/UUID/group 等）返回 93006（invalid chatid）。已通过三层过滤（index.ts pushToChannel / wecom send-message / wecom push-reply）静默跳过非法 userId |
 | 被动回复 vs 主动推送 | 有 frame（收到消息后回复）用 `replyStream(frame, text)`；无 frame（主动推送）用 `sendMessage(chatid, markdown)` |
 | 企业应用发出名称 | 永远显示应用名（当前「系统工程师」），无法自定义 |
 
