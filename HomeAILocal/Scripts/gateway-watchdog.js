@@ -40,6 +40,8 @@ const KNOW_DISC_SCRIPT       = path.join(HOMEAI_ROOT, 'scripts', 'distill-knowle
 const KNOW_DISC_LOG          = path.join(HOMEAI_ROOT, 'logs', 'distill-knowledge-discussions.log');
 const COLLAB_DISTILL_SCRIPT  = path.join(HOMEAI_ROOT, 'scripts', 'distill-relationship-dynamics.py');
 const COLLAB_DISTILL_LOG     = path.join(HOMEAI_ROOT, 'logs', 'distill-relationship-dynamics.log');
+const CODE_GRAPH_SCRIPT      = path.join(HOMEAI_ROOT, 'Scripts', 'build-code-graph.py');
+const CODE_GRAPH_LOG         = path.join(HOMEAI_ROOT, 'logs', 'build-code-graph.log');
 
 let token = '';
 try {
@@ -909,6 +911,7 @@ let lastDistillDay       = -1;  // 防止同一天重复触发
 let lastTeamObsDay       = '';  // team_observation 蒸馏每日触发去重
 let lastPersonalizeDay   = '';  // Track A/C 个人化蒸馏每周日触发去重
 let lastCollabDistillDay = '';  // 协作关系蒸馏每周日触发去重
+let lastCodeGraphDay     = '';  // 代码图谱每日增量重建触发去重
 
 function shouldRunTeamObs() {
   // 每天凌晨 3~4 点之间（错开 Andy HEARTBEAT 的 2~3 点，避免 Kuzu 锁竞争）
@@ -928,6 +931,31 @@ function runTeamObsDistill() {
   });
   child.unref();
   log(`team_observation 蒸馏已启动（PID ${child.pid}），日志：${TEAM_OBS_LOG}`);
+}
+
+// ── 代码图谱每日增量重建（凌晨 5 点）────────────────────────────────────────────
+// 错开 collab distill（4am）；--incremental 快速模式仅扫关键路径（~39s，89 文件）
+function shouldRunCodeGraph() {
+  return new Date().getHours() === 5;
+}
+
+function runCodeGraphRebuild() {
+  if (!fs.existsSync(CODE_GRAPH_SCRIPT)) {
+    log('代码图谱脚本不存在，跳过');
+    return;
+  }
+  log('开始代码图谱增量重建（--incremental --paths）...');
+  const child = spawn(PYTHON3, [
+    CODE_GRAPH_SCRIPT,
+    '--incremental',
+    '--paths', 'CrewClaw/crewclaw-routing', 'HomeAILocal/Scripts',
+  ], {
+    env: { ...process.env },
+    detached: true,
+    stdio: ['ignore', fs.openSync(CODE_GRAPH_LOG, 'a'), fs.openSync(CODE_GRAPH_LOG, 'a')],
+  });
+  child.unref();
+  log(`代码图谱重建已启动（PID ${child.pid}），日志：${CODE_GRAPH_LOG}`);
 }
 
 // ── Track A/C 个人化蒸馏（每周日凌晨 1 点）─────────────────────────────────────
@@ -1030,6 +1058,14 @@ async function check() {
     if (lastCollabDistillDay !== today) {
       lastCollabDistillDay = today;
       runCollabDistill();
+    }
+  }
+
+  // 代码图谱增量重建：每日凌晨 5 点触发（错开 collab distill 的 4am）
+  if (shouldRunCodeGraph()) {
+    if (lastCodeGraphDay !== today) {
+      lastCodeGraphDay = today;
+      runCodeGraphRebuild();
     }
   }
 
