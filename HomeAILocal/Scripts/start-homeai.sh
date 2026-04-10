@@ -51,7 +51,7 @@ fi
 # ── 启动/恢复 wecom-entrance ───────────────────────────────────────────────
 if [ "$WECOM_OK" = "false" ]; then
   log "wecom-entrance 不在线，尝试启动..."
-  cd "$HOMEAI_ROOT/CrewHiveClaw/CrewClaw/daemons" && "$PM2" start "$ECOSYSTEM" >> "$LOG" 2>&1
+  cd "$HOMEAI_ROOT/CrewHiveClaw/CrewClaw/daemons" && "$PM2" start "$ECOSYSTEM" --only wecom-entrance >> "$LOG" 2>&1
   if "$PM2" list 2>/dev/null | grep -q "wecom-entrance.*online"; then
     log "wecom-entrance 启动成功"
   else

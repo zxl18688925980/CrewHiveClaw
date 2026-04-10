@@ -7,8 +7,37 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v628
-> **最后更新**: 2026-04-10
+> **版本**: v629
+> **最后更新**: 2026-04-11
+
+---
+
+## v629 · PM2 重复进程修复 + 抖音 CDN 优化 + Main 429 重试（2026-04-11）
+
+**干预类型**：Bug 修复 + 平台约束记录
+
+**背景**：HomeAI 恢复时发现 PM2 有 10 个进程（5 服务 × 2），wecom-entrance 和 local-tts 端口冲突。同时排查抖音视频转录问题，确认 Lucas 通道正常但 Main 通道因 GLM-5 429 限流 + 企业微信 IP 白名单失效导致分析失败。
+
+**变更1：`start-homeai.sh` PM2 全量启动修复**
+
+- **根因**：`pm2 start "$ECOSYSTEM"` 无 `--only` 标志。当 wecom-entrance 不在线时，连带启动全部 5 个服务；而 PM2 resurrection 已有这些进程 → 10 个进程，端口冲突
+- **修复**：`--only wecom-entrance`，只启动不在线的那个服务
+- **平台约束**：`start-homeai.sh` 由 launchd（`com.homeai.startup`）开机触发 + 30s 健康巡检，必须幂等
+
+**变更2：抖音 CDN 直连优化（跳过 yt-dlp）**
+
+- **根因**：yt-dlp Douyin extractor 有已知 bug（#12669），JSON 解析失败后报 "Fresh cookies needed"，与 cookies 无关，是 extractor 本身问题。每次必败，白等 1-2 秒
+- **修复**：反转策略——直接用 `_ROUTER_DATA` 的 CDN URL（`play` 无水印版），yt-dlp 仅在 `_ROUTER_DATA` 未拿到 URL 时作备选
+- **附加优化**：`playwm` → `play`（无水印）；ffmpeg 加 `Referer: https://www.iesdouyin.com/` header
+- **平台约束**：抖音 CDN URL 需移动端 UA + Referer 才能下载，桌面端 UA 返回 302 空响应
+
+**变更3：`callMainModel` 429 限流重试**
+
+- **根因**：Main 调 GLM-5 分析抖音转录时遇 429 限流，直接失败回退裸推（无重试）
+- **修复**：429 自动重试最多 2 次，间隔 3s/6s
+- **影响范围**：所有 `callMainModel` 调用（Main 对话 + 抖音分析 + 工具循环）
+
+**验证点**：下次用户发抖音链接时确认 CDN URL 是 `play`（非 playwm）、无 yt-dlp 失败日志、转录时间 ~5s。
 
 ---
 

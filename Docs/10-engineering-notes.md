@@ -19,6 +19,46 @@
 
 ---
 
+## 2026-04-11
+
+### yt-dlp Douyin extractor #12669：不依赖 cookies 的确定性失败
+
+**场景**：`scrapeDouyinContent()` 用 yt-dlp 获取抖音视频直链。
+
+**现象**：无论是否提供 Chrome cookies（`--cookies-from-browser chrome`），yt-dlp 始终报 `Fresh cookies (not necessarily logged in) are needed`。前序错误是 `Failed to parse JSON: Expecting value in '': line 1 column 1 (char 0)`。
+
+**根因**：yt-dlp Douyin extractor 的 API 请求返回空响应（非 JSON），extractor 在 JSON 解析阶段就崩溃了。这是 extractor 自身的 bug（issue #12669），与 cookies/登录态完全无关。该 bug 从 2024 年反复出现，每次抖音改版后 yt-dlp 修复一次，下个版本又坏。
+
+**规避方式**：不依赖 yt-dlp 获取抖音视频。用移动端 UA 访问 `iesdouyin.com/share/video/{id}/` 解析 `_ROUTER_DATA` 获取 CDN URL，再用 ffmpeg + 移动端 UA + Referer 下载。CDN URL `playwm`（带水印）替换为 `play`（无水印）可直接访问。
+
+**状态**：活跃（yt-dlp 2026.03.17 版本确认，需等 yt-dlp 上游修复）
+
+### launchd + PM2 startup 双触发导致重复进程
+
+**场景**：macOS 开机时 `com.homeai.startup` launchd plist 触发 `start-homeai.sh`，同时 PM2 `pm2 startup` 也会自动 resurrect 之前的进程。
+
+**现象**：5 个服务各出现 2 个进程（共 10 个），wecom-entrance（端口 3003）和 local-tts（端口 8082）因端口冲突报 EADDRINUSE。
+
+**根因**：`start-homeai.sh` 中 `pm2 start "$ECOSYSTEM"` 无 `--only` 标志。当检测到 wecom-entrance 不在线时，启动了全部 5 个服务（包括已经在线的 chromadb 等），与 PM2 resurrection 的进程冲突。
+
+**规避方式**：`start-homeai.sh` 中每个服务的启动命令必须用 `--only <name>` 限定，只启动不在线的那个服务。
+
+**状态**：活跃
+
+### 抖音 CDN URL 需移动端 UA + Referer 才能下载
+
+**场景**：ffmpeg 从抖音 CDN URL 下载视频/音频。
+
+**现象**：用桌面端 UA（如 Chrome 标准字符串）访问 `aweme.snssdk.com/aweme/v1/playwm/` 返回 302 但无实际内容（size=0）。用 curl 桌面端 UA 同样拿不到数据。
+
+**根因**：抖音 CDN 对 UA 有检测，只允许移动端 UA（如 Mobile Safari）+ `Referer: https://www.iesdouyin.com/` 的组合下载。
+
+**规避方式**：ffmpeg 使用 `-user_agent` 设置移动端 UA + `-headers 'Referer: https://www.iesdouyin.com/\r\n'`。
+
+**状态**：活跃
+
+---
+
 ## 2026-04-10
 
 ### 访客 userId 写读路径格式不一致导致历史检索永远为空

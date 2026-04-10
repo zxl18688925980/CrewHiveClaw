@@ -217,6 +217,11 @@ async function scrapeDouyinContent(url, { withFrames = false } = {}) {
           const downloadUrls = item.video && item.video.download_addr && item.video.download_addr.url_list || [];
           const playUrls = item.video && item.video.play_addr && item.video.play_addr.url_list || [];
           cdnUrl = downloadUrls[0] || playUrls.find(u => !u.includes('playwm')) || playUrls[0] || null;
+          // 构建 play（无水印）URL：从 playwm URL 去掉 "wm" 后缀
+          if (cdnUrl && cdnUrl.includes('playwm')) {
+            const playUrl = cdnUrl.replace('/playwm/', '/play/');
+            if (playUrl !== cdnUrl) cdnUrl = playUrl;
+          }
           if (cdnUrl) {
             logger.info('scrapeDouyinContent: CDN URL', { videoId, url: cdnUrl.slice(0, 80), isPlaywm: cdnUrl.includes('playwm') });
           }
@@ -247,28 +252,33 @@ async function scrapeDouyinContent(url, { withFrames = false } = {}) {
       return { error: '分享页解析失败，无法提取视频简介，可能是视频已删除或平台限制' };
     }
 
-    // Step 4: 音频 ASR
-    // 优先 yt-dlp（专为抖音 CDN 优化，自动处理 Cookie/Referer），失败才用 play_addr
-    // play_addr 的 playwm URL 需要特定 Referer，ffmpeg 难以处理
+    // Step 4: 解析可下载的 CDN URL
+    // 策略：直接用 _ROUTER_DATA 中的 play/playwm URL（已验证可下载），yt-dlp 作为备选
+    // yt-dlp Douyin extractor 有已知 bug (#12669)，总是失败，白等 1-2 秒
     let resolvedCdnUrl = null;
-    try {
-      const cookiesArgs = fs.existsSync(COOKIES_FILE)
-        ? ['--cookies', COOKIES_FILE]
-        : ['--cookies-from-browser', 'chrome'];
-      const ytOut = (await execFileAsync('/opt/homebrew/bin/yt-dlp', [
-        '--get-url', '--quiet', '--no-warnings',
-        '-f', 'bestaudio/best',
-        ...cookiesArgs,
-        `https://www.douyin.com/video/${videoId}`,
-      ], { encoding: 'utf8', timeout: 30000 })).trim();
-      if (ytOut && ytOut.startsWith('http')) {
-        resolvedCdnUrl = ytOut.split('\n')[0].trim();
-        logger.info('scrapeDouyinContent: yt-dlp 提取直链成功', { videoId, url: resolvedCdnUrl.slice(0, 80) });
+    if (cdnUrl) {
+      // cdnUrl 已在上方处理：playwm → play（无水印）
+      resolvedCdnUrl = cdnUrl;
+      logger.info('scrapeDouyinContent: 使用 _ROUTER_DATA CDN URL', { videoId, url: resolvedCdnUrl.slice(0, 80) });
+    } else {
+      // _ROUTER_DATA 未拿到 CDN URL（罕见），尝试 yt-dlp
+      try {
+        const cookiesArgs = fs.existsSync(COOKIES_FILE)
+          ? ['--cookies', COOKIES_FILE]
+          : ['--cookies-from-browser', 'chrome'];
+        const ytOut = (await execFileAsync('/opt/homebrew/bin/yt-dlp', [
+          '--get-url', '--quiet', '--no-warnings',
+          '-f', 'bestaudio/best',
+          ...cookiesArgs,
+          `https://www.douyin.com/video/${videoId}`,
+        ], { encoding: 'utf8', timeout: 15000 })).trim();
+        if (ytOut && ytOut.startsWith('http')) {
+          resolvedCdnUrl = ytOut.split('\n')[0].trim();
+          logger.info('scrapeDouyinContent: yt-dlp 备选成功', { videoId, url: resolvedCdnUrl.slice(0, 80) });
+        }
+      } catch (ytErr) {
+        logger.warn('scrapeDouyinContent: yt-dlp 备选也失败', { error: ytErr.message?.slice(0, 100) });
       }
-    } catch (ytErr) {
-      logger.warn('scrapeDouyinContent: yt-dlp 失败，尝试 play_addr', { error: ytErr.message });
-      // yt-dlp 失败：降级用 play_addr（可能可访问，取决于抖音 CDN 策略）
-      if (cdnUrl) resolvedCdnUrl = cdnUrl;
     }
     let transcript = '';
     if (resolvedCdnUrl && fs.existsSync(WHISPER_CLI) && fs.existsSync(WHISPER_MODEL)) {
@@ -309,6 +319,7 @@ async function transcribeDouyinAudio(cdnUrl) {
   try {
     await execFileAsync('/opt/homebrew/bin/ffmpeg', [
       '-y', '-loglevel', 'error',
+      '-headers', 'Referer: https://www.iesdouyin.com/\r\n',
       '-user_agent', DOUYIN_MOBILE_UA,
       '-i', cdnUrl,
       '-vn', '-ar', '16000', '-ac', '1', '-f', 'wav',
@@ -1090,7 +1101,7 @@ function stripThink(text) {
 
 // Main 调用模型（OpenAI-compatible，带工具）
 // 模型配置来自 ~/.openclaw/openclaw.json agents.list main 条目，独立于三角色 env var 层
-async function callMainModel(systemPrompt, messages) {
+async function callMainModel(systemPrompt, messages, retries = 2) {
   const { baseUrl, apiKey, model } = readAgentModelConfig('main');
   // Anthropic 的 OpenAI 兼容端点需要 /v1/ 前缀 + anthropic-version header
   const isAnthropic = baseUrl.includes('anthropic.com');
@@ -1098,21 +1109,30 @@ async function callMainModel(systemPrompt, messages) {
   const completionsUrl = isAnthropic ? `${base}/v1/chat/completions` : `${base}/chat/completions`;
   const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` };
   if (isAnthropic) headers['anthropic-version'] = '2023-06-01';
-  const resp = await fetch(completionsUrl, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model,
-      max_tokens: 4096,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
-      tools: MAIN_TOOLS_OAI,
-    }),
-  });
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => `HTTP ${resp.status}`);
-    throw new Error(`Main model API error ${resp.status}: ${errText.slice(0, 200)}`);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const resp = await fetch(completionsUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        max_tokens: 4096,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        tools: MAIN_TOOLS_OAI,
+      }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => `HTTP ${resp.status}`);
+      // 429 限流：等待后重试
+      if (resp.status === 429 && attempt < retries) {
+        const delay = 3000 * (attempt + 1);
+        logger.info('callMainModel 429 限流，等待重试', { attempt, delay, error: errText.slice(0, 100) });
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw new Error(`Main model API error ${resp.status}: ${errText.slice(0, 200)}`);
+    }
+    return resp.json();
   }
-  return resp.json();
 }
 
 // OpenAI-compatible chat completion（适用于所有 openai-completions 类型 provider）
