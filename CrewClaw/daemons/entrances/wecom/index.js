@@ -2076,12 +2076,17 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l2',
-    description: '评估 L2（个体进化循环）：skill-candidates.jsonl 候选信号数量、dpo-candidates.jsonl 负例数量、Andy HEARTBEAT cron 状态、三角色 Skill 文件总数。返回 L2 进化循环是否在运转。',
+    description: '评估 L2（个体进化循环）：skill-candidates.jsonl 候选信号、dpo-candidates.jsonl 负例、Andy HEARTBEAT 上次巡检时间、opencode 近期成功率和 spec 吻合率、codebase_patterns 积累量、三角色 Skill 总数。',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'evaluate_l3',
+    description: '评估 L3（组织协作）：Kuzu 协作边数量（co_discusses/requests_from/supports/role_in_context）、active_thread 线索、shadow_interactions 演进环记录、访客影子 Registry 状态（active/dormant/archived）、关系蒸馏日志最近运行时间。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_system',
-    description: '系统全面评估（L0~L2）：依次运行 evaluate_l0 / evaluate_l1 / evaluate_l2，汇总为一张评分卡。业主发「系统评估」时调用此工具。',
+    description: '系统全面评估（L0~L3）：依次运行 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3，汇总为一张评分卡。业主发「系统评估」时调用此工具。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   // run_claude_code 暂时禁用（2026-03-26）：子进程 execFileSync 阻塞事件循环 120s，
@@ -2132,6 +2137,7 @@ const MAIN_TOOLS_OAI = MAIN_TOOLS.map(t => ({
 // 工具执行
 async function executeMainTool(toolName, toolInput) {
   const nameMap = { lucas: 'lucas-daemon', andy: 'andy-daemon', lisa: 'lisa-daemon', wecom: 'wecom-entrance' };
+  const PYTHON311 = '/opt/homebrew/opt/python@3.11/bin/python3.11';
 
   if (toolName === 'get_system_status') {
     try {
@@ -2578,6 +2584,20 @@ async function executeMainTool(toolName, toolInput) {
       }
       if (!Array.isArray(data.tasks)) data.tasks = [];
 
+      // 重复检测：pending 任务中存在标题关键词高度重叠的则跳过
+      // 防止每次巡检都写入同一类问题（如 operator.read、chromadb、false_commitment）
+      const pendingTasks = data.tasks.filter(t => t.status === 'pending');
+      const titleWords = title.toLowerCase().split(/[\s，。：、\-\(（\)）]+/).filter(w => w.length >= 3);
+      const duplicate = pendingTasks.find(t => {
+        const existWords = t.title.toLowerCase().split(/[\s，。：、\-\(（\)）]+/).filter(w => w.length >= 3);
+        const overlap = titleWords.filter(w => existWords.includes(w)).length;
+        // 2 个以上实质词重叠 = 同类任务
+        return overlap >= 2;
+      });
+      if (duplicate) {
+        return `⚠️ 已存在类似 pending 任务 [${duplicate.id}]：「${duplicate.title}」，跳过重复记录。如问题已处理请先将原任务标为 done。`;
+      }
+
       // 生成任务 ID（日期+序号）
       const today = todayCST();
       const todayCount = data.tasks.filter(t => t.id.startsWith(`mt-${today}`)).length;
@@ -2629,8 +2649,7 @@ async function executeMainTool(toolName, toolInput) {
     }
 
     // 2. Kuzu 知识图谱 Fact 数量（Python 查询，os._exit(0) 防 SIGBUS）
-    const PYTHON311 = '/opt/homebrew/opt/python@3.11/bin/python3.11';
-    const kuzuPath  = path.join(HOMEAI_ROOT, 'data', 'kuzu');
+    const kuzuPath  = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
     const kuzuScript = `
 import sys, json, os
 sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
@@ -2710,6 +2729,65 @@ os._exit(0)
       }
     } catch (e) {
       results.push(`⚠️ 家人档案检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 5. ChromaDB decisions 集合可达性
+    try {
+      const decResp = await fetch(`${CHROMA_API_BASE}/decisions`);
+      if (!decResp.ok) {
+        results.push(`⚠️ ChromaDB decisions 集合不可达：${decResp.status}`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        const { id: decId } = await decResp.json();
+        const cntResp = await fetch(`${CHROMA_API_BASE}/${decId}/count`);
+        const decCount = cntResp.ok ? await cntResp.json() : '?';
+        results.push(`✅ ChromaDB decisions：${decCount} 条决策记忆`);
+      }
+    } catch (e) {
+      results.push(`⚠️ ChromaDB decisions 检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 6. Kuzu 协作边数量（L3 数据就绪信号，co_discusses/requests_from/supports/role_in_context）
+    const collabScript = `
+import sys, json, os
+sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
+try:
+    import kuzu
+    db   = kuzu.Database('${kuzuPath}')
+    conn = kuzu.Connection(db)
+    counts = {}
+    for rel in ['co_discusses', 'requests_from', 'supports', 'role_in_context', 'active_thread']:
+        r = conn.execute("MATCH ()-[f:Fact {relation: '" + rel + "'}]->() RETURN count(f)")
+        counts[rel] = r.get_next()[0] if r.has_next() else 0
+    collab_total = sum(v for k, v in counts.items() if k != 'active_thread')
+    print(json.dumps({'counts': counts, 'total': collab_total}))
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
+sys.stdout.flush()
+os._exit(0)
+`.trim();
+    try {
+      const tmpCollab = path.join(HOMEAI_ROOT, 'temp', `eval-l0-collab-${Date.now()}.py`);
+      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      fs.writeFileSync(tmpCollab, collabScript);
+      const collabOut = execSync(`${PYTHON311} ${tmpCollab}`, { encoding: 'utf8', timeout: 20000 }).trim();
+      try { fs.unlinkSync(tmpCollab); } catch (_) {}
+      const cd = JSON.parse(collabOut);
+      if (cd.error) {
+        results.push(`⚠️ Kuzu 协作边查询失败：${cd.error.slice(0, 80)}`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        const c = cd.counts || {};
+        const detail = Object.entries(c)
+          .filter(([, v]) => v > 0)
+          .map(([k, v]) => `${k}:${v}`)
+          .join(' / ') || '无';
+        results.push(`${cd.total > 0 ? '✅' : '⚪'} Kuzu 协作边（L3）：${cd.total} 条（${detail}）`);
+      }
+    } catch (e) {
+      results.push(`⚠️ Kuzu 协作边查询异常：${e.message.slice(0, 80)}`);
       if (score === '✅') score = '⚠️';
     }
 
@@ -2855,12 +2933,14 @@ os._exit(0)
     }
 
     // 5. Kuzu has_pattern 积累量（Andy/Lisa 行为模式蒸馏节点数）
+    const l1KuzuPath = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
     try {
-      const kuzuCheck = path.join(HOMEAI_ROOT, 'scripts', '_l1_pattern_check.py');
+      const kuzuCheck = path.join(HOMEAI_ROOT, 'temp', `_l1_pattern_check_${Date.now()}.py`);
+      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
       const script = `import sys, os, json
 try:
     import kuzu
-    db   = kuzu.Database("${path.join(HOMEAI_ROOT, 'data', 'kuzu')}")
+    db   = kuzu.Database("${l1KuzuPath}")
     conn = kuzu.Connection(db)
     counts = {}
     for agent in ['andy', 'lisa']:
@@ -2879,7 +2959,7 @@ os._exit(0)
 `;
       fs.writeFileSync(kuzuCheck, script);
       const { execFileSync } = require('child_process');
-      const out = execFileSync(PYTHON3, [kuzuCheck], { timeout: 20_000, encoding: 'utf8' }).trim();
+      const out = execFileSync(PYTHON311, [kuzuCheck], { timeout: 20_000, encoding: 'utf8' }).trim();
       fs.unlinkSync(kuzuCheck);
       const counts = JSON.parse(out || '{}');
       if (counts.error) {
@@ -2968,7 +3048,7 @@ os._exit(0)
       const script = `import sys, os, json
 try:
     import kuzu
-    db   = kuzu.Database("${path.join(HOMEAI_ROOT, 'data', 'kuzu')}")
+    db   = kuzu.Database("${path.join(HOMEAI_ROOT, 'Data', 'kuzu')}")
     conn = kuzu.Connection(db)
     res  = conn.execute(
         "MATCH (a:Entity {id: $aid})-[f:Fact {relation: 'has_pattern'}]->(p:Entity) "
@@ -2987,7 +3067,7 @@ os._exit(0)
 `;
       fs.writeFileSync(tmpScript, script);
       const { execFileSync } = require('child_process');
-      const out = execFileSync(PYTHON3, [tmpScript], { timeout: 20_000, encoding: 'utf8' }).trim();
+      const out = execFileSync(PYTHON311, [tmpScript], { timeout: 20_000, encoding: 'utf8' }).trim();
       fs.unlinkSync(tmpScript);
       const data = JSON.parse(out || '{}');
       if (data.error) {
@@ -3009,7 +3089,7 @@ os._exit(0)
   if (toolName === 'evaluate_l2') {
     const results = [];
     let score = '✅';
-    const learningDir = path.join(HOMEAI_ROOT, 'data', 'learning');
+    const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
 
     // 1. skill-candidates.jsonl（进化信号积累）
     try {
@@ -3045,7 +3125,7 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // 3. Andy HEARTBEAT cron 状态（检查是否有 L2 触发记录）
+    // 3. Andy HEARTBEAT 上次巡检时间
     try {
       const andyHbPath = path.join(process.env.HOME, '.openclaw', 'workspace-andy', 'HEARTBEAT.md');
       if (!fs.existsSync(andyHbPath)) {
@@ -3053,14 +3133,17 @@ os._exit(0)
         score = '❌';
       } else {
         const hb = fs.readFileSync(andyHbPath, 'utf8');
-        // 检查是否有 cron 触发记录（L2 里 Andy 应定期巡检 Kuzu pattern 节点）
-        const hasCronRecord = /上次.*巡检|cron|pattern.*scan|L2.*激活/i.test(hb);
-        const lastCheck = hb.match(/上次健康检查：(.+)/)?.[1] || hb.match(/上次.*：(.+)/)?.[1];
-        if (!hasCronRecord) {
-          results.push(`⚠️ Andy HEARTBEAT：存在但无 L2 cron 巡检记录（进化循环未启动）`);
+        const lastCheckMatch = hb.match(/上次巡检[：:](.+)/);
+        if (!lastCheckMatch) {
+          results.push('⚠️ Andy HEARTBEAT：存在但无「上次巡检」字段（cron 从未触发）');
           if (score === '✅') score = '⚠️';
         } else {
-          results.push(`✅ Andy HEARTBEAT：有 L2 巡检记录${lastCheck ? `（上次：${lastCheck.slice(0, 20)}）` : ''}`);
+          const lastCheckStr = lastCheckMatch[1].trim().slice(0, 20);
+          const lastCheckDate = new Date(lastCheckStr.replace(' ', 'T') + '+08:00');
+          const hoursAgo = isNaN(lastCheckDate.getTime()) ? '?' : ((Date.now() - lastCheckDate.getTime()) / 3600000).toFixed(1);
+          const stale = !isNaN(lastCheckDate.getTime()) && parseFloat(hoursAgo) > 30;
+          results.push(`${stale ? '⚠️' : '✅'} Andy HEARTBEAT 上次巡检：${lastCheckStr}（${hoursAgo}h 前）${stale ? '——超过 30h，可能未正常触发' : ''}`);
+          if (stale && score === '✅') score = '⚠️';
         }
       }
     } catch (e) {
@@ -3068,7 +3151,53 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // 4. 三角色 Skill 数量
+    // 4. opencode-results.jsonl 近期 matchRate 和成功率
+    try {
+      const ocResultsPath = path.join(learningDir, 'opencode-results.jsonl');
+      if (!fs.existsSync(ocResultsPath)) {
+        results.push('⚪ opencode-results.jsonl：尚无记录（流水线未触发过）');
+      } else {
+        const entries = fs.readFileSync(ocResultsPath, 'utf8')
+          .split('\n').filter(l => l.trim())
+          .map(l => { try { return JSON.parse(l); } catch { return null; } })
+          .filter(Boolean);
+        const recent = entries.slice(-10);
+        if (recent.length === 0) {
+          results.push('⚪ opencode-results.jsonl：文件存在但无有效记录');
+        } else {
+          const successCount = recent.filter(r => r.success === true).length;
+          const matchRates = recent.filter(r => typeof r.matchRate === 'number').map(r => r.matchRate);
+          const avgMatch = matchRates.length > 0
+            ? (matchRates.reduce((s, v) => s + v, 0) / matchRates.length * 100).toFixed(0)
+            : '?';
+          const successRate = (successCount / recent.length * 100).toFixed(0);
+          const ok = successCount >= recent.length * 0.7;
+          results.push(`${ok ? '✅' : '⚠️'} opencode 近 ${recent.length} 次：成功率 ${successRate}%，平均 spec 吻合率 ${avgMatch}%`);
+          if (!ok && score === '✅') score = '⚠️';
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ opencode-results 读取失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 5. ChromaDB codebase_patterns（Lisa 代码库洞察积累）
+    try {
+      const cpResp = await fetch(`${CHROMA_API_BASE}/codebase_patterns`);
+      if (!cpResp.ok) {
+        results.push('⚪ codebase_patterns：集合不存在（首次 opencode 完成后自动创建）');
+      } else {
+        const { id: cpId } = await cpResp.json();
+        const cntResp = await fetch(`${CHROMA_API_BASE}/${cpId}/count`);
+        const cpCount = cntResp.ok ? await cntResp.json() : '?';
+        results.push(`${cpCount > 0 ? '✅' : '⚪'} codebase_patterns：${cpCount} 条代码库洞察`);
+      }
+    } catch (e) {
+      results.push(`⚠️ codebase_patterns 检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 6. 三角色 Skill 数量
     try {
       const ocHome = path.join(process.env.HOME, '.openclaw');
       const agents = ['lucas', 'andy', 'lisa'];
@@ -3081,7 +3210,7 @@ os._exit(0)
         return `${agent}:${skills.length}`;
       });
       const total = skillCounts.reduce((sum, s) => sum + parseInt(s.split(':')[1]), 0);
-      results.push(`✅ Skill 总量：${total} 个（${skillCounts.join(' / ')}）——均为手工写入，无自动结晶`);
+      results.push(`✅ Skill 总量：${total} 个（${skillCounts.join(' / ')}）`);
     } catch (e) {
       results.push(`⚠️ Skill 统计失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
@@ -3090,11 +3219,108 @@ os._exit(0)
     return `**L2 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
 
+  if (toolName === 'evaluate_l3') {
+    const results = [];
+    let score = '✅';
+
+    // 1. Kuzu 协作边积累（distill-relationship-dynamics.py 产出）
+    const l3KuzuPath = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
+    const l3KuzuScript = `
+import sys, json, os
+sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
+try:
+    import kuzu
+    db   = kuzu.Database('${l3KuzuPath}')
+    conn = kuzu.Connection(db)
+    counts = {}
+    for rel in ['co_discusses', 'requests_from', 'supports', 'role_in_context', 'active_thread']:
+        r = conn.execute("MATCH ()-[f:Fact {relation: '" + rel + "'}]->() RETURN count(f)")
+        counts[rel] = r.get_next()[0] if r.has_next() else 0
+    print(json.dumps({'counts': counts}))
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
+sys.stdout.flush()
+os._exit(0)
+`.trim();
+    try {
+      const tmpL3 = path.join(HOMEAI_ROOT, 'temp', `eval-l3-${Date.now()}.py`);
+      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      fs.writeFileSync(tmpL3, l3KuzuScript);
+      const l3Out = execSync(`${PYTHON311} ${tmpL3}`, { encoding: 'utf8', timeout: 20000 }).trim();
+      try { fs.unlinkSync(tmpL3); } catch (_) {}
+      const ld = JSON.parse(l3Out);
+      if (ld.error) {
+        results.push(`⚠️ Kuzu 协作边查询失败：${ld.error.slice(0, 80)}`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        const c = ld.counts || {};
+        const collabTotal = (c.co_discusses || 0) + (c.requests_from || 0) + (c.supports || 0) + (c.role_in_context || 0);
+        const activeThreads = c.active_thread || 0;
+        results.push(`${collabTotal > 0 ? '✅' : '⚪'} 协作关系边：${collabTotal} 条（co_discusses:${c.co_discusses||0} / requests_from:${c.requests_from||0} / supports:${c.supports||0} / role_in_context:${c.role_in_context||0}）`);
+        results.push(`${activeThreads > 0 ? '✅' : '⚪'} 活跃话题线索（active_thread）：${activeThreads} 条`);
+      }
+    } catch (e) {
+      results.push(`⚠️ Kuzu L3 查询异常：${e.message.slice(0, 80)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 2. ChromaDB shadow_interactions（演进环记录）
+    try {
+      const siResp = await fetch(`${CHROMA_API_BASE}/shadow_interactions`);
+      if (!siResp.ok) {
+        results.push('⚪ shadow_interactions：集合不存在（关系蒸馏管道尚未运行）');
+      } else {
+        const { id: siId } = await siResp.json();
+        const cntResp = await fetch(`${CHROMA_API_BASE}/${siId}/count`);
+        const siCount = cntResp.ok ? await cntResp.json() : '?';
+        results.push(`${siCount > 0 ? '✅' : '⚪'} shadow_interactions：${siCount} 条演进环记录`);
+      }
+    } catch (e) {
+      results.push(`⚠️ shadow_interactions 检查失败：${e.message.slice(0, 60)}`);
+    }
+
+    // 3. 访客影子 Registry 状态
+    try {
+      const registryPath = path.join(HOMEAI_ROOT, 'Data', 'visitor-registry.json');
+      if (!fs.existsSync(registryPath)) {
+        results.push('⚪ 访客 Registry：文件不存在（无访客）');
+      } else {
+        const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+        const entries = Object.values(registry);
+        const active   = entries.filter(e => e.shadow_status === 'active').length;
+        const dormant  = entries.filter(e => e.shadow_status === 'dormant').length;
+        const archived = entries.filter(e => e.shadow_status === 'archived').length;
+        results.push(`${entries.length > 0 ? '✅' : '⚪'} 访客影子：${entries.length} 个（active:${active} / dormant:${dormant} / archived:${archived}）`);
+      }
+    } catch (e) {
+      results.push(`⚠️ 访客 Registry 读取失败：${e.message.slice(0, 60)}`);
+    }
+
+    // 4. 关系蒸馏日志（distill-relationship-dynamics.log）
+    try {
+      const logPath = path.join(HOMEAI_ROOT, 'Logs', 'distill-relationship-dynamics.log');
+      if (!fs.existsSync(logPath)) {
+        results.push('⚪ 关系蒸馏日志：尚无运行记录（每周日 4am 触发）');
+      } else {
+        const logContent = fs.readFileSync(logPath, 'utf8');
+        const logLines = logContent.split('\n').filter(l => l.trim());
+        const runMatches = logContent.match(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/g);
+        const lastRun = runMatches ? runMatches[runMatches.length - 1] : '未知';
+        results.push(`✅ 关系蒸馏：上次运行 ${lastRun}，日志 ${logLines.length} 行`);
+      }
+    } catch (e) {
+      results.push(`⚠️ 关系蒸馏日志读取失败：${e.message.slice(0, 60)}`);
+    }
+
+    return `**L3 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
+  }
+
   if (toolName === 'evaluate_system') {
-    // 依次调用三个子评估，汇总为评分卡
+    // 依次调用 L0~L3 子评估，汇总为评分卡
     const l0 = await executeMainTool('evaluate_l0', {});
     const l1 = await executeMainTool('evaluate_l1', {});
     const l2 = await executeMainTool('evaluate_l2', {});
+    const l3 = await executeMainTool('evaluate_l3', {});
 
     // 从各层结果提取评分符号
     const extractScore = (text) => {
@@ -3106,12 +3332,12 @@ os._exit(0)
       `L0 基础设施 ${extractScore(l0)}`,
       `L1 Agent 人格化 ${extractScore(l1)}`,
       `L2 进化循环 ${extractScore(l2)}`,
-      `L3 组织运作 ⬜（未进入）`,
+      `L3 组织协作 ${extractScore(l3)}`,
       `L4 行为内化 ⬜（未进入）`,
     ].join('\n');
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡**\n${scoreCard}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}`;
+    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡**\n${scoreCard}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}`;
   }
 
   return `未知工具：${toolName}`;
