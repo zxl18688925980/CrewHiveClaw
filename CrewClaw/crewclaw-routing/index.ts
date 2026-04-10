@@ -1701,7 +1701,7 @@ function buildShadowCapabilityView(): string {
       "os._exit(0)  # bypass kuzu Database::~Database() SIGBUS on macOS ARM64",
     ].join("\n");
     writeFileSync(tmpScript, scriptContent, "utf8");
-    const output = execSync(`python3 ${tmpScript}`, { encoding: "utf8", timeout: 10_000 }).trim();
+    const output = execSync(`${KUZU_PYTHON3_BIN} ${tmpScript}`, { encoding: "utf8", timeout: 10_000 }).trim();
     const caps = JSON.parse(output) as Array<{ id: string; name: string; context: string }>;
     if (caps.length === 0) {
       _capViewCache = { ts: now, content: "" };
