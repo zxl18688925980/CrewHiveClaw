@@ -1,0 +1,18 @@
+{
+  "forbidden_terms": [],
+  "pretend_doing": [],
+  "false_commitment": [
+    "已交给Lisa", "已提交给Lisa", "Lisa 会", "Lisa会",
+    "已触发实现", "设计已完成", "已完成设计", "spec已完成", "已完成规格"
+  ],
+  "commitment_tools": ["trigger_lisa_implementation"],
+  "notification_commitment": [],
+  "send_tools": ["notify_engineer"],
+  "report_bug_commitment": [],
+  "report_bug_tools": [],
+  "capability_hallucination": [],
+  "user_correction_signals": [
+    "你没做", "你没有做", "你骗我", "你说的不对", "这不对", "你又幻觉",
+    "这是幻觉", "那是幻觉", "幻觉承诺", "你没验证", "你没调工具"
+  ]
+}

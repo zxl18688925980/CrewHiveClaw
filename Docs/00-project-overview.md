@@ -1298,9 +1298,10 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `query_requirement_owner` | 遇到需求歧义时，向业务大师发起澄清（`【来自Andy·需求澄清】` 前缀） |
 | `request_andy_evaluation` | 触发独立 Andy 评估器对 Spec 做设计审查（集成点存在性 + AC 可测性） |
 | `create_sub_agent` | 创建专项研究子 Agent，用完销毁，语料归入架构大师 corpus |
-| `search_codebase` | 智能代码搜索：三路并行（文件名模糊匹配 / 内容 grep / 历史实现洞察），定位相关文件后配合 exec 深入读 |
-| `read_file` | 读取 HomeAI 目录下任意文件，用于 Spec 写作前验证集成点真实状态 |
+| `search_codebase` | 智能代码搜索：三路并行（文件名模糊匹配 / ripgrep 内容搜索 / 历史实现洞察），定位相关文件后配合 read_file 深入读 |
+| `read_file` | 读取 HomeAI 目录下任意文件，支持分块读取大文件；Spec 写作前验证集成点真实状态 |
 | `list_files` | 列出 HomeAI 目录下某路径的文件列表，配合 read_file 导航大型代码库 |
+| `write_file` | 原子写入 workspace-andy/ 内的文件（tmp→rename 防脏文件）；持久化 spec 草稿、研究笔记，防止被 context 压缩冲掉 |
 
 **框架层进化机制（自动运行）**：
 - `agent_end` 写入 ChromaDB `decisions`，积累设计决策语料

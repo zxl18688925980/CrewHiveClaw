@@ -3279,102 +3279,110 @@ function isTaskCancelled(taskId: string): boolean {
 }
 
 // Lucas 人格检查：禁止在 Lucas 回复中出现 Andy/Lisa 内部技术词汇
-// ── 实例配置：从 config/dpo-patterns.json 加载（框架层与实例层分离）────────
-// 要调整 Lucas 禁用词或 DPO 检测关键词，只需修改 JSON，不改 TypeScript。
+// ── DPO 模式配置：每个 Agent 独立加载 {agentId}-dpo-patterns.json ──────────
+// 要调整某个 Agent 的检测关键词，只需修改对应 JSON，不改 TypeScript。
 interface DpoPatternsJson {
-  lucas_forbidden_terms: string[];
-  pretend_doing: string[];
-  false_commitment: string[];
-  notification_commitment?: string[];
-  report_bug_commitment?: string[];
-  capability_hallucination: string[];
-  user_correction_signals: string[];
+  forbidden_terms: string[];           // 禁止出现的技术词汇（面向用户的回复）
+  pretend_doing: string[];             // 假装在做（说"正在/已"但没调工具）
+  false_commitment: string[];          // 假承诺（说"已交给/会处理"但没调 commitment_tools）
+  commitment_tools: string[];          // 触发 false_commitment 检测的"承诺工具"列表
+  notification_commitment?: string[];  // 假通知（说"已通知"但没调 send_tools）
+  send_tools?: string[];               // 触发 notification_commitment 检测的"发送工具"列表
+  report_bug_commitment?: string[];    // 假报 Bug（说"已提交 Bug"但没调 report_bug_tools）
+  report_bug_tools?: string[];         // 触发 report_bug_commitment 检测的工具列表
+  capability_hallucination: string[];  // 能力幻觉（声称有某项能力但没有对应工具）
+  user_correction_signals: string[];   // 用户纠正信号（"你没做/你骗我"等）
 }
 
-function loadDpoPatterns(): DpoPatternsJson {
-  const cfgPath = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config/dpo-patterns.json");
+// 按 agentId 懒加载并缓存，避免重复读文件
+const _dpoPatternCache = new Map<string, DpoPatternsJson>();
+
+function getDpoPatterns(agentId: string): DpoPatternsJson {
+  if (_dpoPatternCache.has(agentId)) return _dpoPatternCache.get(agentId)!;
+  const cfgPath = join(PROJECT_ROOT, `CrewHiveClaw/CrewClaw/crewclaw-routing/config/${agentId}-dpo-patterns.json`);
+  const empty: DpoPatternsJson = {
+    forbidden_terms: [], pretend_doing: [], false_commitment: [],
+    commitment_tools: [], capability_hallucination: [], user_correction_signals: [],
+  };
   try {
-    return JSON.parse(readFileSync(cfgPath, "utf8")) as DpoPatternsJson;
+    const p = JSON.parse(readFileSync(cfgPath, "utf8")) as DpoPatternsJson;
+    _dpoPatternCache.set(agentId, p);
+    return p;
   } catch {
-    return { lucas_forbidden_terms: [], pretend_doing: [], false_commitment: [], capability_hallucination: [], user_correction_signals: [] };
+    _dpoPatternCache.set(agentId, empty);
+    return empty;
   }
 }
 
-const _dpoPatterns = loadDpoPatterns();
-const LUCAS_FORBIDDEN_TERMS     = _dpoPatterns.lucas_forbidden_terms;
-const DPO_REPORT_BUG_PATTERNS   = _dpoPatterns.report_bug_commitment ?? [];
-
-// ── DPO 负例候选检测（Lucas 专属）────────────────────────────────────────
+// ── DPO 负例候选检测（全 Agent 通用）────────────────────────────────────────
 //
-// 三种可疑模式：
-//   pretend_doing       - 说"正在/已联系/已发送"但没调工具
-//   false_commitment    - 说"已交给Andy/已提交/已触发"但没调 trigger_development_pipeline
-//   capability_hallucination - 声称有某项能力但没有对应工具支撑且没调工具
-//
-// 命中 → 写入 dpo-candidates.jsonl 供系统工程师审核确认，不自动入训练集。
-// 模式从 config/dpo-patterns.json 加载，实例层可按需调整关键词。
-
-const DPO_PRETEND_PATTERNS    = _dpoPatterns.pretend_doing;
-const DPO_COMMIT_PATTERNS     = _dpoPatterns.false_commitment;
-const DPO_NOTIFY_PATTERNS     = _dpoPatterns.notification_commitment ?? [];
-const DPO_HALLUCIN_PATTERNS   = _dpoPatterns.capability_hallucination;
-const USER_CORRECTION_SIGNALS = _dpoPatterns.user_correction_signals;
+// 每个 Agent 独立配置检测模式，命中 → 写入 dpo-candidates.jsonl 供系统工程师审核。
+// 模式从 config/{agentId}-dpo-patterns.json 加载，新部署只需添加配置文件。
 
 function detectDpoCandidates(params: {
+  agentId: string;
   prompt: string;
   response: string;
-  sendMessageContents: string[];      // send_message 工具调用的实际发送内容
-  pipelineResults: string[];          // trigger_development_pipeline 的工具返回内容
+  sendToolContents: string[];         // send_tools 工具调用的实际发送内容
+  commitToolResults: string[];        // commitment_tools 的工具返回内容
   toolUseCounts: Record<string, number>;
   sessionKey: string | undefined;
   userId: string;
 }): boolean {
-  const { prompt, response, sendMessageContents, pipelineResults, toolUseCounts, sessionKey, userId } = params;
-  const totalTools = Object.values(toolUseCounts).reduce((s, n) => s + n, 0);
-  const calledTrigger = (toolUseCounts["trigger_development_pipeline"] ?? 0) > 0;
-  const calledSend    = (toolUseCounts["send_message"] ?? 0) > 0;
+  const { agentId, prompt, response, sendToolContents, commitToolResults, toolUseCounts, sessionKey, userId } = params;
+  const patterns = getDpoPatterns(agentId);
 
-  // 合并检测文本：lastAssistant + 所有 send_message 发出的内容
-  const allOutputText = [response, ...sendMessageContents].join("\n");
+  const commitTools  = new Set(patterns.commitment_tools);
+  const sendTools    = new Set(patterns.send_tools ?? []);
+  const reportTools  = new Set(patterns.report_bug_tools ?? []);
+
+  const totalTools      = Object.values(toolUseCounts).reduce((s, n) => s + n, 0);
+  const calledCommit    = patterns.commitment_tools.some(t => (toolUseCounts[t] ?? 0) > 0);
+  const calledSend      = patterns.send_tools?.some(t => (toolUseCounts[t] ?? 0) > 0) ?? false;
+  const calledReportBug = patterns.report_bug_tools?.some(t => (toolUseCounts[t] ?? 0) > 0) ?? false;
+
+  // 消除未使用变量警告
+  void commitTools; void sendTools; void reportTools;
+
+  // 合并检测文本：Agent 回复 + 所有 send_tools 发出的内容
+  const allOutputText = [response, ...sendToolContents].join("\n");
 
   const reasons: string[] = [];
 
-  // 模式 1：假装在做（说"正在/已"但没调对应工具）
-  const pretendHit = DPO_PRETEND_PATTERNS.find(p => allOutputText.includes(p));
+  // 模式 1：假装在做（说"正在/已"但没调任何工具）
+  const pretendHit = patterns.pretend_doing.find(p => allOutputText.includes(p));
   if (pretendHit && !calledSend && totalTools === 0) {
     reasons.push(`pretend_doing: "${pretendHit}"`);
   }
 
-  // 模式 2：假承诺流水线（说交给Andy但没调工具）
-  const commitHit = DPO_COMMIT_PATTERNS.find(p => allOutputText.includes(p));
-  if (commitHit && !calledTrigger) {
+  // 模式 2：假承诺（说"已交给/会处理"但没调 commitment_tools）
+  const commitHit = patterns.false_commitment.find(p => allOutputText.includes(p));
+  if (commitHit && !calledCommit) {
     reasons.push(`false_commitment: "${commitHit}"`);
   }
 
-  // 模式 4：工具返回警告但声称提交成功
-  // trigger_development_pipeline 返回 ⚠️（相似能力/已排队）但 Lucas 对用户报告「已提交」
-  if (calledTrigger && pipelineResults.some(r => r.startsWith("⚠️"))) {
-    const successCommitHit = DPO_COMMIT_PATTERNS.find(p => allOutputText.includes(p));
+  // 模式 4：commitment_tools 返回 ⚠️ 但仍声称"已提交/已完成"
+  if (calledCommit && commitToolResults.some(r => r.startsWith("⚠️"))) {
+    const successCommitHit = patterns.false_commitment.find(p => allOutputText.includes(p));
     if (successCommitHit) {
       reasons.push(`false_commitment_warning: "${successCommitHit}"`);
     }
   }
 
-  // 模式 3：能力幻觉（声称有能力但没有工具支撑）
-  const hallucinHit = DPO_HALLUCIN_PATTERNS.find(p => allOutputText.includes(p));
+  // 模式 3：能力幻觉（声称有某项能力但没调对应工具）
+  const hallucinHit = patterns.capability_hallucination.find(p => allOutputText.includes(p));
   if (hallucinHit && !calledSend) {
     reasons.push(`capability_hallucination: "${hallucinHit}"`);
   }
 
-  // 模式 5：Bug 承诺幻觉（声称提交了 Bug 但没调 report_bug）
-  const calledReportBug = (toolUseCounts["report_bug"] ?? 0) > 0;
-  const bugCommitHit = DPO_REPORT_BUG_PATTERNS.find(p => allOutputText.includes(p));
+  // 模式 5：Bug 承诺幻觉（声称提交了 Bug 但没调 report_bug_tools）
+  const bugCommitHit = patterns.report_bug_commitment?.find(p => allOutputText.includes(p));
   if (bugCommitHit && !calledReportBug) {
     reasons.push(`bug_commitment: "${bugCommitHit}"`);
   }
 
-  // 模式 6：通知承诺幻觉（声称已通知家人但没调 send_message）
-  const notifyHit = DPO_NOTIFY_PATTERNS.find(p => allOutputText.includes(p));
+  // 模式 6：通知承诺幻觉（声称已通知但没调 send_tools）
+  const notifyHit = patterns.notification_commitment?.find(p => allOutputText.includes(p));
   if (notifyHit && !calledSend) {
     reasons.push(`notification_commitment: "${notifyHit}"`);
   }
@@ -3426,14 +3434,16 @@ function detectDpoCandidates(params: {
 // dpo-candidates.jsonl，good_response 留空由系统工程师审核后填入。
 // 这是"被找出来的幻觉"转为 DPO 材料的核心通道。
 function detectUserCorrection(params: {
+  agentId: string;
   currentUserMsg: string;
   messages: Array<{ role?: string; content?: unknown }>;
   sessionKey: string | undefined;
   userId: string;
 }): void {
-  const { currentUserMsg, messages, sessionKey, userId } = params;
+  const { agentId, currentUserMsg, messages, sessionKey, userId } = params;
+  const correctionSignals = getDpoPatterns(agentId).user_correction_signals;
 
-  const correctionHit = USER_CORRECTION_SIGNALS.find(s => currentUserMsg.includes(s));
+  const correctionHit = correctionSignals.find(s => currentUserMsg.includes(s));
   if (!correctionHit) return;
 
   // 找用户纠正之前的最后一条 Lucas (assistant) 回复
@@ -3511,9 +3521,10 @@ function evaluateResponseQuality(params: {
   const relevant = bigramScore(params.prompt.slice(0, 100), r.slice(0, 100)) > 0;
   score += relevant ? 0.2 : 0;
 
-  // Lucas 人格惩罚
-  if (params.agentId === FRONTEND_AGENT_ID) {
-    const violations = LUCAS_FORBIDDEN_TERMS.filter(t => r.includes(t)).length;
+  // 人格惩罚：forbidden_terms 命中扣分（各 Agent 独立配置）
+  const forbiddenTerms = getDpoPatterns(params.agentId).forbidden_terms;
+  if (forbiddenTerms.length > 0) {
+    const violations = forbiddenTerms.filter(t => r.includes(t)).length;
     score = Math.max(0, score - violations * 0.1);
   }
 
@@ -5551,8 +5562,12 @@ const crewclawRoutingPlugin = {
       // OpenClaw 格式：{role:"toolResult", toolName:"...", toolCallId:"...", content:[...]}
       // toolName 直接记录了被调用的工具名，无需在 assistant content 里找 tool_use block
       const toolUseCounts: Record<string, number> = {};
-      const sendMessageContents: string[] = [];   // send_message 实际发出的内容（供 DPO 检测）
-      const pipelineResults: string[] = [];       // trigger_development_pipeline 返回内容（供 DPO 检测）
+      const sendToolContents: string[] = [];    // send_tools 工具调用的实际发送内容（供 DPO 检测）
+      const commitToolResults: string[] = [];   // commitment_tools 的工具返回内容（供 DPO 检测）
+      // 按 agentId 加载 DPO 配置，确定 send_tools 和 commitment_tools 集合
+      const _dpoForAgent = getDpoPatterns(ctx.agentId);
+      const _sendToolSet   = new Set(_dpoForAgent.send_tools ?? []);
+      const _commitToolSet = new Set(_dpoForAgent.commitment_tools);
       for (const m of msgs) {
         if (m.role === "user") {
           const t = extractText(m.content);
@@ -5560,21 +5575,21 @@ const crewclawRoutingPlugin = {
         } else if (m.role === "assistant") {
           const t = extractText(m.content);
           if (t) lastAssistant = t;
-          // 提取 send_message 工具调用的 content 参数（false commitment 可能在这里，不在 lastAssistant）
+          // 提取 send_tools 工具调用的 content 参数（false commitment 可能在这里，不在 lastAssistant）
           if (Array.isArray(m.content)) {
             for (const block of m.content as Array<{ type?: string; name?: string; input?: Record<string, unknown> }>) {
-              if (block.type === "tool_use" && block.name === "send_message" && block.input?.content) {
-                sendMessageContents.push(String(block.input.content));
+              if (block.type === "tool_use" && block.name && _sendToolSet.has(block.name) && block.input?.content) {
+                sendToolContents.push(String(block.input.content));
               }
             }
           }
         } else if (m.role === "toolResult") {
           const name = (m as { toolName?: string }).toolName;
           if (name) toolUseCounts[name] = (toolUseCounts[name] ?? 0) + 1;
-          // 记录 pipeline 工具返回内容（检测「返回⚠️但声称成功」模式）
-          if (name === "trigger_development_pipeline") {
+          // 记录 commitment_tools 返回内容（检测「返回⚠️但声称成功」模式）
+          if (name && _commitToolSet.has(name)) {
             const resultText = extractText((m as { content?: unknown }).content);
-            if (resultText) pipelineResults.push(resultText);
+            if (resultText) commitToolResults.push(resultText);
           }
         }
       }
@@ -5674,22 +5689,22 @@ const crewclawRoutingPlugin = {
         response: lastAssistant,
         isCloud: isCloudResponse,
       });
-      // DPO 检测（Lucas 专属，其他 Agent 固定 false）
-      const dpoFlagged = ctx.agentId === FRONTEND_AGENT_ID
-        ? detectDpoCandidates({
-            prompt: actualPrompt,
-            response: lastAssistant,
-            sendMessageContents,
-            pipelineResults,
-            toolUseCounts,
-            sessionKey: ctx.sessionKey,
-            userId,
-          })
-        : false;
+      // DPO 检测（全 Agent 通用，各自加载 {agentId}-dpo-patterns.json）
+      const dpoFlagged = detectDpoCandidates({
+        agentId: ctx.agentId,
+        prompt: actualPrompt,
+        response: lastAssistant,
+        sendToolContents,
+        commitToolResults,
+        toolUseCounts,
+        sessionKey: ctx.sessionKey,
+        userId,
+      });
 
       // 用户纠正信号检测：用户说"你没做/你骗我/这是幻觉"等 → 捕获上一条 bad_response 写入 DPO 候选
-      if (ctx.agentId === FRONTEND_AGENT_ID && !isTestSession) {
+      if (!isTestSession) {
         detectUserCorrection({
+          agentId: ctx.agentId,
           currentUserMsg: actualPrompt,
           messages: msgs,
           sessionKey: ctx.sessionKey,
