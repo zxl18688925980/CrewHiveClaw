@@ -1585,7 +1585,7 @@ async function updateFamilyProfileAsync(userId: string, prompt: string, response
 
     // 跟随对应 Agent 在 openclaw.json 里的模型配置，不硬编码任何 provider
     const raw = await callAgentModel(
-      "lucas",
+      FRONTEND_AGENT_ID,
       `你是一个家庭信息提取助手。从一段对话里提取对家人档案有价值的新信息。\n只提取真实出现的新内容，不推断，不编造。如果没有新信息就回答"无"。\n输出格式（JSON）：\n{\n  "current_status": "本次对话反映的最新状态，一两句话，没有则null",\n  "memory": "值得长期记住的重要信息，一两句话，没有则null"\n}`,
       [{ role: "user", content: `【当前档案】\n${currentProfile.slice(0, 800)}\n\n【本次对话】\n用户：${prompt.slice(0, 300)}\n启灵：${response.slice(0, 300)}\n\n请提取新信息：` }],
       512
@@ -2465,10 +2465,10 @@ async function runAndyPipeline(params: {
   // Lucas 路由决策记忆：记录"为这个需求触发了流水线"
   void addDecisionMemory({
     decision_id: requirementId,
-    agent: "lucas",
+    agent: FRONTEND_AGENT_ID,
     timestamp: nowCST(),
     context: params.requirement.slice(0, 300),
-    decision: "触发 Andy→Lisa 开发流水线",
+    decision: `触发 ${DESIGNER_AGENT_ID}→${IMPLEMENTOR_AGENT_ID} 开发流水线`,
     outcome: null,
     outcome_at: null,
     outcome_note: null,
@@ -2538,7 +2538,7 @@ async function runAndyPipeline(params: {
       // 告知 Lucas Andy 已开始处理（知情方，Lucas 决定是否与用户沟通）
       if (params.userId && params.userId !== "unknown") {
         void callGatewayAgent(
-          "lucas",
+          FRONTEND_AGENT_ID,
           [
             `【Andy 收到需求 · ${requirementId}】`,
             andyResponse?.slice(0, 300) ?? "Andy 正在分析需求并设计方案，稍后 Lisa 会开始实现。",
@@ -2648,7 +2648,7 @@ function resolveAgentModel(agentId: string): string {
 // ── opencode 执行 ──────────────────────────────────────────────────────
 //
 // OpenCode 的 --model 参数格式为 "provider/model"（如 zai/glm-5、ollama/local-assistant）。
-// 模型选择默认通过 resolveAgentModel("lisa") 跟随 Lisa 路由阈值，
+// 模型选择默认通过 resolveAgentModel(IMPLEMENTOR_AGENT_ID) 跟随 Lisa 路由阈值，
 // 调用方可通过 modelOverride 显式覆盖。
 
 async function executeOpenCode(
@@ -2657,8 +2657,8 @@ async function executeOpenCode(
   modelOverride?: string,
 ): Promise<string> {
   // 构造 OpenCode model 字符串（provider/model 格式）
-  // 优先使用调用方显式指定 → 否则走 resolveAgentModel("lisa")（跟随 Lisa 路由阈值进化）
-  const model = modelOverride ?? resolveAgentModel("lisa");
+  // 优先使用调用方显式指定 → 否则走 resolveAgentModel(IMPLEMENTOR_AGENT_ID)（跟随 Lisa 路由阈值进化）
+  const model = modelOverride ?? resolveAgentModel(IMPLEMENTOR_AGENT_ID);
 
   // debug: 记录调用参数，确认 model 名称是否正确
   const { appendFileSync } = await import("fs");
@@ -2735,7 +2735,7 @@ async function launchOpenCodeBackground(
   projectRoot: string,
   modelOverride?: string,
 ): Promise<string> {
-  const model = modelOverride ?? resolveAgentModel("lisa");
+  const model = modelOverride ?? resolveAgentModel(IMPLEMENTOR_AGENT_ID);
   const sessionId = `oc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
   // 从 task（Andy 的 spec 内容）中提取 requestorId 和 requirementId，供 proc.on("close") 通知 Lucas
@@ -2795,7 +2795,7 @@ async function launchOpenCodeBackground(
   // Lucas 知情：Lisa 已开始编写代码（用户可能在等待，Lucas 决定是否主动告知进展）
   if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
     void callGatewayAgent(
-      "lucas",
+      FRONTEND_AGENT_ID,
       [
         `【Lisa 开始编写代码 · ${_taskRequirementId || sessionId}】`,
         `opencode 已启动，Lisa 正在实现代码，这个过程可能需要几分钟到十几分钟，完成后 Andy 会验收。`,
@@ -2941,7 +2941,7 @@ async function launchOpenCodeBackground(
     if (code === 0) {
       void (async () => {
         const andyVerdict = await callGatewayAgent(
-          "andy",
+          DESIGNER_AGENT_ID,
           [
             `【系统通知】opencode 实现任务已完成（sessionId: ${sessionId}，exit 0）。`,
             `任务摘要：${taskSummary}${specVerificationBlock}`,
@@ -2983,7 +2983,7 @@ async function launchOpenCodeBackground(
             });
           } else {
             void callGatewayAgent(
-              "lucas",
+              FRONTEND_AGENT_ID,
               [
                 `【Andy 验收完成 · ${_taskRequirementId || sessionId}】`,
                 brief,
@@ -3001,7 +3001,7 @@ async function launchOpenCodeBackground(
       // Andy 分析完后还会再次告知 Lucas 更具体的进展（见下方 IIFE）
       if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
         void callGatewayAgent(
-          "lucas",
+          FRONTEND_AGENT_ID,
           [
             `【实现遇到技术问题 · ${_taskRequirementId || sessionId}】`,
             `代码实现遇到了技术问题，Andy 正在分析原因和决定下一步方向，稍后会给你进展更新。`,
@@ -3014,7 +3014,7 @@ async function launchOpenCodeBackground(
       }
       void (async () => {
         const andyAssessment = await callGatewayAgent(
-          "andy",
+          DESIGNER_AGENT_ID,
           [
             `【系统通知】opencode 实现任务执行失败（sessionId: ${sessionId}，exit ${code}）。`,
             `任务摘要：${taskSummary}${specVerificationBlock}`,
@@ -3033,7 +3033,7 @@ async function launchOpenCodeBackground(
           ?? "实现遇到了一些技术问题，Andy 正在处理，稍后会有进展。";
         if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
           void callGatewayAgent(
-            "lucas",
+            FRONTEND_AGENT_ID,
             [
               `【Andy 通报进展 · ${_taskRequirementId || sessionId}】`,
               brief,
@@ -3730,7 +3730,7 @@ async function runDiagnostic(): Promise<void> {
       });
       // 投递 Andy 分析改进方案（异步，不阻塞诊断）
       void callGatewayAgent(
-        "andy",
+        DESIGNER_AGENT_ID,
         `【三维诊断告警·Capability 层】${cfg.agentId} 过去7天工具成功率 ${(successRate * 100).toFixed(0)}%（低于阈值60%）。高频失败工具：${failedTools.join("、")}。请分析根因，设计替代方案或改进策略，输出 Implementation Spec。`,
         120_000,
       ).catch(() => {});
@@ -3748,7 +3748,7 @@ async function runDiagnostic(): Promise<void> {
     const oldest = pendingSignals[0];
     // 投递 Andy 处理最旧的 pending 信号（每次只处理一条，避免并发过载）
     void callGatewayAgent(
-      "andy",
+      DESIGNER_AGENT_ID,
       `【三维诊断告警·Knowledge 层】Skill 审查信号：领域「${oldest.topic as string}」（${oldest.note as string}）。请检查并更新对应 Skill 文件（输出更新后的 Skill markdown 内容）。`,
       120_000,
     ).catch(() => {});
@@ -4041,7 +4041,7 @@ async function runReflectionEngine(): Promise<void> {
   if (issues.length > 0) {
     // 投递 Andy 生成改进假设（prompt 设计 / 记忆策略 / Skill 更新）
     void callGatewayAgent(
-      "andy",
+      DESIGNER_AGENT_ID,
       `【Axis 2 反思引擎告警】协作信号近30天出现偏差：\n${issues.map(i => `- ${i}`).join("\n")}\n\n请分析根因（可能是 Lucas prompt 设计、记忆策略、或 Skill 文件），提出具体改进假设（可输出 Implementation Spec 或修改建议）。`,
       120_000,
     ).catch(() => {});
@@ -4323,9 +4323,8 @@ const crewclawRoutingPlugin = {
     setImmediate(() => {
       evolveRouting();
       evolveLifecycles();
-      // Andy/Lisa 实例层 skills 目录初始化（从框架层复制，已有文件不覆盖）
-      initAgentSkillsDir("andy");
-      initAgentSkillsDir("lisa");
+      // 全部基础 Agent 的实例层 skills 目录初始化（从框架层复制，已有文件不覆盖）
+      for (const aid of BASE_AGENTS) initAgentSkillsDir(aid);
     });
 
     // 子 Agent 休眠检测：每 24h 运行一次（第一次在 evolveLifecycles 已运行）
@@ -4470,9 +4469,9 @@ const crewclawRoutingPlugin = {
       let intent: string | null = null;
       if (ctx.agentId === FRONTEND_AGENT_ID) {
         intent = sessionIntent.get(ctx.sessionKey ?? "") ?? null;
-      } else if (ctx.agentId === "andy") {
+      } else if (ctx.agentId === DESIGNER_AGENT_ID) {
         intent = "architecture_design";
-      } else if (ctx.agentId === "lisa") {
+      } else if (ctx.agentId === IMPLEMENTOR_AGENT_ID) {
         intent = "code_implementation";
       } else if (ctx.agentId === "main") {
         intent = "system_engineer";
@@ -5361,7 +5360,7 @@ const crewclawRoutingPlugin = {
       // knowledge_injection 由 Lucas.share_with_andy 写入，专供 Andy 消化。
       // 语义搜索 topK=5 名额竞争激烈；直近投喂必须走专用时序通道，不依赖语义召回。
       // 只在 Andy HEARTBEAT 时注入，避免干扰正常设计对话。
-      if (agentId === "andy" && /HEARTBEAT/i.test(event.prompt ?? "")) {
+      if (agentId === DESIGNER_AGENT_ID && /HEARTBEAT/i.test(event.prompt ?? "")) {
         try {
           const sevenDaysAgo = agoCST(7 * 24 * 3600 * 1000);
           const injections = await chromaGet("decisions", {
@@ -5434,7 +5433,7 @@ const crewclawRoutingPlugin = {
         }
       }
 
-      if (ctx.agentId !== "andy") return;
+      if (ctx.agentId !== DESIGNER_AGENT_ID) return;
 
       // write / edit：封锁写代码，但允许写 Andy 自己的工作域（spec 设计产出）
       if (event.toolName === "write" || event.toolName === "edit") {
@@ -5673,8 +5672,8 @@ const crewclawRoutingPlugin = {
       void checkChromaCapacity().catch(() => {});
 
       // ── 子 Agent Tier corpus FIFO 配额（非 base agent）──────────────────
-      // base agents (lucas/andy/lisa) 不受 Tier 约束；子 Agent 按 Tier 限制截断
-      if (!["lucas", "andy", "lisa", "main"].includes(ctx.agentId)) {
+      // base agents 不受 Tier 约束；子 Agent 按 Tier 限制截断
+      if (!BASE_AGENTS.has(ctx.agentId)) {
         const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
         const rec = registry.getAgent(ctx.agentId);
         if (rec) {
@@ -5753,7 +5752,7 @@ const crewclawRoutingPlugin = {
       // ── Lisa edit-tool 路径 codebase_observation ──────────────────────────────
       // Lisa 有时选择直接用 edit/write 工具而非 run_opencode（工程判断）。
       // run_opencode 路径由 proc.on("close") 写入；edit 路径没有此钩子，在 agent_end 补写。
-      if (ctx.agentId === "lisa" && !isTestSession) {
+      if (ctx.agentId === IMPLEMENTOR_AGENT_ID && !isTestSession) {
         const usedEditTools = (toolUseCounts["edit"] ?? 0) + (toolUseCounts["write"] ?? 0) > 0;
         const usedOpencode  = (toolUseCounts["run_opencode"] ?? 0) > 0;
         if (usedEditTools && !usedOpencode) {
@@ -6404,7 +6403,7 @@ const crewclawRoutingPlugin = {
               ?? `Andy 正在处理一个 Bug（${p.symptom.slice(0, 40)}），Lisa 已完成分析，即将修复。`;
 
             void callGatewayAgent(
-              "lucas",
+              FRONTEND_AGENT_ID,
               [
                 `【Andy 通报 · ${bugId}】`,
                 lucasBrief,
@@ -6443,7 +6442,7 @@ const crewclawRoutingPlugin = {
 
               appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
                 timestamp: nowCST(),
-                role: "lisa",
+                role: IMPLEMENTOR_AGENT_ID,
                 requirement_id: bugId,
                 ttl_days: 90,
                 spec: lisaFixPrompt,
@@ -6497,7 +6496,7 @@ const crewclawRoutingPlugin = {
 
                 // 告知 Lucas 修复完成，Lucas 自主决定沟通时机和方式
                 void callGatewayAgent(
-                  "lucas",
+                  FRONTEND_AGENT_ID,
                   [
                     `【Andy 验收完成 · ${bugId}】`,
                     deliveryBrief,
@@ -6629,7 +6628,7 @@ const crewclawRoutingPlugin = {
         const p = params as { spec: string; user_id?: string; requirement_id?: string };
 
         // 仅 Andy 可调用；Lucas 误调时返回错误（应走 trigger_development_pipeline 或 report_bug）
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return {
             content: [{ type: "text", text: `❌ trigger_lisa_implementation 是 Andy 专属工具。Lucas 应使用 trigger_development_pipeline（功能需求）或 report_bug（Bug 修复）。` }],
             details: { error: "wrong_agent" },
@@ -6665,7 +6664,7 @@ const crewclawRoutingPlugin = {
                 // 告知 Lucas：Andy 已出方案，并行调度开始（Lucas 决定是否告知用户）
                 if (requestorId && requestorId !== "unknown") {
                   void callGatewayAgent(
-                    "lucas",
+                    FRONTEND_AGENT_ID,
                     [
                       `【Andy 设计完成 · ${reqId}（Coordinator 模式）】`,
                       `Andy 将 ${subSpecs.length} 个独立子模块并行交给 Lisa 实现：${subSpecs.map(s => s.title).join(" / ")}`,
@@ -6728,7 +6727,7 @@ const crewclawRoutingPlugin = {
                           ? `Lisa 并行实现完成（${succeeded}/${results.length} 子任务），Andy 已综合验收。`
                           : `并行实现部分完成（${failed}/${results.length} 子任务失败），Andy 正在处理后续。`);
                       void callGatewayAgent(
-                        "lucas",
+                        FRONTEND_AGENT_ID,
                         [
                           `【Andy 验收完成 · ${reqId}（Coordinator 模式）】`,
                           brief,
@@ -6930,7 +6929,7 @@ const crewclawRoutingPlugin = {
         if (requestorId && requestorId !== "unknown") {
           // 告知 Lucas 设计完成（Lucas 决定是否、何时、如何告知用户进展）
           void callGatewayAgent(
-            "lucas",
+            FRONTEND_AGENT_ID,
             [
               `【Andy 设计完成 · ${p.requirement_id ?? "unknown"}】`,
               `Andy 已完成方案设计，Lisa 即将开始实现。方案摘要：${specPreview}`,
@@ -6964,7 +6963,7 @@ const crewclawRoutingPlugin = {
             // 触发 Lisa 实现：发送 spec，要求 Lisa 调用 run_opencode 工具
             // threadId 贯穿整个协作过程，report_implementation_issue 多轮回路共享同一上下文
             const lisaResponse = await callGatewayAgent(
-              "lisa",
+              IMPLEMENTOR_AGENT_ID,
               [
                 `【Implementation Spec】\n${p.spec}`,
                 "请阅读以上 spec，使用 run_opencode 工具在项目目录执行代码实现。",
@@ -7016,7 +7015,7 @@ const crewclawRoutingPlugin = {
             if (lisaResponse && !lisaBypassedOpencode) {
               appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
                 timestamp: nowCST(),
-                role: "lisa",
+                role: IMPLEMENTOR_AGENT_ID,
                 requirement_id: reqId,
                 ttl_days: 180,
                 spec: p.spec.slice(0, 500),
@@ -7105,7 +7104,7 @@ const crewclawRoutingPlugin = {
                 if (lucasAcceptance) {
                   appendJsonl(join(PROJECT_ROOT, "data/corpus/lucas-corpus.jsonl"), {
                     timestamp: nowCST(),
-                    role: "lucas",
+                    role: FRONTEND_AGENT_ID,
                     requirement_id: reqId,
                     task: "delivery_acceptance",
                     raw_delivery: lisaResponse.slice(0, 300),
@@ -7113,7 +7112,7 @@ const crewclawRoutingPlugin = {
                   });
                   void addDecisionMemory({
                     decision_id: reqId,
-                    agent: "lucas",
+                    agent: FRONTEND_AGENT_ID,
                     timestamp: nowCST(),
                     context: p.spec.slice(0, 300),
                     decision: "TUI 路径验收并重包装",
@@ -7174,7 +7173,7 @@ const crewclawRoutingPlugin = {
           if (!success && requestorId && requestorId !== "unknown") {
             try {
               const lucasFailMsg = await callGatewayAgent(
-                "lucas",
+                FRONTEND_AGENT_ID,
                 [
                   `【流水线失败 · ${reqId}】Lisa 在实现需求时遇到了问题，没有完成交付。`,
                   `技术原因（内部参考，不要直接说给家人）：${responseText.slice(0, 300)}`,
@@ -7195,7 +7194,7 @@ const crewclawRoutingPlugin = {
               ? `【${p.requirement_id ?? "unknown"}】流水线完成\n\n━━ Lisa 交付报告 ━━\n${responseText}`
               : `【${p.requirement_id ?? "unknown"}】流水线失败\n\n━━ 错误详情 ━━\n${responseText}`,
             "pipeline",
-            "lisa",
+            IMPLEMENTOR_AGENT_ID,
           );
           await pushEventDriven(responseText, requestorId, success);
           // Fix 3：Lisa 完成后主动更新任务状态（覆盖 runAndyPipeline 可能已标的 failed）
@@ -7244,7 +7243,7 @@ const crewclawRoutingPlugin = {
         ),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return {
             content: [{ type: "text", text: `❌ query_requirement_owner 是 Andy 专属工具。` }],
             details: { error: "wrong_agent" },
@@ -7293,7 +7292,7 @@ const crewclawRoutingPlugin = {
               lucasReply ?? "(无回复)",
             ].filter(Boolean).join("\n"),
             "info",
-            "andy",
+            DESIGNER_AGENT_ID,
           );
 
           return {
@@ -7328,7 +7327,7 @@ const crewclawRoutingPlugin = {
         try {
           const result = await researchWithDeepSeek(p.query);
           // 调研结果持久化进蒸馏管道：写入 decisions 集合，agentId 区分来源
-          const agentId = toolCtx.agentId || "andy";
+          const agentId = toolCtx.agentId || DESIGNER_AGENT_ID;
           const docId = `research-${agentId}-${Date.now()}`;
           const document = `【调研问题】${p.query}\n\n【调研结论】${result}`;
           embedText(document)
@@ -7479,7 +7478,7 @@ const crewclawRoutingPlugin = {
         thread_id: Type.Optional(Type.String({ description: "协作线程 ID（来自 trigger_lisa_implementation 的 andy-to-lisa:{reqId}_collab），传入后 Andy 能看到完整上下文" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== "lisa") {
+        if (toolCtx.agentId && toolCtx.agentId !== IMPLEMENTOR_AGENT_ID) {
           return {
             content: [{ type: "text", text: "❌ report_implementation_issue 是 Lisa 专属工具。" }],
             details: { error: "wrong_agent" },
@@ -7513,7 +7512,7 @@ const crewclawRoutingPlugin = {
           const issueTask = readTaskRegistry().find(t => t.id === p.requirement_id);
           if (issueTask?.submittedBy) {
             void callGatewayAgent(
-              "lucas",
+              FRONTEND_AGENT_ID,
               [
                 `【实现遇到阻塞，团队处理中 · ${p.requirement_id}】`,
                 `Lisa 在实现代码时遇到了技术阻塞，已向 Andy 反馈，Andy 正在决策下一步方向后 Lisa 继续实现。`,
@@ -7603,7 +7602,7 @@ const crewclawRoutingPlugin = {
       }),
 
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return {
             content: [{ type: "text", text: "❌ request_implementation_revision 是 Andy 专属工具。" }],
             details: { error: "wrong_agent" },
@@ -7689,7 +7688,7 @@ const crewclawRoutingPlugin = {
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const p = params as { integration_spec: string; requirement_id: string; user_id?: string };
 
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return {
             content: [{ type: "text", text: "❌ trigger_lisa_integration 是 Andy 专属工具（Coordinator 模式集成阶段）。" }],
             details: { error: "wrong_agent" },
@@ -7796,7 +7795,7 @@ const crewclawRoutingPlugin = {
         const p = params as { query: string; scope?: string };
 
         // Andy 专属 guard
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return {
             content: [{ type: "text", text: "Error: search_codebase 是 Andy 专用工具" }],
             details: { error: "wrong_agent" },
@@ -7898,7 +7897,7 @@ const crewclawRoutingPlugin = {
         append: Type.Optional(Type.Boolean({ description: "true=追加，false=覆盖（默认）" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return { content: [{ type: "text", text: "Error: write_file 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
         }
 
@@ -7967,7 +7966,7 @@ const crewclawRoutingPlugin = {
         requirement_id: Type.Optional(Type.String({ description: "需求 ID（req_xxx），用于绑定协作线程，与后续 trigger_lisa_implementation 保持同一 thread" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return {
             content: [{ type: "text", text: "❌ consult_lisa 是 Andy 专属工具。" }],
             details: { error: "wrong_agent" },
@@ -7990,7 +7989,7 @@ const crewclawRoutingPlugin = {
           const consultTask = readTaskRegistry().find(t => t.id === p.requirement_id);
           if (consultTask?.submittedBy) {
             void callGatewayAgent(
-              "lucas",
+              FRONTEND_AGENT_ID,
               [
                 `【Andy 与 Lisa 确认技术方案 · ${p.requirement_id}】`,
                 `Andy 在设计方案时遇到技术不确定点，正在和 Lisa 确认可行性，确认后继续写方案再交给 Lisa 实现。`,
@@ -8050,7 +8049,7 @@ const crewclawRoutingPlugin = {
         thread_id: Type.Optional(Type.String({ description: "协作线程 ID，传入后 evaluator 能看到完整协作上下文" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== "lisa") {
+        if (toolCtx.agentId && toolCtx.agentId !== IMPLEMENTOR_AGENT_ID) {
           return {
             content: [{ type: "text", text: "❌ request_evaluation 是 Lisa 专属工具。" }],
             details: { error: "wrong_agent" },
@@ -8144,7 +8143,7 @@ const crewclawRoutingPlugin = {
         thread_id: Type.Optional(Type.String({ description: "协作线程 ID，传入后 evaluator 能看到完整上下文" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
           return {
             content: [{ type: "text", text: "❌ request_andy_evaluation 是 Andy 专属工具。" }],
             details: { error: "wrong_agent" },
@@ -8253,7 +8252,7 @@ const crewclawRoutingPlugin = {
         // 如果有 requirement_id，写回 requirements 集合
         if (requirement_id) {
           void updateRequirementOutcome(requirement_id, outcome, user_feedback);
-          void updateDecisionOutcome("lucas", requirement_id, outcome, user_feedback);
+          void updateDecisionOutcome(FRONTEND_AGENT_ID, requirement_id, outcome, user_feedback);
         }
 
         // 记录主动触达信号（Axis 2 信号3：响应率）
@@ -8345,7 +8344,7 @@ const crewclawRoutingPlugin = {
         type: Type.Optional(Type.String({ description: '"intervention" | "pipeline" | "info"（默认 info）' })),
       }),
       execute: async (_toolCallId, params, _toolCtx): Promise<AgentToolResult<Record<string, unknown>>> => {
-        const callerAgentId = (_toolCtx as { agentId?: string })?.agentId ?? "lucas";
+        const callerAgentId = (_toolCtx as { agentId?: string })?.agentId ?? FRONTEND_AGENT_ID;
         const { message, type = "info" } = params as { message: string; type?: string };
         try {
           const resp = await fetch(CHANNEL_NOTIFY_URL, {
@@ -8568,7 +8567,7 @@ const crewclawRoutingPlugin = {
             void writeAgentRecord({
               agentId: weakest.agentId,
               tier: weakest.tier,
-              parentAgentId: weakest.parentAgentId ?? "lucas",
+              parentAgentId: weakest.parentAgentId ?? FRONTEND_AGENT_ID,
               description: `（已驱逐）Tier ${weakest.tier} 成员分身，活跃次数 ${weakest.activityCount}`,
               status: "evicted",
             });
@@ -8600,13 +8599,13 @@ const crewclawRoutingPlugin = {
         }
 
         // Registry 注册
-        registry.register(agentId, 2, "lucas");
+        registry.register(agentId, 2, FRONTEND_AGENT_ID);
 
         // 写 ChromaDB agents 集合（供 Lucas 等语义查询）
         void writeAgentRecord({
           agentId,
           tier: 2,
-          parentAgentId: "lucas",
+          parentAgentId: FRONTEND_AGENT_ID,
           description: `${member_name}（${relationship}）的专属分身${description ? `：${description}` : ""}`,
           status: "active",
         });
@@ -8660,7 +8659,7 @@ const crewclawRoutingPlugin = {
             body: JSON.stringify({
               model: shadowAgentId,
               messages: [{ role: "user", content: p.question }],
-              user: "lucas",
+              user: FRONTEND_AGENT_ID,
               stream: false,
             }),
             signal: AbortSignal.timeout(60_000),
@@ -8671,7 +8670,7 @@ const crewclawRoutingPlugin = {
 
           // 记录此次交互到 agent_interactions 集合
           void writeAgentInteraction({
-            fromAgent: "lucas",
+            fromAgent: FRONTEND_AGENT_ID,
             toAgent: shadowAgentId,
             content: `问：${p.question}\n答：${answer}`,
             taskId: `profile-query-${Date.now()}`,
@@ -8713,9 +8712,9 @@ const crewclawRoutingPlugin = {
           agent_id: string; role_description: string; tier?: string;
         };
 
-        const parentId = toolCtx.agentId ?? "andy";
+        const parentId = toolCtx.agentId ?? DESIGNER_AGENT_ID;
         // Lisa 只能创建 Tier 1
-        const tier = (parentId === "lisa" ? 1 : Math.min(2, Math.max(1, parseInt(tierStr ?? "1", 10)))) as 1 | 2;
+        const tier = (parentId === IMPLEMENTOR_AGENT_ID ? 1 : Math.min(2, Math.max(1, parseInt(tierStr ?? "1", 10)))) as 1 | 2;
 
         const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
 
