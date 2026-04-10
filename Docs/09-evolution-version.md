@@ -7,8 +7,59 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v627
+> **版本**: v628
 > **最后更新**: 2026-04-10
+
+---
+
+## v628 · Main 巡检去重 + L0~L3 评估方法全面刷新（2026-04-10）
+
+**干预类型**：Bug 修复 + 架构对齐
+
+**背景**：Main 巡检出现两个问题：① `log_improvement_task` 缺乏去重逻辑，同一类问题（如 chromadb 连接超时）被重复记录为多个 pending 任务，工程师每次要逐条判断是否重复；② `evaluate_l0/l1/l2` 评估实现与当前架构（L2 track A/C 落地、L3 协作蒸馏落地、Andy HEARTBEAT 写时间戳机制）已脱节，evaluate_system 硬编码「L3 未进入」与实际不符。另发现 `evaluate_l1` 和 `inspect_agent_context` 中 `PYTHON3` 变量 undefined，两个工具的 Kuzu 查询每次都静默失败。
+
+**变更1：`log_improvement_task` pending 任务去重**
+
+- 写入新任务前，扫描所有 `status: "pending"` 的现有任务
+- 将新任务标题按空白/标点切词（≥3字符的词），统计与现有任务标题的词重叠数
+- 重叠 ≥ 2 个关键词时视为重复，返回已有任务 ID 提示，跳过写入
+- 防止「chromadb 连接超时」「chromadb 服务异常」等同义表述反复积压
+
+**变更2：`PYTHON3` undefined bug 修复**
+
+- **根因**：`PYTHON311` 定义在 `evaluate_l0` 局部块内，`evaluate_l1` 和 `inspect_agent_context` 引用的 `PYTHON3`（无 `11` 后缀）在模块作用域从未定义，Kuzu 查询路径被 `try/catch` 静默吞掉
+- **修复**：`PYTHON311` 提升到 `executeMainTool` 函数顶部；两处 `PYTHON3` 统一改为 `PYTHON311`；临时 Python 脚本路径从 `scripts/` 改为 `temp/`（不污染脚本目录）
+
+**变更3：`evaluate_l0` 新增两项检查**
+
+- **检查5**：ChromaDB `decisions` 集合可达性 + 条数（蒸馏目标库，不可达说明 L1/L2 上下文注入会失效）
+- **检查6**：Kuzu 协作边数量（`co_discusses` / `requests_from` / `supports` / `role_in_context` / `active_thread`），作为 L3 数据积累就绪信号，输出 `⚪`（数据积累中）或 `✅`（已有协作边）
+
+**变更4：`evaluate_l2` 重写**
+
+旧实现：Andy HEARTBEAT 靠模糊正则检测「是否有巡检记录」，不知道距上次多久；无 opencode 质量数据。
+
+新实现：
+- Andy HEARTBEAT：读取 `上次巡检:` 字段提取真实时间戳，计算距今小时数，超 30h 标黄（watchdog 写时间戳是基础设施层行为，字段格式固定）
+- opencode-results.jsonl：读近 10 次运行记录，计算成功率 + 平均 spec 吻合率（`matchRate`），成功率 < 70% 标黄
+- ChromaDB `codebase_patterns`：Lisa 每次 opencode 完成后写入的代码库洞察，0 条则 `⚪`（流水线未跑过或首次）
+- `learningDir` 路径修正为 `Data/learning`（2026-04-08 目录重构后应为大写）
+
+**变更5：新增 `evaluate_l3`**
+
+全新评估工具，对应 L3「组织协作」层：
+1. Kuzu 协作边完整分类计数（`distill-relationship-dynamics.py` 产出：4 类 collab + active_thread）
+2. ChromaDB `shadow_interactions` 演进环记录数（`run_evolution_pass()` 产出）
+3. `visitor-registry.json` 访客影子状态统计（active / dormant / archived）
+4. `Logs/distill-relationship-dynamics.log` 上次运行时间（每周日 4am 触发）
+
+**变更6：`evaluate_system` 更新**
+
+- 调用链：`evaluate_l0 / l1 / l2` → `evaluate_l0 / l1 / l2 / l3`
+- 评分卡 `L3 组织协作 ${动态评分}`，移除硬编码「L3 组织运作 ⬜（未进入）」
+- 返回字符串末尾追加 L3 详细报告
+
+**文档更新**：`00-project-overview.md` Main 工具表：evaluate_l0~l3 描述全部刷新，新增 evaluate_l3 行，evaluate_system + log_improvement_task 描述同步。
 
 ---
 

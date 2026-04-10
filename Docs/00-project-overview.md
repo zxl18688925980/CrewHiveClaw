@@ -1199,12 +1199,13 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `trigger_finetune`     | 后台触发增量微调                                                  |
 | `scan_pipeline_health` | 全面扫描系统健康：PM2 + Gateway（`/health`）+ wecom + 最近 1h 日志错误摘要  |
 | `scan_lucas_quality`   | 扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空/过短回复 |
-| `evaluate_l0`          | 蒸馏管道健康：watchdog PM2 状态、上次蒸馏时间、未蒸馏对话积压量、Kuzu Fact 节点总数 |
-| `evaluate_l1`          | Agent 认知质量：scan_lucas_quality 结果 + Andy/Lisa 最近 20 条 agent_interactions 抽查 |
-| `evaluate_l2`          | 进化循环状态：skill-candidates 候选数、dpo-candidates 负例数、Andy HEARTBEAT 上次触发时间、现有 Skill 数量 |
-| `evaluate_system`      | 总入口：依次调 L0~L2 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌ [一句话说明]`），业主发「系统评估」即触发 |
+| `evaluate_l0`          | 蒸馏管道健康：watchdog PM2 状态、Kuzu Fact/Entity 总数、ChromaDB conversations + decisions 总量、家人档案更新时间、Kuzu 协作边数量（L3 就绪信号） |
+| `evaluate_l1`          | Agent 认知质量：Lucas 最近对话质量扫描（格式/幻觉/空回复）、Andy/Lisa agent_interactions 抽查、家人档案注入文件存在性、Track A/C 蒸馏产出条数、Kuzu has_pattern 积累量 |
+| `evaluate_l2`          | 进化循环状态：skill-candidates 候选数、dpo-candidates 负例数、Andy HEARTBEAT 上次巡检时间（`上次巡检:` 字段，超 30h 标黄）、opencode 近 10 次成功率 + 平均 spec 吻合率、codebase_patterns 条数、三角色 Skill 总数 |
+| `evaluate_l3`          | 组织协作状态：Kuzu 协作边（co_discusses / requests_from / supports / role_in_context）+ active_thread、ChromaDB shadow_interactions 演进环记录数、访客 Registry active/dormant/archived 统计、关系蒸馏日志上次运行时间 |
+| `evaluate_system`      | 总入口：依次调 L0~L3 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`），业主发「系统评估」即触发 |
 | `update_heartbeat`     | 追加监控观察（`append_observation`）/ 标记日报已发（`mark_daily_sent`，清空待汇总观察）|
-| `log_improvement_task` | 记录监控发现的系统改进点到 `data/main-pending-tasks.json`（含 `id / priority / title / description / status`）；ClaudeCode 会话启动时自动读取 pending 列表，确保改进信号不丢失 |
+| `log_improvement_task` | 记录监控发现的系统改进点到 `data/main-pending-tasks.json`；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
 
 典型远程调试流程：改完插件代码 → `restart_gateway` → `test_lucas` → 确认修复，全程企业微信完成。
 
