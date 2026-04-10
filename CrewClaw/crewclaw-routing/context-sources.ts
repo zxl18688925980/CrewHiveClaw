@@ -59,7 +59,8 @@ export type ChromaQueryMode =
   | "pending-requirements" // 查 status=pending 的需求
   | "agent-interactions"   // 按 agentId 查协作记录
   | "code-history"         // 语义检索代码历史
-  | "constraint-recall";   // 只召回 type=constraint 的平台约束（独立通道，不与决策竞争 topK）
+  | "constraint-recall"    // 只召回 type=constraint 的平台约束（独立通道，不与决策竞争 topK）
+  | "codebase-patterns";   // 语义检索 codebase_patterns 集合（opencode 历史洞察）
 
 export interface ChromaSource {
   source:       "chromadb";

@@ -1298,6 +1298,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `query_requirement_owner` | 遇到需求歧义时，向业务大师发起澄清（`【来自Andy·需求澄清】` 前缀） |
 | `request_andy_evaluation` | 触发独立 Andy 评估器对 Spec 做设计审查（集成点存在性 + AC 可测性） |
 | `create_sub_agent` | 创建专项研究子 Agent，用完销毁，语料归入架构大师 corpus |
+| `search_codebase` | 智能代码搜索：三路并行（文件名模糊匹配 / 内容 grep / 历史实现洞察），定位相关文件后配合 exec 深入读 |
 | `read_file` | 读取 HomeAI 目录下任意文件，用于 Spec 写作前验证集成点真实状态 |
 | `list_files` | 列出 HomeAI 目录下某路径的文件列表，配合 read_file 导航大型代码库 |
 
@@ -3285,9 +3286,9 @@ export const contextSources: Record<string, ContextSource[]> = {
 
 | agentId | source 数量 | 主要 source |
 |---------|------------|------------|
-| lucas | 9 | user-profile / conversations / decisions / behavior-patterns / family-knowledge / pending-commitments / background / constraint-recall / agent-patterns |
-| andy | 6 | decisions / code-history / agent-interactions / pending-requirements / background / agent-patterns |
-| lisa | 6 | code-history / decisions / agent-interactions / background / agent-patterns / constraint-recall |
+| lucas | 18 | user-profile(file) / background(file) / self-memory(file) / conversations(chroma) / decision-memory(chroma) / pending-commitments(chroma) / pending-requirements(chroma) / agent-interactions(chroma) / behavior-patterns(chroma) / family-knowledge(chroma) / active-capabilities(kuzu) / agent-patterns(kuzu) / app-capabilities(file) / person-realtime(kuzu) / pending-events(kuzu) / active-threads(kuzu) / relationship-network(kuzu) / topic-resonance(kuzu) |
+| andy | 12 | background(file) / agents-rules(file) / arch-summary(file) / design-memory(file) / design-principles(file) / design-decisions(chroma) / agent-interactions(chroma) / pending-requirements(chroma) / code-history(chroma) / codebase-patterns(chroma) / active-capabilities(kuzu) / agent-patterns(kuzu) |
+| lisa | 10 | background(file) / agents-rules(file) / codebase-context(file) / impl-memory(file) / constraint-recall(chroma) / decision-memory(chroma) / agent-interactions(chroma) / code-history(chroma) / active-capabilities(kuzu) / agent-patterns(kuzu) |
 
 > **agent-patterns 说明**：三角色的 `agent-patterns` source 已于 2026-03-31 首次激活（`ready: true`）。`distill-agent-memories.py` 成功运行后写入 Lucas 12 条 / Andy 6 条 / Lisa 9 条行为模式到 Kuzu。后续由 `gateway-watchdog.js` 每周日自动触发增量更新（DELTA_TRIGGER=10）。
 

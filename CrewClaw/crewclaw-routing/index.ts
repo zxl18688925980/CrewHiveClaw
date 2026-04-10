@@ -30,7 +30,7 @@
  *   cancel_task：Lucas 专属，叫停排队或进行中任务（pre-Lisa 检查点阻断实现）
  */
 
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, existsSync, unlinkSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, existsSync, unlinkSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { spawn, execSync, spawnSync } from "node:child_process";
@@ -3285,6 +3285,7 @@ interface DpoPatternsJson {
   lucas_forbidden_terms: string[];
   pretend_doing: string[];
   false_commitment: string[];
+  notification_commitment?: string[];
   report_bug_commitment?: string[];
   capability_hallucination: string[];
   user_correction_signals: string[];
@@ -3313,9 +3314,10 @@ const DPO_REPORT_BUG_PATTERNS   = _dpoPatterns.report_bug_commitment ?? [];
 // 命中 → 写入 dpo-candidates.jsonl 供系统工程师审核确认，不自动入训练集。
 // 模式从 config/dpo-patterns.json 加载，实例层可按需调整关键词。
 
-const DPO_PRETEND_PATTERNS   = _dpoPatterns.pretend_doing;
-const DPO_COMMIT_PATTERNS    = _dpoPatterns.false_commitment;
-const DPO_HALLUCIN_PATTERNS  = _dpoPatterns.capability_hallucination;
+const DPO_PRETEND_PATTERNS    = _dpoPatterns.pretend_doing;
+const DPO_COMMIT_PATTERNS     = _dpoPatterns.false_commitment;
+const DPO_NOTIFY_PATTERNS     = _dpoPatterns.notification_commitment ?? [];
+const DPO_HALLUCIN_PATTERNS   = _dpoPatterns.capability_hallucination;
 const USER_CORRECTION_SIGNALS = _dpoPatterns.user_correction_signals;
 
 function detectDpoCandidates(params: {
@@ -3369,6 +3371,12 @@ function detectDpoCandidates(params: {
   const bugCommitHit = DPO_REPORT_BUG_PATTERNS.find(p => allOutputText.includes(p));
   if (bugCommitHit && !calledReportBug) {
     reasons.push(`bug_commitment: "${bugCommitHit}"`);
+  }
+
+  // 模式 6：通知承诺幻觉（声称已通知家人但没调 send_message）
+  const notifyHit = DPO_NOTIFY_PATTERNS.find(p => allOutputText.includes(p));
+  if (notifyHit && !calledSend) {
+    reasons.push(`notification_commitment: "${notifyHit}"`);
   }
 
   if (reasons.length === 0) return false;
@@ -7733,6 +7741,188 @@ const crewclawRoutingPlugin = {
           content: [{ type: "text", text: `✅ 集成阶段已触发，Lisa 正在处理 ${reqId} 的集成工作。` }],
           details: { reqId, threadId },
         };
+      },
+    }));
+
+    // ── search_codebase：Andy 专属，智能代码搜索（写 spec 前定位目标文件和代码模式）──
+    //
+    // Claude Code 架构借鉴：给 Andy 一个搜索工具而不是让他猜文件路径。
+    // 三路并行搜索：文件名 / 代码内容 / 历史实现洞察，一次调用覆盖多种场景。
+    // 搜索范围限定在 CrewHiveClaw 代码仓，排除 node_modules 和 .git。
+
+    api.registerTool((toolCtx) => ({
+      label: "搜索代码库",
+      name: "search_codebase",
+      description: [
+        "Andy 专属工具：在 HomeAI 代码库中智能搜索代码和文件。",
+        "三种搜索模式可单独或组合使用：",
+        "  files — 按文件名模式查找文件（支持 glob 片段，如 'context-handler'、'gateway'）",
+        "  content — grep 搜索代码内容（支持关键词和简单模式，如 'chromaQuery'、'visitor.*registry'）",
+        "  history — 从 codebase_patterns 查询历史实现洞察（哪些文件 spec 吻合率低、失败模式）",
+        "scope 不传时同时执行三种模式（推荐）。搜索范围限定在 ~/HomeAI/CrewHiveClaw/。",
+        "典型用法：写 spec 前确认某个函数在哪个文件里、某个模块的历史实现问题、哪些文件经常出问题。",
+        "注意：这是搜索工具不是阅读工具。找到目标文件后用 read_file 或 exec cat 读详细内容。",
+      ].join("\n"),
+      parameters: Type.Object({
+        query: Type.String({
+          description: "搜索内容：文件名片段、代码关键词、函数名、或自然语言描述",
+        }),
+        scope: Type.Optional(Type.String({
+          description: "搜索范围: files（文件名）| content（代码内容）| history（历史洞察）| all（默认，三种同时）",
+        })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const p = params as { query: string; scope?: string };
+
+        // Andy 专属 guard
+        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+          return {
+            content: [{ type: "text", text: "Error: search_codebase 是 Andy 专用工具" }],
+            details: { error: "wrong_agent" },
+          };
+        }
+
+        const scope = p.scope ?? "all";
+        const query = p.query;
+        const CODE_ROOT = join(PROJECT_ROOT, "CrewHiveClaw");
+        const sections: string[] = [];
+
+        // ── Scope: files — 按文件名模糊查找 ──
+        if (scope === "all" || scope === "files") {
+          try {
+            const safeQuery = query.replace(/[^a-zA-Z0-9_.\-*/]/g, "");
+            if (safeQuery.length >= 2) {
+              const fileResults = execSync(
+                `find "${CODE_ROOT}" -type f -iname "*${safeQuery}*" ` +
+                `-not -path "*/node_modules/*" -not -path "*/.git/*" ` +
+                `-not -path "*/dist/*" -not -path "*/.openclaw/*" | head -15`,
+                { encoding: "utf8", timeout: 10_000, cwd: CODE_ROOT }
+              ).trim();
+              if (fileResults) {
+                const lines = fileResults.split("\n")
+                  .map(f => f.replace(CODE_ROOT + "/", ""))
+                  .slice(0, 15);
+                sections.push(`【文件匹配 · ${lines.length} 个】\n${lines.map(l => `  ${l}`).join("\n")}`);
+              }
+            }
+          } catch { /* no matches */ }
+        }
+
+        // ── Scope: content — grep 代码内容 ──
+        if (scope === "all" || scope === "content") {
+          try {
+            const escaped = query.replace(/"/g, '\\"').replace(/[<>|;&`$]/g, "");
+            if (escaped.length >= 2) {
+              // ripgrep：比标准 grep 快 10-100x，原生多线程，自动跳过 .gitignore 忽略目录
+              const grepResults = execSync(
+                `/opt/homebrew/bin/rg --no-heading -n -i -g "*.ts" -g "*.js" -g "*.py" -g "*.json" ` +
+                `--glob "!node_modules" --glob "!.git" --glob "!dist" --glob "!.openclaw" ` +
+                `-e "${escaped}" "${CODE_ROOT}" | head -20`,
+                { encoding: "utf8", timeout: 8_000, cwd: CODE_ROOT }
+              ).trim();
+              if (grepResults) {
+                const lines = grepResults.split("\n")
+                  .map(l => l.replace(CODE_ROOT + "/", ""))
+                  .slice(0, 20);
+                sections.push(`【内容匹配 · ${lines.length} 行】\n${lines.map(l => `  ${l}`).join("\n")}`);
+              }
+            }
+          } catch { /* no matches */ }
+        }
+
+        // ── Scope: history — 查询 codebase_patterns 历史洞察 ──
+        if (scope === "all" || scope === "history") {
+          try {
+            const historyResult = await queryCodebasePatterns(query);
+            if (historyResult) {
+              sections.push(historyResult);
+            }
+          } catch { /* silent */ }
+        }
+
+        const resultText = sections.length > 0
+          ? sections.join("\n\n")
+          : `未找到与「${query}」相关的结果。尝试换一个关键词或调整 scope。`;
+
+        return {
+          content: [{ type: "text", text: resultText }],
+          details: { query, scope, sections: sections.length },
+        };
+      },
+    }));
+
+    // ── write_file：Andy 专属，原子写入工作区文件（spec / 设计草稿 / 笔记）──
+    //
+    // ClaudeCode 架构借鉴：Write 工具采用原子写入（临时文件 → rename），防止部分写入污染。
+    // 路径限定在 ~/.openclaw/workspace-andy/，防止越权改动代码库或家人数据。
+    // Andy 可以用此工具把 spec、设计笔记、研究摘要持久化到自己的工作区，
+    // 而不是依赖 OpenClaw 的会话 write 机制（容易被 context 压缩冲掉）。
+
+    api.registerTool((toolCtx) => ({
+      label: "写入工作区文件",
+      name: "write_file",
+      description: [
+        "Andy 专属工具：将内容原子写入工作区文件。",
+        "采用「临时文件 → rename」原子写入，写入失败不会产生部分写入的脏文件。",
+        "路径限定在 ~/.openclaw/workspace-andy/ 内，防止越权写入代码库或家人数据。",
+        "典型用法：把 spec 草稿持久化到 specs/ 子目录、把研究笔记写入 notes/ 子目录。",
+        "path：文件路径，必须在 workspace-andy/ 内（可用相对路径如 specs/xxx.md，也可用绝对路径）。",
+        "content：文件内容（字符串）。",
+        "append（可选，默认 false）：true 时追加到文件末尾，false 时覆盖整个文件。",
+        "父目录不存在时自动创建。",
+      ].join("\n"),
+      parameters: Type.Object({
+        path: Type.String({ description: "文件路径（workspace-andy/ 内的相对路径，或绝对路径）" }),
+        content: Type.String({ description: "写入内容" }),
+        append: Type.Optional(Type.Boolean({ description: "true=追加，false=覆盖（默认）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== "andy") {
+          return { content: [{ type: "text", text: "Error: write_file 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+        }
+
+        const { content, append = false } = params as { path: string; content: string; append?: boolean };
+        let targetPath = (params as { path: string }).path;
+
+        const ANDY_WORKSPACE = join(process.env.HOME ?? "/", ".openclaw/workspace-andy");
+        if (!targetPath.startsWith("/")) {
+          targetPath = join(ANDY_WORKSPACE, targetPath);
+        }
+
+        if (!targetPath.startsWith(ANDY_WORKSPACE + "/") && targetPath !== ANDY_WORKSPACE) {
+          return {
+            content: [{ type: "text", text: `❌ 路径越权：只能写入 workspace-andy/ 内的文件。目标路径：${targetPath}` }],
+            details: { error: "path_violation", target: targetPath },
+          };
+        }
+
+        try {
+          mkdirSync(dirname(targetPath), { recursive: true });
+
+          if (append) {
+            appendFileSync(targetPath, content, "utf8");
+          } else {
+            const tmpPath = `${targetPath}.tmp.${Date.now()}`;
+            try {
+              writeFileSync(tmpPath, content, "utf8");
+              renameSync(tmpPath, targetPath);
+            } catch (e) {
+              try { unlinkSync(tmpPath); } catch {}
+              throw e;
+            }
+          }
+
+          const lines = content.split("\n").length;
+          const bytes = Buffer.byteLength(content, "utf8");
+          const displayPath = targetPath.replace(`${ANDY_WORKSPACE}/`, "");
+          return {
+            content: [{ type: "text", text: `✅ 已写入 workspace-andy/${displayPath}（${lines} 行，${bytes} 字节，${append ? "追加" : "覆盖"}）` }],
+            details: { path: targetPath, lines, bytes, mode: append ? "append" : "overwrite" },
+          };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return { content: [{ type: "text", text: `❌ 写入失败：${msg}` }], details: { error: msg } };
+        }
       },
     }));
 

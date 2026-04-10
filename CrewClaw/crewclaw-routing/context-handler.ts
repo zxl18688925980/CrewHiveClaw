@@ -32,6 +32,7 @@ export interface ContextResolvers {
     "agent-interactions":   (prompt: string, agentFilter: string, topK: number) => Promise<string>;
     "code-history":         (prompt: string, topK: number) => Promise<string>;
     "constraint-recall":    (prompt: string, agentFilter: string, topK: number) => Promise<string>;
+    "codebase-patterns":    (prompt: string, topK: number) => Promise<string>;
   };
   kuzu: {
     query: (cypher: string, boundParams: Record<string, unknown>) => Promise<string[]>;
@@ -99,6 +100,9 @@ async function resolveChroma(
 
     case "constraint-recall":
       return resolvers["constraint-recall"](params.prompt, src.agentFilter ?? params.agentId, src.topK);
+
+    case "codebase-patterns":
+      return resolvers["codebase-patterns"](params.prompt, src.topK);
   }
 }
 
