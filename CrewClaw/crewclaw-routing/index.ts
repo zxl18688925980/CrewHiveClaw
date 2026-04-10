@@ -6649,6 +6649,13 @@ const crewclawRoutingPlugin = {
                   } catch (e) {
                     const errMsg = e instanceof Error ? e.message : String(e);
                     void notifyEngineer(`【${reqId}】Coordinator 执行异常：${errMsg.slice(0, 300)}`, "pipeline", "andy");
+                    // Lucas 知情：Coordinator 异常，仅通知不干预
+                    void callGatewayAgent("lucas", [
+                      `【Coordinator 执行异常 · ${reqId}】`,
+                      `异常信息：${errMsg.slice(0, 200)}`,
+                      `这是 Andy 并行任务模式的异常，Lucas 无需干预，仅知情。`,
+                      `如果用户问起进展，可以告知"遇到了技术问题正在处理"。`,
+                    ].join("\n"), 20_000);
                     if (wecomUserId && wecomUserId !== "unknown") {
                       void pushToChannel(`Coordinator 执行异常：${errMsg}`, wecomUserId, false);
                     }
@@ -6887,6 +6894,13 @@ const crewclawRoutingPlugin = {
                 `【Lisa 幻觉工具调用 · ${reqId}】Lisa 绕过了 run_opencode，声称直接用 edit/write 工具修改了文件，但这些工具不存在。代码未被修改，任务标记失败。\n\nLisa 原话节选：${lisaResponse.slice(0, 300)}`,
                 "pipeline", "lisa",
               );
+              // Lucas 知情：Lisa 伪造交付，Lucas 需要应对用户可能的追问
+              void callGatewayAgent("lucas", [
+                `【Lisa 幻觉工具调用检测 · ${reqId}】`,
+                `Lisa 绕过了 run_opencode，尝试用不存在的 edit/write 工具"实现"代码。`,
+                `交付已被标记为无效。Lucas 无需干预，仅知情。`,
+                `如果用户问起这个任务，告知"还在处理中"或"遇到了问题需要重新实现"。`,
+              ].join("\n"), 20_000);
               responseText = "❌ Lisa 实现失败：Lisa 绕过了 run_opencode，用不存在的 edit 工具假装修改了文件。代码未被实际更改。";
               success = false;
               // Andy 是 spec 的作者，应知道 Lisa bypass 并决定下一步
@@ -7438,6 +7452,16 @@ const crewclawRoutingPlugin = {
             `【Andy 决策·Lisa 遇阻回路】${p.requirement_id ? `[${p.requirement_id}]` : ""}\n${(andyReply ?? "无回复").slice(0, 300)}`,
             "pipeline", "andy",
           );
+          // Lucas 知情：Andy 已对 Lisa 遇阻做出决策，Lucas 可据此回应用户
+          if (p.requirement_id) {
+            const issueTask = readTaskRegistry().find(t => t.id === p.requirement_id);
+            void callGatewayAgent("lucas", [
+              `【Andy 决策回复 · Lisa 遇阻回路 · ${p.requirement_id}]`,
+              `Andy 对 Lisa 遇阻的回复：${(andyReply ?? "无回复").slice(0, 200)}`,
+              issueTask?.submittedBy ? `用户 ID：${issueTask.submittedBy}` : "",
+              "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展。",
+            ].filter(Boolean).join("\n"), 20_000);
+          }
           void addDecisionMemory({
             decision_id: `lisa-issue-${Date.now()}`,
             agent: "lisa",
