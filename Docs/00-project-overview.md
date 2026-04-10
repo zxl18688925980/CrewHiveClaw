@@ -1266,6 +1266,8 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `notify_engineer` | 向系统工程师（外部干预角色）发信号：技术干预请求 / 流水线通报；**三角色共用**（Lucas / Andy / Lisa 均可调用），Andy 主动行动结果、Lisa 遇阻/完成均通过此工具通报，工程师可随时感知系统自运转状态 |
 | `gen_visitor_invite` | 为外部来访者生成临时接入凭证 |
 | `propose_knowledge_tag` | 标签治理：为访客/成员提出知识分类标签 |
+| `read_file` | 读取 HomeAI 目录下任意文件（L0 大文件能力，Lucas/Andy 均可用） |
+| `list_files` | 列出 HomeAI 目录下某路径的文件列表（配合 read_file 做大文件导航）|
 
 **框架层进化机制（自动运行，无需配置）**：
 - `agent_end` 写入 ChromaDB `conversations`，积累对话语料
@@ -1295,6 +1297,8 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `query_requirement_owner` | 遇到需求歧义时，向业务大师发起澄清（`【来自Andy·需求澄清】` 前缀） |
 | `request_andy_evaluation` | 触发独立 Andy 评估器对 Spec 做设计审查（集成点存在性 + AC 可测性） |
 | `create_sub_agent` | 创建专项研究子 Agent，用完销毁，语料归入架构大师 corpus |
+| `read_file` | 读取 HomeAI 目录下任意文件，用于 Spec 写作前验证集成点真实状态 |
+| `list_files` | 列出 HomeAI 目录下某路径的文件列表，配合 read_file 导航大型代码库 |
 
 **框架层进化机制（自动运行）**：
 - `agent_end` 写入 ChromaDB `decisions`，积累设计决策语料
@@ -1603,7 +1607,8 @@ Raw Data（ChromaDB / 静态文件）
 |---|---|---|---|
 | `person` / `topic` + 12 种 Fact | 成员角色 / 说话方式 / 关注点 / 近期状态 / 互动风格 / 动态关系 / 共同经历 / 待跟进事项 | ChromaDB `conversations`（周批量）| `distill-memories.py` |
 | `topic` + `active_thread` Fact | 当前与成员正在推进的话题线索（state + summary），valid_until = today+45d | ChromaDB `conversations`（最近 7 天）| `distill-active-threads.py` |
-| `capability` + `has_capability` | Lucas 拥有的 11 个工具 + 1 个 Web App | `TOOLS.md` + `app-capabilities.jsonl` | `init-capabilities.py` |
+| `person→person` + 协作关系 Fact（`co_discusses` / `requests_from` / `supports` / `role_in_context`）| 成员间动态协作模式，valid_until = today+90d，confidence 由演进环更新 | ChromaDB `conversations` | `distill-relationship-dynamics.py` |
+| `capability` + `has_capability` | Lucas 拥有的工具 + Web App | `TOOLS.md` + `app-capabilities.jsonl` | `init-capabilities.py` |
 
 **OpenClaw 8 文件**
 
@@ -1625,7 +1630,8 @@ Raw Data（ChromaDB / 静态文件）
 |---|---|---|---|
 | `distill-memories.py` | ChromaDB `conversations`（全量，周批）| Kuzu `person`/`topic` + 12 种 `Fact`（source_type=distill）| 每次对话后触发（30min 冷却）+ 每周日 2 点兜底 |
 | `distill-active-threads.py` | ChromaDB `conversations`（最近 7 天）| Kuzu `active_thread` Fact 边（valid_until = today + 45d，source_type=thread_distill）| 每次对话后触发（6h 冷却），fire-and-forget |
-| `render-knowledge.py`（默认）| Kuzu person Facts（`valid_until IS NULL`）| `{members}/{userId}.inject.md` | `distill-memories.py` 完成后自动触发 |
+| `distill-relationship-dynamics.py` | ChromaDB `conversations`（最近 60 条，按成员）| Kuzu `person→person` 协作 Fact（4 种 relation，source_type=collab_distill，valid_until=today+90d）+ ChromaDB `shadow_interactions`（演进环：LLM 推断状态→更新 confidence）| 每周日 4 点（gateway-watchdog 调度，错开 2 点蒸馏 + 3 点 team_observation）|
+| `render-knowledge.py`（默认）| Kuzu person Facts（含协作关系边 source_type=collab_distill）| `{members}/{userId}.inject.md`（含「组织协作关系」节）；每条 Fact 追加 `（更新日期）`，超 60 天加 `⚠️ 可能已过时` | `distill-memories.py` / `distill-relationship-dynamics.py` 完成后自动触发 |
 | `init-capabilities.py` | `CAPABILITY_REGISTRY`（人工提炼自 TOOLS.md）+ `app-capabilities.jsonl` | Kuzu `capability` Entity + `has_capability` Fact（source_type=registry，owner=lucas）| 手动运行，幂等；重置路径：重跑此脚本，过期所有 fact → 写新 registry |
 | `distill-agent-memories.py`（`refine_capabilities` 分支）| `capability-events.jsonl`（按 toolName 分组，≥5 条样本）+ Kuzu registry 描述（baseline）| Kuzu `has_capability` Fact（source_type=distilled，confidence=真实成功率）；同时过期对应 registry fact，避免 active-capabilities 重复注入 | 每周日 2 点；每个工具样本达 5 条时生效 |
 
@@ -1741,7 +1747,15 @@ Fact 边（Entity → Entity）
 
 **动态线索类（programmatic，见下方「活跃话题线索」节）**：`active_thread`（当前活跃话题线索，由 `distill-active-threads.py` 程序写入，不经过 LLM 提炼，不在 ALLOWED_RELATIONS 中）
 
-新实例搭建时，根据组织类型在 `distill-memories.py` 的 `ALLOWED_RELATIONS` 和 `render-knowledge.py` 的 `RELATION_LABELS` 里重新定义静态档案类 relation；动态线索类由专用脚本管理，不需配置 ALLOWED_RELATIONS。
+**协作关系类（L3 三元飞轮，`distill-relationship-dynamics.py` 管理，不在 ALLOWED_RELATIONS 中）**：
+- `co_discusses`：成员与另一成员共同关注/讨论同一议题，context 格式：`topic: 议题简述`
+- `requests_from`：成员依赖另一成员的协作或帮助，context 格式：`need: 需求简述`
+- `supports`：成员主动支持/帮助另一成员，context 格式：`provides: 支持内容`
+- `role_in_context`：成员在某个协作场景中承担特定角色，context 格式：`role: 角色描述, scene: 场景`
+- 统一字段：`source_type=collab_distill`，`valid_until=today+90d`，`confidence` 初始 0.75，由演进环每周更新（resolved +0.1 / failed -0.15，clamp 0.1~1.0）
+- 渲染：`render-knowledge.py` r4 查询，inject.md 新增「### 组织协作关系」节
+
+新实例搭建时，根据组织类型在 `distill-memories.py` 的 `ALLOWED_RELATIONS` 和 `render-knowledge.py` 的 `RELATION_LABELS` 里重新定义静态档案类 relation；动态线索类和协作关系类由专用脚本管理，不需配置 ALLOWED_RELATIONS。
 
 #### 全量刷新策略
 
@@ -2587,6 +2601,11 @@ L2 运转之后，一件新的事情发生了：**子 Agent 加入组织**。
 ```
 
 **触发机制**：每条消息处理后轻量扫描——查 Kuzu + ChromaDB，当前话题是否与其他成员近期信号相关联。发现关联 → 评估隐私合规性 → 决定是否主动协调。
+
+**三元飞轮（已落地，2026-04-10）**：协作关系蒸馏管道（`distill-relationship-dynamics.py`）每周日 4am 运行，Phase 1-3 全部实现：
+- **理解**：成员对话 → LLM 提取协作边 → Kuzu（`source_type=collab_distill`，90d 有效期）→ `render-knowledge.py` 渲染「组织协作关系」节到 inject.md
+- **增强**：inject.md 协作关系节注入 Lucas 上下文，Lucas 自然引用做协调中介
+- **演进**：`run_evolution_pass()` 接在写边后运行——LLM 推断每条协作边状态（resolved/ongoing/failed/unknown）→ 更新 Kuzu confidence → 写 ChromaDB `shadow_interactions` 集合（含语义嵌入）
 
 **隐私规则**：私聊内容默认保密；跨成员协调前必须征得发起方同意；双方授权后才连接信息。
 
