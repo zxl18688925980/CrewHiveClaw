@@ -133,7 +133,7 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       watch: false,
-      max_memory_restart: '100M',
+      max_memory_restart: '200M',
       restart_delay: 5000,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       error_file: path.join(LOGS_DIR, 'gateway-watchdog-error.log'),

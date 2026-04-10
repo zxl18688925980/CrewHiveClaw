@@ -1402,5 +1402,10 @@ log('凌晨 5 点：代码图谱增量重建（CrewClaw + Scripts，~39s）');
 log(`长流程任务扫描：每 ${TASK_SCAN_INTERVAL_MS / 1000}s 扫描 processing 超时任务（阈值 ${TASK_STUCK_MS / 60000} 分钟）`);
 log(`群消息推送检测：每 ${GROUP_SILENCE_SCAN_MS / 60000} 分钟扫描（静默阈值 ${GROUP_SILENCE_THRESHOLD_MS / 3_600_000} 小时，告警间隔 ${GROUP_SILENCE_ALERT_INTERVAL_MS / 3_600_000} 小时）`);
 log('访客沉寂检测：每小时扫描一次，凌晨 3 点执行——30 天无对话 → dormant；expiresAt 到期或 dormant 超 90 天 → 蒸馏 + 归档（shadow_status=archived）');
+// 全局异常兜底：防止 unhandled rejection 静默杀死进程
+process.on('unhandledRejection', (err) => {
+  log(`[FATAL] unhandledRejection: ${err && err.stack ? err.stack : err}`);
+});
+
 check(); // 启动时立即检查一次
 setInterval(check, CHECK_INTERVAL_MS);
