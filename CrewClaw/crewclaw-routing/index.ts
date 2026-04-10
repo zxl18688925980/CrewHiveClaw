@@ -9001,6 +9001,97 @@ const crewclawRoutingPlugin = {
       },
     }));
 
+    // ── read_file：Lucas/Andy 分块读取本地文件（大文件能力）────────────────────
+    api.registerTool((_toolCtx) => ({
+      label: "读取文件内容",
+      name: "read_file",
+      description: [
+        "读取本地文件的指定行范围。支持大文件分块读取——第一次调用不传 offset/limit 可读前100行，同时返回文件总行数，再按需继续读取。",
+        "path：文件绝对路径。支持 .txt .md .json .csv .py .ts .js 等文本格式。",
+        "offset：从第几行开始（0-based，默认0）。",
+        "limit：读取行数（默认100，最多500）。",
+        "适用场景：家人发来文档需要读取和理解、Andy 需要分析 spec 或代码文件、读取大型配置文件。",
+        "注意：不能用此工具写入或修改文件，只能读取。",
+      ].join("\n"),
+      parameters: Type.Object({
+        path: Type.String({ description: "文件绝对路径" }),
+        offset: Type.Optional(Type.Number({ description: "起始行（0-based，默认0）" })),
+        limit: Type.Optional(Type.Number({ description: "读取行数（默认100，最多500）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const { path: filePath, offset = 0, limit = 100 } = params as { path: string; offset?: number; limit?: number };
+        try {
+          const { readFileSync, existsSync, statSync } = await import("node:fs");
+          if (!existsSync(filePath)) {
+            return { content: [{ type: "text", text: `❌ 文件不存在：${filePath}` }], details: { error: "not_found" } };
+          }
+          const stat = statSync(filePath);
+          if (stat.size > 10 * 1024 * 1024) {
+            return { content: [{ type: "text", text: `❌ 文件过大（${Math.round(stat.size / 1024)}KB），超出 10MB 限制，请分段处理或通知工程师` }], details: { error: "too_large" } };
+          }
+          const content = readFileSync(filePath, "utf8");
+          const lines = content.split("\n");
+          const totalLines = lines.length;
+          const cap = Math.min(limit, 500);
+          const slice = lines.slice(offset, offset + cap).join("\n");
+          const remaining = totalLines - offset - cap;
+          const hint = remaining > 0 ? `\n\n[共 ${totalLines} 行，已读 ${offset}~${offset + cap - 1}，还剩 ${remaining} 行未读]` : `\n\n[共 ${totalLines} 行，已全部读完]`;
+          return {
+            content: [{ type: "text", text: slice + hint }],
+            details: { path: filePath, totalLines, offset, linesRead: Math.min(cap, totalLines - offset) },
+          };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return { content: [{ type: "text", text: `❌ 读取失败：${msg}` }], details: { error: msg } };
+        }
+      },
+    }));
+
+    // ── list_files：列出目录下的文件（Lucas/Andy 探索用）────────────────────
+    api.registerTool((_toolCtx) => ({
+      label: "列出目录文件",
+      name: "list_files",
+      description: [
+        "列出指定目录下的文件和子目录。Andy 探索代码库结构、Lucas 查找交付文件时使用。",
+        "dir：目录绝对路径。",
+        "pattern（可选）：文件名包含此字符串才列出（如 '.md' 只列 Markdown 文件）。",
+        "不递归子目录，只列出一层。",
+      ].join("\n"),
+      parameters: Type.Object({
+        dir: Type.String({ description: "目录绝对路径" }),
+        pattern: Type.Optional(Type.String({ description: "文件名过滤字符串（可选）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const { dir, pattern } = params as { dir: string; pattern?: string };
+        try {
+          const { readdirSync, statSync, existsSync } = await import("node:fs");
+          if (!existsSync(dir)) {
+            return { content: [{ type: "text", text: `❌ 目录不存在：${dir}` }], details: { error: "not_found" } };
+          }
+          const entries = readdirSync(dir, { withFileTypes: true });
+          const lines: string[] = [];
+          for (const e of entries) {
+            if (pattern && !e.name.includes(pattern)) continue;
+            try {
+              const st = statSync(`${dir}/${e.name}`);
+              const size = e.isDirectory() ? "" : ` (${Math.round(st.size / 1024)}KB)`;
+              lines.push(`${e.isDirectory() ? "📁" : "📄"} ${e.name}${size}`);
+            } catch {
+              lines.push(`  ${e.name}`);
+            }
+          }
+          const result = lines.length > 0 ? lines.join("\n") : "（目录为空）";
+          return {
+            content: [{ type: "text", text: `${dir}:\n${result}` }],
+            details: { dir, count: lines.length },
+          };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return { content: [{ type: "text", text: `❌ 列目录失败：${msg}` }], details: { error: msg } };
+        }
+      },
+    }));
+
     // ── recall_memory：Lucas 主动回忆，检索跨通道长期记忆 ────────────────────
     api.registerTool((_toolCtx) => ({
       label: "主动回忆",

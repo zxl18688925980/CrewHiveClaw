@@ -18,8 +18,10 @@ C1 扩展（2026-03-30）：Entity 新增 scope_tags / shadow_status / invited_b
 import os, sys
 from pathlib import Path
 
-HOMEAI_ROOT  = Path(__file__).parent.parent
-KUZU_DB_PATH = HOMEAI_ROOT / "data" / "kuzu"
+_SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
+KUZU_DB_PATH = _DATA_ROOT / "kuzu"
 
 def main():
     try:

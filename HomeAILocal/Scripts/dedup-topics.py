@@ -20,11 +20,13 @@ import os, sys, json, math, datetime, argparse, re
 from pathlib import Path
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
-HOMEAI_ROOT      = Path(__file__).parent.parent
+_SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
 CHROMA_URL       = os.environ.get("CHROMA_URL", "http://localhost:8001")
 CHROMA_BASE      = f"{CHROMA_URL}/api/v2/tenants/default_tenant/databases/default_database/collections"
 OLLAMA_URL       = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-KUZU_DB_PATH     = HOMEAI_ROOT / "data" / "kuzu"
+KUZU_DB_PATH     = _DATA_ROOT / "kuzu"
 DEDUP_THRESHOLD  = 0.95   # cosine 相似度阈值：超过此值视为重复节点
 # 注：nomic-embed-text 对短中文短语的通用域相似度偏高，需用较高阈值避免误合并
 # 经验值：0.93 仍会误合并语义不同的短语，0.95 更保守，适合当前数据量

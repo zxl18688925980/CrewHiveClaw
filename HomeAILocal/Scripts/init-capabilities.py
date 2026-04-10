@@ -24,8 +24,10 @@ init-capabilities.py — 能力注册表初始化到 Kuzu
 import os, sys, json, argparse, datetime
 from pathlib import Path
 
-HOMEAI_ROOT = Path(__file__).parent.parent
-KUZU_DB_PATH = HOMEAI_ROOT / "data" / "kuzu"
+_SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
+KUZU_DB_PATH = _DATA_ROOT / "kuzu"
 APP_CAP_PATH = HOMEAI_ROOT / "data" / "corpus" / "app-capabilities.jsonl"
 
 # ── 能力注册表（来自 TOOLS.md 人工提炼）─────────────────────────────────────

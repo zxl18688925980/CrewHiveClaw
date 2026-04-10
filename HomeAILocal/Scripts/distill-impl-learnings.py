@@ -22,13 +22,15 @@ import os, sys, json, argparse, datetime, re, requests
 from pathlib import Path
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
-HOMEAI_ROOT  = Path(__file__).parent.parent
+_SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
 CHROMA_URL   = os.environ.get("CHROMA_URL", "http://localhost:8001")
 CHROMA_BASE  = f"{CHROMA_URL}/api/v2/tenants/default_tenant/databases/default_database/collections"
 OLLAMA_URL   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 ZAI_KEY      = os.environ.get("ZAI_API_KEY", "")
-STATE_FILE   = HOMEAI_ROOT / "data" / "learning" / "impl-learnings-state.json"
+STATE_FILE   = _DATA_ROOT / "learning" / "impl-learnings-state.json"
 
 LOOKBACK_DAYS    = 30
 MIN_RECORDS      = 3

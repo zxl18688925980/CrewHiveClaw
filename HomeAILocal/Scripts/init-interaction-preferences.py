@@ -16,8 +16,10 @@ init-interaction-preferences.py — 手工初始化各家人与 Lucas 的协作�
 import os, sys, datetime
 from pathlib import Path
 
-HOMEAI_ROOT  = Path(__file__).parent.parent
-KUZU_DB_PATH = HOMEAI_ROOT / "data" / "kuzu"
+_SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
+KUZU_DB_PATH = _DATA_ROOT / "kuzu"
 
 # ── 各家人初始交互偏好 ─────────────────────────────────────────────────────────
 # name:    一行摘要（注入档案时显示为子标题）

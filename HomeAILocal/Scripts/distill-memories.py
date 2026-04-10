@@ -25,15 +25,17 @@ def _slugify(text: str) -> str:
     return s[:40]
 
 # ── 配置 ─────────────────────────────────────────────────────────────────────
-HOMEAI_ROOT   = Path(__file__).parent.parent
+_SCRIPTS_DIR  = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT   = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT    = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
 CHROMA_URL    = os.environ.get("CHROMA_URL", "http://localhost:8001")
 CHROMA_BASE   = f"{CHROMA_URL}/api/v2/tenants/default_tenant/databases/default_database/collections"
 OLLAMA_URL    = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEEPSEEK_KEY  = os.environ.get("DEEPSEEK_API_KEY", "")
 ZAI_KEY       = os.environ.get("ZAI_API_KEY", "")
-KUZU_DB_PATH  = HOMEAI_ROOT / "data" / "kuzu"
+KUZU_DB_PATH  = _DATA_ROOT / "kuzu"
 
-PROFILES_DIR  = HOMEAI_ROOT / "data" / "member-profiles"
+PROFILES_DIR  = _DATA_ROOT / "member-profiles"
 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
 MEMORY_MD_PATH         = Path.home() / ".openclaw" / "workspace-lucas" / "MEMORY.md"

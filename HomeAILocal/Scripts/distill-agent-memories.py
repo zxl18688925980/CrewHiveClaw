@@ -28,7 +28,7 @@ def get_kuzu_conn():
     """连接 Kuzu 数据库，失败时返回 None（不影响蒸馏主流程）。"""
     try:
         import kuzu as _kuzu
-        db = _kuzu.Database(str(HOMEAI_ROOT / "data" / "kuzu"))
+        db = _kuzu.Database(str(_DATA_ROOT / "kuzu"))
         return _kuzu.Connection(db)
     except ImportError:
         print("  WARN: kuzu 未安装，跳过 Kuzu 写入", file=sys.stderr)
@@ -130,7 +130,7 @@ def refine_capabilities(agent_id: str, kuzu_conn) -> int:
     if kuzu_conn is None:
         return 0
 
-    events_file = HOMEAI_ROOT / "data" / "learning" / f"{agent_id}-capability-events.jsonl"
+    events_file = _DATA_ROOT / "learning" / f"{agent_id}-capability-events.jsonl"
     if not events_file.exists():
         return 0
 
@@ -198,7 +198,9 @@ def refine_capabilities(agent_id: str, kuzu_conn) -> int:
 
 
 # ── 配置 ─────────────────────────────────────────────────────────────────────
-HOMEAI_ROOT  = Path(__file__).parent.parent
+_SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
 CHROMA_URL   = os.environ.get("CHROMA_URL", "http://localhost:8001")
 CHROMA_BASE  = f"{CHROMA_URL}/api/v2/tenants/default_tenant/databases/default_database/collections"
 OPENCLAW_DIR = Path.home() / ".openclaw"

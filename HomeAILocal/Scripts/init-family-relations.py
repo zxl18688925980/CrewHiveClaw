@@ -14,8 +14,10 @@
 import os, sys, datetime, subprocess
 from pathlib import Path
 
-HOMEAI_ROOT  = Path(__file__).parent.parent
-KUZU_DB_PATH = HOMEAI_ROOT / "data" / "kuzu"
+_SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
+KUZU_DB_PATH = _DATA_ROOT / "kuzu"
 
 # ── 家庭成员显示名（用于日志）────────────────────────────────────────────────
 MEMBER_NAMES = {

@@ -31,8 +31,10 @@ from pathlib import Path
 
 # ── 配置 ─────────────────────────────────────────────────────────────────────
 
-HOMEAI_ROOT   = Path(__file__).parent.parent
-KUZU_DB_PATH  = HOMEAI_ROOT / "data" / "kuzu"
+_SCRIPTS_DIR  = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
+HOMEAI_ROOT   = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+_DATA_ROOT    = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
+KUZU_DB_PATH  = _DATA_ROOT / "kuzu"
 FAMILY_DIR    = Path.home() / ".openclaw" / "workspace-lucas" / "family"
 OPENCLAW_DIR  = Path.home() / ".openclaw"
 
@@ -92,6 +94,11 @@ RELATION_LABELS = {
     "interaction_preference": "与Lucas协作风格",
     # 待跟进事项（distill-memories.py has_pending_event）
     "has_pending_event":  "待跟进",
+    # 动态协作边（distill-relationship-dynamics.py，person→person，source_type='collab_distill'）
+    "co_discusses":       "共同关注",
+    "requests_from":      "依赖协作",
+    "supports":           "支持提供",
+    "role_in_context":    "协作角色",
 }
 
 # ── Kuzu 连接 ─────────────────────────────────────────────────────────────────
@@ -114,7 +121,7 @@ def render_person(conn, user_id: str, display_name: str) -> str | None:
         r = conn.execute(
             "MATCH (p:Entity {id: $uid})-[f:Fact]->(o:Entity) "
             "WHERE f.valid_until IS NULL "
-            "RETURN f.relation, o.name, f.context "
+            "RETURN f.relation, o.name, f.context, f.valid_from "
             "ORDER BY f.confidence DESC",
             {"uid": user_id},
         )
@@ -162,19 +169,53 @@ def render_person(conn, user_id: str, display_name: str) -> str | None:
     except Exception as e:
         print(f"  WARN: team_observation 查询失败 {user_id}: {e}", file=sys.stderr)
 
+    # ── 单独查询协作边（person→person，source_type='collab_distill'）──────────
+    # 由 distill-relationship-dynamics.py 写入，记录此人与其他成员的动态协作关系
+    collab_edges: list[tuple[str, str, str]] = []   # (relation, to_name, context)
+    try:
+        r4 = conn.execute(
+            "MATCH (p:Entity {id: $uid})-[f:Fact]->(o:Entity) "
+            "WHERE f.source_type = 'collab_distill' AND f.valid_until >= $today "
+            "RETURN f.relation, o.name, f.context "
+            "ORDER BY f.relation",
+            {"uid": user_id, "today": today_str},
+        )
+        while r4.has_next():
+            row = r4.get_next()
+            if row[0] and row[1]:
+                collab_edges.append((row[0], row[1], row[2] or ""))
+    except Exception as e:
+        print(f"  WARN: 协作边查询失败 {user_id}: {e}", file=sys.stderr)
+
     # 按 relation 分组；interaction_style / interaction_preference 单独收集，渲染为独立子节
     groups: dict[str, list[str]] = {}
     interaction_styles: list[str] = []
     interaction_prefs: list[tuple[str, str]] = []   # (name, context)
-    for relation, obj_name, context in rows:
+    today = datetime.date.today()
+    for relation, obj_name, context, valid_from in rows:
         label = RELATION_LABELS.get(relation, relation)
         # relationship_with：context 是关系描述，obj_name 是对方姓名 → 格式：「姓名：描述」
+        # 新鲜度标记：从 valid_from 提取日期，超 60 天加警告
+        date_tag = ""
+        if valid_from:
+            try:
+                vf_date = datetime.date.fromisoformat(str(valid_from)[:10])
+                age_days = (today - vf_date).days
+                date_tag = f"（{vf_date.isoformat()}）"
+                if age_days > 60:
+                    date_tag = f"⚠️ 可能已过时（更新于 {vf_date.isoformat()}，{age_days}天前）"
+            except Exception:
+                pass
         if relation == "relationship_with":
             value = f"{obj_name}：{context}" if context else obj_name
+            if date_tag:
+                value = f"{value} {date_tag}"
         else:
             value = obj_name if obj_name else ""
             if context:
                 value = f"{value}（{context}）" if value else context
+            if date_tag:
+                value = f"{value} {date_tag}"
         # 单独收集，不进主 groups
         if relation == "interaction_style":
             if value:
@@ -200,6 +241,23 @@ def render_person(conn, user_id: str, display_name: str) -> str | None:
         lines.append("### Andy 的视角")
         for obs in team_observations:
             lines.append(f"- {obs}")
+
+    # 渲染协作关系子节（来自 distill-relationship-dynamics.py，动态协作边）
+    if collab_edges:
+        lines.append("")
+        lines.append("### 组织协作关系")
+        label_map = {
+            "co_discusses":    "共同关注",
+            "requests_from":   "依赖协作",
+            "supports":        "支持提供",
+            "role_in_context": "协作角色",
+        }
+        for rel, to_name, ctx in collab_edges:
+            label = label_map.get(rel, rel)
+            entry = f"{label}→{to_name}"
+            if ctx:
+                entry = f"{entry}（{ctx}）"
+            lines.append(f"- {entry}")
 
     # 渲染与Lucas协作风格子节（手工初始化 + 蒸馏更新）
     if interaction_prefs:

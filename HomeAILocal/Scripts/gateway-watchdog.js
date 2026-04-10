@@ -38,6 +38,8 @@ const LEARN_OBJ_SCRIPT       = path.join(HOMEAI_ROOT, 'scripts', 'distill-learni
 const LEARN_OBJ_LOG          = path.join(HOMEAI_ROOT, 'logs', 'distill-learning-objectives.log');
 const KNOW_DISC_SCRIPT       = path.join(HOMEAI_ROOT, 'scripts', 'distill-knowledge-discussions.py');
 const KNOW_DISC_LOG          = path.join(HOMEAI_ROOT, 'logs', 'distill-knowledge-discussions.log');
+const COLLAB_DISTILL_SCRIPT  = path.join(HOMEAI_ROOT, 'scripts', 'distill-relationship-dynamics.py');
+const COLLAB_DISTILL_LOG     = path.join(HOMEAI_ROOT, 'logs', 'distill-relationship-dynamics.log');
 
 let token = '';
 try {
@@ -906,6 +908,7 @@ function runDistill() {
 let lastDistillDay       = -1;  // 防止同一天重复触发
 let lastTeamObsDay       = '';  // team_observation 蒸馏每日触发去重
 let lastPersonalizeDay   = '';  // Track A/C 个人化蒸馏每周日触发去重
+let lastCollabDistillDay = '';  // 协作关系蒸馏每周日触发去重
 
 function shouldRunTeamObs() {
   // 每天凌晨 3~4 点之间（错开 Andy HEARTBEAT 的 2~3 点，避免 Kuzu 锁竞争）
@@ -956,6 +959,29 @@ function runPersonalizationDistill() {
   }
 }
 
+// ── 协作关系蒸馏（每周日凌晨 4 点）──────────────────────────────────────────
+// 错开 distill-memories(2am) + team_observation(3am)，避免 Kuzu 锁竞争。
+// 脚本内置 7 天冷却期，重启 watchdog 不会重复触发。
+function shouldRunCollabDistill() {
+  const now = new Date();
+  return now.getDay() === 0 && now.getHours() === 4;
+}
+
+function runCollabDistill() {
+  if (!fs.existsSync(COLLAB_DISTILL_SCRIPT)) {
+    log('协作关系蒸馏脚本不存在，跳过');
+    return;
+  }
+  log('开始运行协作关系蒸馏（distill-relationship-dynamics.py）...');
+  const child = spawn(PYTHON3, [COLLAB_DISTILL_SCRIPT], {
+    env: { ...process.env },
+    detached: true,
+    stdio: ['ignore', fs.openSync(COLLAB_DISTILL_LOG, 'a'), fs.openSync(COLLAB_DISTILL_LOG, 'a')],
+  });
+  child.unref();
+  log(`协作关系蒸馏已启动（PID ${child.pid}），日志：${COLLAB_DISTILL_LOG}`);
+}
+
 async function check() {
   await checkGateway();
   await checkOllama();
@@ -996,6 +1022,14 @@ async function check() {
     if (lastPersonalizeDay !== today) {
       lastPersonalizeDay = today;
       runPersonalizationDistill();
+    }
+  }
+
+  // 协作关系蒸馏：每周日凌晨 4 点触发（错开 distill-memories(2am) + team_observation(3am)）
+  if (shouldRunCollabDistill()) {
+    if (lastCollabDistillDay !== today) {
+      lastCollabDistillDay = today;
+      runCollabDistill();
     }
   }
 
@@ -1320,6 +1354,7 @@ log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama 
 log('记忆蒸馏：每周日凌晨 2 点自动触发（distill-memories.py + distill-agent-memories.py 同批）');
 log('Andy HEARTBEAT：每日凌晨 2 点自动触发（结晶候选评估 + skill-candidates + 需求覆盖）');
 log('个人化蒸馏：每周日凌晨 1 点自动触发（Track A 设计判断/代码库认知 + Track C 学习目标）');
+log('协作关系蒸馏：每周日凌晨 4 点自动触发（distill-relationship-dynamics.py，7 天冷却期）');
 log(`长流程任务扫描：每 ${TASK_SCAN_INTERVAL_MS / 1000}s 扫描 processing 超时任务（阈值 ${TASK_STUCK_MS / 60000} 分钟）`);
 log(`群消息推送检测：每 ${GROUP_SILENCE_SCAN_MS / 60000} 分钟扫描（静默阈值 ${GROUP_SILENCE_THRESHOLD_MS / 3_600_000} 小时，告警间隔 ${GROUP_SILENCE_ALERT_INTERVAL_MS / 3_600_000} 小时）`);
 log('访客沉寂检测：每小时扫描一次，凌晨 3 点执行——30 天无对话 → dormant；expiresAt 到期或 dormant 超 90 天 → 蒸馏 + 归档（shadow_status=archived）');
