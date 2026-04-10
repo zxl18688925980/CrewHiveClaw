@@ -787,3 +787,41 @@ python3 -c "from pathlib import Path; p=Path('/Users/xinbinanshan/HomeAI/CrewHiv
 
 **状态**：活跃（已修复，记录供参考）
 **确认日期**：2026-04-10
+
+### JavaScript if-块局部 const 不跨兄弟块可见——wecom/index.js evaluate 工具静默失败
+
+**场景**：`wecom/index.js` `executeMainTool` 函数中，多个 `if (toolName === '...')` 块共用 Python 解释器路径变量。
+
+**现象**：`evaluate_l1` 和 `inspect_agent_context` 的 Kuzu 查询每次运行都被 try/catch 吞掉，始终返回 `⚠️ 查询失败：PYTHON3 is not defined`，从未真正执行。问题存在数周，因被静默捕获，监控日志无任何异常信号。
+
+**根因**：
+```javascript
+if (toolName === 'evaluate_l0') {
+  const PYTHON311 = '/opt/homebrew/opt/python@3.11/bin/python3.11';  // 块级局部变量
+  // ...
+}
+
+if (toolName === 'evaluate_l1') {
+  // PYTHON311 在此不可见！
+  execFileSync(PYTHON3, ...)  // PYTHON3 未定义 → ReferenceError
+}
+```
+JavaScript `const`/`let` 是块级作用域（block-scoped），`if` 块内的 `const` 对其他 `if` 块不可见。`PYTHON3`（无 `11` 后缀）是一个完全不同的标识符，且在任何地方都未定义。
+
+**修复**：将共用常量提升到函数顶部（所有 `if` 块之外）：
+```javascript
+async function executeMainTool(toolName, toolInput) {
+  const PYTHON311 = '/opt/homebrew/opt/python@3.11/bin/python3.11';  // ← 提升到此处
+  // ...
+  if (toolName === 'evaluate_l0') { /* 直接使用 PYTHON311 */ }
+  if (toolName === 'evaluate_l1') { /* 直接使用 PYTHON311 */ }
+}
+```
+
+**教训**：
+- 函数内多个 `if` 块共用的常量必须声明在函数作用域顶部，不能放在任意一个 `if` 块内
+- try/catch 吞掉 ReferenceError 是监控盲区——类似 `execFileSync(UNDEFINED_VAR, ...)` 的错误不会在日志里留下任何可见异常
+- 命名变体（`PYTHON3` vs `PYTHON311`）特别容易产生此类 bug，复制代码时要确认变量名完全一致
+
+**状态**：已修复（2026-04-10，提升到 `executeMainTool` 顶部）
+**确认日期**：2026-04-10
