@@ -1843,6 +1843,65 @@ async function queryCodebasePatterns(prompt: string): Promise<string> {
   }
 }
 
+// ── 代码图谱结构查询（Andy search_codebase scope=structure）────────────────
+//
+// 查询 Kuzu CodeNode / CODE_CALLS 图谱，返回符号的定义位置 + 调用者 + 被调用者。
+// build-code-graph.py 负责维护图谱数据，本函数只做读取。
+
+async function queryCodeStructure(symbol: string): Promise<string> {
+  try {
+    const safeSymbol = symbol.replace(/['"\\`]/g, "").slice(0, 120);
+    if (!safeSymbol) return "";
+    const tmpScript = join(PROJECT_ROOT, "scripts/_code_graph_query.py");
+    const scriptContent = [
+      "import kuzu, os, json, sys",
+      `sym = ${JSON.stringify(safeSymbol)}`,
+      "db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))",
+      "conn = kuzu.Connection(db)",
+      "# 定义位置",
+      "res1 = conn.execute(f\"MATCH (n:CodeNode) WHERE n.name = '{sym}' RETURN n.name, n.file, n.line, n.kind LIMIT 5\")",
+      "defs = []",
+      "for row in res1:",
+      "    defs.append({'name': row[0], 'file': row[1], 'line': row[2], 'kind': row[3]})",
+      "# 被谁调用",
+      "res2 = conn.execute(f\"MATCH (c:CodeNode)-[:CODE_CALLS]->(n:CodeNode) WHERE n.name = '{sym}' RETURN c.name, c.file LIMIT 8\")",
+      "callers = []",
+      "for row in res2:",
+      "    callers.append({'name': row[0], 'file': row[1]})",
+      "# 调用了谁",
+      "res3 = conn.execute(f\"MATCH (n:CodeNode)-[:CODE_CALLS]->(c:CodeNode) WHERE n.name = '{sym}' RETURN c.name, c.file LIMIT 8\")",
+      "callees = []",
+      "for row in res3:",
+      "    callees.append({'name': row[0], 'file': row[1]})",
+      "sys.stdout.write(json.dumps({'defs': defs, 'callers': callers, 'callees': callees}, ensure_ascii=False) + '\\n')",
+      "sys.stdout.flush()",
+      "os._exit(0)  # bypass kuzu Database::~Database() SIGBUS on macOS ARM64",
+    ].join("\n");
+    writeFileSync(tmpScript, scriptContent, "utf8");
+    const output = execSync(`${KUZU_PYTHON3_BIN} ${tmpScript}`, { encoding: "utf8", timeout: 10_000 }).trim();
+    if (!output) return "";
+    const data = JSON.parse(output) as {
+      defs:    Array<{ name: string; file: string; line: number; kind: string }>;
+      callers: Array<{ name: string; file: string }>;
+      callees: Array<{ name: string; file: string }>;
+    };
+    if (data.defs.length === 0) return "";
+    const lines: string[] = [`【结构查询：${safeSymbol}】`];
+    for (const d of data.defs) {
+      lines.push(`  📍定义：${d.file}:${d.line}（${d.kind}）`);
+    }
+    if (data.callers.length > 0) {
+      lines.push(`  📞被调用（${data.callers.length}处）：${data.callers.map(c => c.name).join("、")}`);
+    }
+    if (data.callees.length > 0) {
+      lines.push(`  🔗内部调用：${[...new Set(data.callees.map(c => c.name))].slice(0, 8).join("、")}`);
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+
 // ── 待调度需求队列（Lucas before_prompt_build / HEARTBEAT 空闲调度）─────
 // 返回 status=pending 的需求，供 Lucas 在空闲时自主触发开发流水线
 
@@ -2912,6 +2971,23 @@ async function launchOpenCodeBackground(
           sessionId,
         }, embedding);
       } catch { /* 写入失败不影响主流程 */ }
+    })();
+
+    // ── 代码图谱增量重建（opencode 完成后，后台更新 Kuzu CodeNode/CODE_CALLS）──
+    // fire-and-forget，不阻塞主流程；--incremental --paths 快速模式（~39s）
+    void (async () => {
+      try {
+        const graphProc = spawn(
+          KUZU_PYTHON3_BIN,
+          [
+            join(PROJECT_ROOT, "HomeAILocal/Scripts/build-code-graph.py"),
+            "--incremental",
+            "--paths", "CrewClaw/crewclaw-routing", "HomeAILocal/Scripts",
+          ],
+          { detached: true, stdio: "ignore" },
+        );
+        graphProc.unref();
+      } catch { /* 图谱重建失败不影响主流程 */ }
     })();
 
     // 更新任务阶段：opencode 完成后推进到 completed（无论成败）
@@ -7892,11 +7968,12 @@ const crewclawRoutingPlugin = {
       name: "search_codebase",
       description: [
         "Andy 专属工具：在 HomeAI 代码库中智能搜索代码和文件。",
-        "三种搜索模式可单独或组合使用：",
+        "四种搜索模式可单独或组合使用：",
         "  files — 按文件名模式查找文件（支持 glob 片段，如 'context-handler'、'gateway'）",
         "  content — grep 搜索代码内容（支持关键词和简单模式，如 'chromaQuery'、'visitor.*registry'）",
         "  history — 从 codebase_patterns 查询历史实现洞察（哪些文件 spec 吻合率低、失败模式）",
-        "scope 不传时同时执行三种模式（推荐）。搜索范围限定在 ~/HomeAI/CrewHiveClaw/。",
+        "  structure — 在代码图谱中查询符号的定义位置、调用者、被调用者（如 'callGatewayAgent'）",
+        "scope 不传时同时执行四种模式（推荐）。搜索范围限定在 ~/HomeAI/CrewHiveClaw/。",
         "典型用法：写 spec 前确认某个函数在哪个文件里、某个模块的历史实现问题、哪些文件经常出问题。",
         "注意：这是搜索工具不是阅读工具。找到目标文件后用 read_file 或 exec cat 读详细内容。",
       ].join("\n"),
@@ -7905,7 +7982,7 @@ const crewclawRoutingPlugin = {
           description: "搜索内容：文件名片段、代码关键词、函数名、或自然语言描述",
         }),
         scope: Type.Optional(Type.String({
-          description: "搜索范围: files（文件名）| content（代码内容）| history（历史洞察）| all（默认，三种同时）",
+          description: "搜索范围: files（文件名）| content（代码内容）| history（历史洞察）| structure（代码图谱）| all（默认，四种同时）",
         })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
@@ -7973,6 +8050,20 @@ const crewclawRoutingPlugin = {
             const historyResult = await queryCodebasePatterns(query);
             if (historyResult) {
               sections.push(historyResult);
+            }
+          } catch { /* silent */ }
+        }
+
+        // ── Scope: structure — 代码图谱：定义位置 + 调用者 + 被调用者 ──
+        if (scope === "all" || scope === "structure") {
+          try {
+            // 从 query 提取最可能的符号名（取首个英文驼峰/下划线词）
+            const symMatch = query.match(/[a-zA-Z_][a-zA-Z0-9_]{2,}/);
+            if (symMatch) {
+              const structResult = await queryCodeStructure(symMatch[0]);
+              if (structResult) {
+                sections.push(structResult);
+              }
             }
           } catch { /* silent */ }
         }
