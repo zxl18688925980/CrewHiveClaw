@@ -865,7 +865,9 @@ async function runLucasHeartbeat() {
   lastLucasHeartbeatDay = today;
 }
 
-// ── 记忆蒸馏（每日凌晨 2 点）───────────────────────────────────────────────
+// ── 家人记忆蒸馏（每日凌晨 2 点）────────────────────────────────────────────
+// 读取 ChromaDB 对话记录 → LLM 提炼 → 写入 Kuzu 知识图谱（家人的事实、话题、关系）
+// Lucas 下次和家人聊天时，Kuzu 里的知识会注入上下文，让 Lucas 更了解这个家
 
 function shouldRunDistill() {
   const now = new Date();
@@ -958,8 +960,12 @@ function runCodeGraphRebuild() {
   log(`代码图谱重建已启动（PID ${child.pid}），日志：${CODE_GRAPH_LOG}`);
 }
 
-// ── Track A/C 个人化蒸馏（每日凌晨 1 点）────────────────────────────────────────
-// 三个脚本依次 fire-and-forget，各自有 12h 冷却防重复，脚本内无 Kuzu 操作不竞争锁。
+// ── Andy/Lisa 自我进化蒸馏（每日凌晨 1 点）──────────────────────────────────────
+// Andy 从自己的历史设计决策中提炼判断规律（下次写 spec 更准）
+// Lisa 从历史 opencode 运行记录中提炼代码库认知（哪些模块容易出错、哪些陷阱要绕）
+// 从家庭对话中提取「成员隐含的能力期待」注入 Andy/Lisa（他们知道组织想要什么）
+// 从知识讨论对话中提炼外部知识摘要注入 Andy（外部输入不丢失）
+// 各脚本有 12h 冷却防重复，脚本内无 Kuzu 操作不竞争锁。
 function shouldRunPersonalizationDistill() {
   const now = new Date();
   return now.getHours() === 1;
@@ -967,10 +973,10 @@ function shouldRunPersonalizationDistill() {
 
 function runPersonalizationDistill() {
   for (const [script, logFile, label] of [
-    [DESIGN_LEARN_SCRIPT, DESIGN_LEARN_LOG, 'Andy 设计判断蒸馏（Track A）'],
-    [IMPL_LEARN_SCRIPT,   IMPL_LEARN_LOG,   'Lisa 代码库认知蒸馏（Track A）'],
-    [LEARN_OBJ_SCRIPT,    LEARN_OBJ_LOG,    'Track C 学习目标提取'],
-    [KNOW_DISC_SCRIPT,    KNOW_DISC_LOG,    'Track D 知识讨论蒸馏'],
+    [DESIGN_LEARN_SCRIPT, DESIGN_LEARN_LOG, 'Andy 设计判断提炼（历史决策 → 规律）'],
+    [IMPL_LEARN_SCRIPT,   IMPL_LEARN_LOG,   'Lisa 代码库认知提炼（opencode 记录 → 陷阱规律）'],
+    [LEARN_OBJ_SCRIPT,    LEARN_OBJ_LOG,    '成员期待提取（家庭对话 → Andy/Lisa 能力方向）'],
+    [KNOW_DISC_SCRIPT,    KNOW_DISC_LOG,    '外部知识蒸馏（知识讨论对话 → Andy 知识注入）'],
   ]) {
     if (!fs.existsSync(script)) {
       log(`${label} 脚本不存在，跳过`);
@@ -987,9 +993,10 @@ function runPersonalizationDistill() {
   }
 }
 
-// ── 协作关系蒸馏（每日凌晨 4 点）──────────────────────────────────────────
-// 错开 distill-memories(2am) + team_observation(3am)，避免 Kuzu 锁竞争。
-// 脚本内置 7 天冷却期，重启 watchdog 不会重复触发。
+// ── 家人协作关系蒸馏（每日凌晨 4 点）────────────────────────────────────────
+// 分析家人之间的协作对话（谁经常一起讨论什么、谁向谁求助），写入 Kuzu 协作边
+// Lucas 能感知家庭协作动态，不只是和每个人单聊，而是理解家人之间的关系
+// 错开 2am 记忆蒸馏 + 3am team_observation，避免 Kuzu 锁竞争
 function shouldRunCollabDistill() {
   const now = new Date();
   return now.getHours() === 4;
@@ -1045,7 +1052,7 @@ async function check() {
     }
   }
 
-  // Track A/C 个人化蒸馏：每日凌晨 1 点触发（Andy 设计判断 + Lisa 代码库认知 + 学习目标）
+  // Andy/Lisa 自我进化蒸馏：每日凌晨 1 点触发（设计判断提炼 + 代码库认知 + 成员期待 + 外部知识）
   if (shouldRunPersonalizationDistill()) {
     if (lastPersonalizeDay !== today) {
       lastPersonalizeDay = today;
@@ -1053,7 +1060,7 @@ async function check() {
     }
   }
 
-  // 协作关系蒸馏：每日凌晨 4 点触发（错开 distill-memories(2am) + team_observation(3am)）
+  // 家人协作关系蒸馏：每日凌晨 4 点触发
   if (shouldRunCollabDistill()) {
     if (lastCollabDistillDay !== today) {
       lastCollabDistillDay = today;
@@ -1387,10 +1394,11 @@ function schedulePipelineCleanup() {
 schedulePipelineCleanup();
 
 log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama + ChromaDB + cloudflared，Gateway 超时阈值 ${PROBE_TIMEOUT_MS / 1000}s`);
-log('记忆蒸馏：每日凌晨 2 点自动触发（distill-memories.py + distill-agent-memories.py 同批）');
-log('Andy HEARTBEAT：每日凌晨 2 点自动触发（结晶候选评估 + skill-candidates + 需求覆盖）');
-log('个人化蒸馏：每日凌晨 1 点自动触发（Track A 设计判断/代码库认知 + Track C 学习目标）');
-log('协作关系蒸馏：每日凌晨 4 点自动触发（distill-relationship-dynamics.py，7 天冷却期）');
+log('凌晨 1 点：Andy/Lisa 自我进化蒸馏（设计判断 + 代码库认知 + 成员期待 + 外部知识）');
+log('凌晨 2 点：家人记忆蒸馏（对话 → Kuzu 知识图谱）+ Andy HEARTBEAT 巡检');
+log('凌晨 3 点：team_observation（Andy 分析家人行为模式 → Lucas 理解更深）');
+log('凌晨 4 点：家人协作关系蒸馏（谁和谁一起讨论什么 → Kuzu 协作边）');
+log('凌晨 5 点：代码图谱增量重建（CrewClaw + Scripts，~39s）');
 log(`长流程任务扫描：每 ${TASK_SCAN_INTERVAL_MS / 1000}s 扫描 processing 超时任务（阈值 ${TASK_STUCK_MS / 60000} 分钟）`);
 log(`群消息推送检测：每 ${GROUP_SILENCE_SCAN_MS / 60000} 分钟扫描（静默阈值 ${GROUP_SILENCE_THRESHOLD_MS / 3_600_000} 小时，告警间隔 ${GROUP_SILENCE_ALERT_INTERVAL_MS / 3_600_000} 小时）`);
 log('访客沉寂检测：每小时扫描一次，凌晨 3 点执行——30 天无对话 → dormant；expiresAt 到期或 dormant 超 90 天 → 蒸馏 + 归档（shadow_status=archived）');
