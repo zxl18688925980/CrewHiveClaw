@@ -712,3 +712,46 @@ pm2 delete chromadb && pm2 start ecosystem.config.js --only chromadb
 - PM2 管理的进程出现神秘崩溃，**第一步查 `~/.pm2/pm2.log`**，不要只看自定义日志文件
 - 快速重启循环会留下僵尸进程占端口，清理时用 `pkill -f <进程特征>` 确保全杀干净
 - 附带修复：ChromaDB 迁移到 venv（`~/HomeAI/App/chromadb-venv/`），防止 Homebrew 升级破坏 numpy ABI
+
+---
+
+## 2026-04-10
+
+### monorepo 重构后 Python 脚本 HOMEAI_ROOT 路径三层计算错误
+
+**场景**：2026-04-08 目录重构将脚本从 `~/HomeAI/scripts/` 移到 `~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/`。所有 Python 脚本用 `Path(__file__).parent.parent` 推算 `HOMEAI_ROOT`，重构后层数不够，指向错误位置。
+
+**现象**：`KUZU_DB_PATH` 指向 `~/HomeAI/CrewHiveClaw/HomeAILocal/data/kuzu`（空目录，16KB），而非 `~/HomeAI/Data/kuzu`（真实 DB，15MB，含 Entity/Fact 表）。蒸馏脚本运行"成功"但实际读写空 DB，静默失效，无任何报错。
+
+**根因**：层数计算错误。`Scripts/` 在 monorepo 中嵌套深度：
+```
+~/HomeAI/                     ← HOMEAI_ROOT（目标）
+  CrewHiveClaw/               ← parent.parent.parent（3层）
+    HomeAILocal/              ← parent.parent（2层）
+      Scripts/                ← parent（1层）
+        distill-memories.py   ← __file__
+```
+旧路径 `~/HomeAI/scripts/` 只需 `parent.parent`（2层）；新路径需要 `parent.parent.parent`（3层）。
+
+**修复模式**（已应用到全部 16 个脚本）：
+```python
+_SCRIPTS_DIR = Path(__file__).resolve().parent      # .../HomeAILocal/Scripts
+HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent    # ~/HomeAI
+_DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
+KUZU_DB_PATH = _DATA_ROOT / "kuzu"
+```
+`HOMEAI_DATA_ROOT` env var 支持多实例部署时覆盖数据目录，不改代码。
+
+**验证方法**：
+```bash
+python3 -c "from pathlib import Path; p=Path('/Users/xinbinanshan/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/x.py'); print(p.parent.parent.parent)"
+# 应输出 /Users/xinbinanshan/HomeAI
+```
+
+**教训**：
+- monorepo 重构后，所有用相对层数推算根路径的脚本都要重新核查层数，不能假设层数不变
+- 路径指向错误目录时，若目录存在且 DB 文件格式合法（kuzu 会自动创建空 DB），脚本不会报错，静默失效风险极高
+- 引入 env var 覆盖比硬编码层数更健壮，是正确的长期方案
+
+**状态**：活跃（已修复，记录供参考）
+**确认日期**：2026-04-10
