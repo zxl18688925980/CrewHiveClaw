@@ -1273,7 +1273,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | 信号文件 | 产生时机 | 处理方式 |
 |---------|---------|---------|
 | `data/learning/skill-candidates.jsonl` | Lucas 调用 `flag_for_skill` 时写入，表示该模式可能值得结晶 | 查看 pending 条目，Andy HEARTBEAT 会自动评估；复杂情况可手动触发 |
-| `data/learning/dpo-candidates.jsonl` | `agent_end` DPO 候选检测命中（负例模式匹配）或用户纠正信号触发时写入；`type` 字段区分 `pattern_match` / `user_correction`；`source` 字段区分 `local` / `cloud`（云端处理时出现的 DPO 同样作为本地负向训练语料） | pattern 积累达 50 条时批量送云端自动生成 `good_response`，系统工程师通过 Main 抽样审批后标记 `confirmed: true` 进入 DPO 微调队列 |
+| `data/learning/dpo-candidates.jsonl` | `agent_end` DPO 候选检测命中（负例模式匹配）或用户纠正信号触发时写入；`type` 字段区分 `pattern_match` / `user_correction` / `tool_call_hallucination`；`source` 字段区分 `local` / `cloud`（云端处理时出现的 DPO 同样作为本地负向训练语料）。**`tool_call_hallucination`**：模型在文字里声称调用了工具但实际未发出 tool_call，框架层机械检测（response 含声称操作短语 + toolUseCounts 无对应工具调用），命中后同时触发下一轮 appendSystemContext 纠正注入并跳过本轮 ChromaDB 写入，防止幻觉持久化 | pattern 积累达 50 条时批量送云端自动生成 `good_response`，系统工程师通过 Main 抽样审批后标记 `confirmed: true` 进入 DPO 微调队列 |
 | `data/learning/hallucination-filtered.jsonl` | 蒸馏管道预处理阶段写入，来源是 ChromaDB 中 `dpoFlagged=true` 的记录 | 复查已确认幻觉记录是否正确过滤；归档，不反向写回 ChromaDB |
 | `data/learning/dep-installs.jsonl` | OpenCode 安装、升级、回退事件 | 出现 `rollback_failed` 时人工检查工具可用性 |
 | `data/learning/agent-end-debug.jsonl` | 每次 agent_end 事件（保留最近 200 条） | 调试用，不需要常规处理 |

@@ -7,7 +7,7 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v638
+> **版本**: v642
 > **最后更新**: 2026-04-11
 
 ---
@@ -1966,3 +1966,39 @@ L0~L4 全部落地：
 - L4：行为内化（SFT+DPO 双路径 + watchdog 周级自动扫描）
 
 **下一阶段**：HiveClaw 多组织分布式层。触发条件：HomeAI 积累真实 DPO 数据。
+
+---
+
+## v642 · 工具调用幻觉检测机制（L1 级三道防线）（2026-04-11）
+
+**干预类型**：L1 机制性增强
+
+**背景**：Lucas 在读取 Obsidian 文件时出现严重幻觉——在文字里描述了完整的"读取过程"（编造路径 `/home/ubuntu/obsidian/`、声称"我找到了文件"），但实际上根本没有发出 `read_file` tool_call。用户发现后指出这是 L1 的关键能力问题，需要机制性解法而非头痛医头。
+
+**核心认知**：幻觉从原理上无法消灭（token 预测机制，模型无法感知自己是否真正调用了工具），但**传播链可以切断**。幻觉若进入对话历史未被纠正，后续每一轮都在强化错误，ChromaDB 记忆写入后会被后续召回时再次激活——形成持久化幻觉循环。没有外部干预机制，幻觉会表现为 Lucas「固执地坚信自己读了文件」。
+
+**变更（三道防线）**：
+
+**防线 1 · 检测层（`agent_end`）**
+- 新增 `detectToolCallHallucination()` 函数：机械对比 response 含「声称文件操作」短语（"我读了/我查看了/我找到了/我调用了..."）AND `toolUseCounts` 无 `read_file`/`list_files`/`search_codebase` 实际调用
+- Lucas 专属，只在 `FRONTEND_AGENT_ID` 触发
+- 命中后：① 写入 `dpo-candidates.jsonl`（`type: tool_call_hallucination`）② 追加 HEARTBEAT.md 待汇总观察 ③ 存入 `sessionPendingCorrections` Map
+
+**防线 2 · 纠正层（`before_prompt_build` 下一轮注入）**
+- 新增 `sessionPendingCorrections: Map<string, string>` 跨轮缓存
+- 下一轮 `appendSystemContext` 注入纠正：「上一轮你说了 X，但没有实际调用工具。声称调用 ≠ 真实调用。」
+- 注入后立即清除，不污染后续轮次
+- 用外部基础设施替代模型自我纠察（不依赖模型元认知）
+
+**防线 3 · 记忆保护层（`writeMemory` 写入前过滤）**
+- 检测到幻觉的轮次，跳过 ChromaDB `conversations` 集合写入
+- 防止幻觉内容进入记忆库，被后续召回时强化错误
+- 消灭「持久化幻觉循环」的根本途径
+
+**DPO 积累层（方向二）**：`tool_call_hallucination` 作为新 pattern 类型自动积累，走 L4 行为内化训练流水线。
+
+**`lucas-dpo-patterns.json` 更新**：新增 `tool_call_hallucination` 字段，22 个声称操作短语覆盖"我读了/我查看了/我找到了/读取了文件/工具已调用"等变体。
+
+**代码变更文件**：
+- `CrewClaw/crewclaw-routing/index.ts`：`DpoPatternsJson` 接口新增字段、`detectToolCallHallucination()` 函数、`sessionPendingCorrections` Map、`before_prompt_build` 纠正注入、`agent_end` 检测调用 + 记忆保护
+- `CrewClaw/crewclaw-routing/config/lucas-dpo-patterns.json`：新增 `tool_call_hallucination` 字段

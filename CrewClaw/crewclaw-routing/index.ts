@@ -3374,6 +3374,7 @@ interface DpoPatternsJson {
   report_bug_tools?: string[];         // 触发 report_bug_commitment 检测的工具列表
   capability_hallucination: string[];  // 能力幻觉（声称有某项能力但没有对应工具）
   user_correction_signals: string[];   // 用户纠正信号（"你没做/你骗我"等）
+  tool_call_hallucination?: string[];  // 工具调用幻觉：文字声称读/查/调用了工具，但实际未发出 tool_call
 }
 
 // 按 agentId 懒加载并缓存，避免重复读文件
@@ -3578,6 +3579,33 @@ function detectUserCorrection(params: {
     good_response:    "",   // 由 generate_dpo_good_responses 批量生成后填入
     confirmed:        false,
   });
+}
+
+// ── 工具调用幻觉检测（Lucas 专属）──────────────────────────────────────────
+//
+// 模型从原理上无法避免幻觉——token 预测机制使其无法感知「自己没调工具」。
+// 本函数不是防止幻觉产生，而是在 agent_end 机械检测：
+//   response 含「声称文件操作」的短语 + toolUseCounts 无对应真实调用
+//   → 返回命中短语（供 before_prompt_build 下一轮注入纠正，打断传播链）
+//
+// 设计原则：只报「声称 + 未调用」的组合，避免误报（如 Lucas 在解释系统能力时提到工具名）。
+function detectToolCallHallucination(params: {
+  agentId: string;
+  response: string;
+  toolUseCounts: Record<string, number>;
+}): string | null {
+  const { agentId, response, toolUseCounts } = params;
+  const patterns = getDpoPatterns(agentId);
+  const hallucPhrases = patterns.tool_call_hallucination ?? [];
+  if (hallucPhrases.length === 0) return null;
+
+  // 实际发出了文件操作工具调用 → 不是幻觉
+  const FILE_OP_TOOLS = ["read_file", "list_files", "search_codebase"];
+  const calledFileOps = FILE_OP_TOOLS.some(t => (toolUseCounts[t] ?? 0) > 0);
+  if (calledFileOps) return null;
+
+  // 声称了文件操作，但没有对应 tool_call
+  return hallucPhrases.find(p => response.includes(p)) ?? null;
 }
 
 function evaluateResponseQuality(params: {
@@ -4462,6 +4490,10 @@ const crewclawRoutingPlugin = {
     // 注入后的大块内容，不是真实的用户消息。用这个 Map 保存真实原始消息。
     const sessionPrompt = new Map<string, string>();
 
+    // session 级幻觉纠正缓存：agent_end 检测到工具调用幻觉时写入，
+    // 下一轮 before_prompt_build 读取并注入 appendSystemContext 打断传播链，随即清除。
+    const sessionPendingCorrections = new Map<string, string>();
+
     // ── Gateway 资源池实例（插件生命周期内全局共享）──────────────────────────
     // Lucas 专属保留槽位，其余 agent 使用共享竞争槽位
     const lucasSemaphore  = new Semaphore(LUCAS_RESERVED_SLOTS, "lucas-reserved");
@@ -5025,6 +5057,20 @@ const crewclawRoutingPlugin = {
         appendSystem.push(_lucasBehavioralRules.silenceRule);
         if (_lucasBehavioralRules.channelPrivacyRule) {
           appendSystem.push(_lucasBehavioralRules.channelPrivacyRule);
+        }
+
+        // ── 工具调用幻觉纠正注入（上一轮检测到幻觉时注入，打断传播链条）──────────
+        // 幻觉从原理上无法消灭，但可以在下一轮上下文里纠正，阻止链条蔓延。
+        // 策略：agent_end 写入 sessionPendingCorrections，这里读取后注入并立即清除。
+        const _pendingCorrection = sessionPendingCorrections.get(ctx.sessionKey ?? "");
+        if (_pendingCorrection) {
+          sessionPendingCorrections.delete(ctx.sessionKey ?? "");
+          appendSystem.push(
+            `【工具调用纠正】\n` +
+            `上一轮你在回复里提到了"${_pendingCorrection}"，但实际上没有发出 read_file / list_files / search_codebase 工具调用。\n` +
+            `**声称调用 ≠ 真实调用。如果需要读取文件或搜索代码，必须实际调用对应工具，不能在文字里描述调用过程。**\n` +
+            `如需查看文件，请直接调用 read_file 或 list_files；不需要在文字里先说"我去查一下"。`
+          );
         }
 
         // ── 待调度需求队列（仅 HEARTBEAT 触发时注入，避免干扰正常家庭对话）────
@@ -5798,6 +5844,48 @@ const crewclawRoutingPlugin = {
         });
       }
 
+      // ── 工具调用幻觉检测（Lucas 专属）──────────────────────────────────────
+      // 幻觉从原理上无法消灭（token 预测机制），但可以机械检测并打断传播链条：
+      //   1. 写入 DPO 候选（L4 行为内化）
+      //   2. 写入 sessionPendingCorrections（下一轮 before_prompt_build 注入纠正）
+      //   3. 标记本轮响应为幻觉（阻止写入 ChromaDB conversations 记忆，防止污染）
+      let _toolCallHallucinationDetected = false;
+      if (ctx.agentId === FRONTEND_AGENT_ID && !isTestSession) {
+        const _hallucinHit = detectToolCallHallucination({
+          agentId: ctx.agentId,
+          response: lastAssistant,
+          toolUseCounts,
+        });
+        if (_hallucinHit) {
+          _toolCallHallucinationDetected = true;
+          // 写入 DPO 候选
+          appendJsonl(DPO_CANDIDATES_FILE, {
+            t:            nowCST(),
+            sessionKey:   ctx.sessionKey,
+            userId,
+            source:       isCloudResponse ? "cloud" : "local",
+            type:         "tool_call_hallucination",
+            reasons:      [`tool_call_hallucination: "${_hallucinHit}"`],
+            prompt:       actualPrompt.slice(0, 300),
+            bad_response: lastAssistant.slice(0, 500),
+            toolsCalled:  toolUseCounts,
+            good_response: "",
+            confirmed:    false,
+          });
+          // 写入 HEARTBEAT.md 供 Main 监控感知
+          try {
+            const _hbPath = join(process.env["HOME"] ?? "", ".openclaw/workspace-main/HEARTBEAT.md");
+            const _hb = readFileSync(_hbPath, "utf8");
+            const _nowLocal = new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
+            const _line = `- [${_nowLocal}] 工具调用幻觉：${_hallucinHit} | 用户: ${userId} | 预览: ${lastAssistant.slice(0, 60)}`;
+            const _updated = _hb.replace(/(## 待汇总观察[^\n]*\n)/, `$1${_line}\n`);
+            writeFileSync(_hbPath, _updated, "utf8");
+          } catch { /* 静默 */ }
+          // 存入 sessionPendingCorrections，下一轮 before_prompt_build 读取并注入纠正
+          sessionPendingCorrections.set(ctx.sessionKey ?? "", _hallucinHit);
+        }
+      }
+
       // ── 自动结晶信号：Lucas 多工具组合 → skill-candidates（基础设施层，不依赖模型判断）──
       // 触发条件：Lucas 在一次请求中调用了 ≥2 个不同工具（排除纯查询工具 recall_memory）
       // 去重策略：同一 comboKey 在 24h 内只记录一次，防止高频请求撑爆文件
@@ -5917,6 +6005,11 @@ const crewclawRoutingPlugin = {
         } else {
         // actualPrompt 现在是干净的用户消息（历史对话已通过 messages array 传入，不再拼进 prompt）
         const convPrompt = actualPrompt;
+        // 工具调用幻觉响应：跳过 ChromaDB 写入，防止幻觉内容污染记忆库
+        // 幻觉若进入 ChromaDB，后续召回时会强化错误，形成持久化幻觉循环
+        if (_toolCallHallucinationDetected) {
+          // skip: tool_call_hallucination detected, not writing to conversations
+        } else
         void writeMemory(convPrompt, lastAssistant, {
           fromId:        convFromId,
           fromType:      convFromType,
