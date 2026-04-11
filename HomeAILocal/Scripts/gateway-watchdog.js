@@ -914,6 +914,7 @@ let lastTeamObsDay       = '';  // team_observation 蒸馏每日触发去重
 let lastPersonalizeDay   = '';  // Andy/Lisa 每日自我进化触发去重
 let lastCollabDistillDay = '';  // 协作关系蒸馏每日触发去重
 let lastCodeGraphDay     = '';  // 代码图谱每日增量重建触发去重
+let lastL4ScanWeek       = '';  // L4 DPO 周级扫描去重（格式 yyyy-Www）
 
 function shouldRunTeamObs() {
   // 每天凌晨 3~4 点之间（错开 Andy HEARTBEAT 的 2~3 点，避免 Kuzu 锁竞争）
@@ -958,6 +959,62 @@ function runCodeGraphRebuild() {
   });
   child.unref();
   log(`代码图谱重建已启动（PID ${child.pid}），日志：${CODE_GRAPH_LOG}`);
+}
+
+// ── L4 DPO 周级自动扫描（每周一凌晨 6 点）──────────────────────────────────────
+// 调 generate_dpo_good_responses（threshold=10），有可处理的 pattern 时生成 good_response
+// 并推送工程师通知，工程师用 approve_dpo_batch 审批后进入微调队列
+function getISOWeek() {
+  const d = new Date();
+  const day = d.getDay() || 7;  // 周日=7
+  d.setDate(d.getDate() + 4 - day);
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+function shouldRunL4Scan() {
+  const now = new Date();
+  // 每周一凌晨 6 点（错开所有凌晨 1~5 点的每日任务）
+  return now.getDay() === 1 && now.getHours() === 6;
+}
+
+async function runL4DpoScan() {
+  const week = getISOWeek();
+  log(`[L4] 周级 DPO 扫描启动（${week}），调用 generate_dpo_good_responses...`);
+  try {
+    const body = JSON.stringify({ tool: 'generate_dpo_good_responses', input: { threshold: 10 } });
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: 'localhost', port: 3003,
+        path: '/api/internal/exec-main-tool',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve({ ok: false, result: data }); } });
+      });
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+
+    if (result.ok && result.result) {
+      const summary = String(result.result).slice(0, 300);
+      log(`[L4] DPO 扫描完成：${summary}`);
+      // 只在有实际生成时才推送通知（有 good_response 生成才有审批需要）
+      if (!summary.includes('无需生成') && !summary.includes('没有 pattern')) {
+        sendEngineerAlert(`📊 L4 周报（${week}）\n\n${summary}\n\n请用「approve_dpo_batch pattern_type=<类型>」批准进入微调队列。`, 'heartbeat');
+      } else {
+        log(`[L4] 本周无达阈值 pattern，无需推送通知`);
+      }
+    } else {
+      log(`[L4] DPO 扫描调用失败：${JSON.stringify(result).slice(0, 100)}`);
+    }
+  } catch (e) {
+    log(`[L4] DPO 扫描异常：${e.message}`);
+  }
 }
 
 // ── Andy/Lisa 自我进化蒸馏（每日凌晨 1 点）──────────────────────────────────────
@@ -1073,6 +1130,15 @@ async function check() {
     if (lastCodeGraphDay !== today) {
       lastCodeGraphDay = today;
       runCodeGraphRebuild();
+    }
+  }
+
+  // L4 DPO 周级扫描：每周一凌晨 6 点触发（错开所有每日凌晨任务）
+  if (shouldRunL4Scan()) {
+    const currentWeek = getISOWeek();
+    if (lastL4ScanWeek !== currentWeek) {
+      lastL4ScanWeek = currentWeek;
+      runL4DpoScan().catch(e => log(`[L4] 周级扫描异常: ${e.message}`));
     }
   }
 
@@ -1399,6 +1465,7 @@ log('凌晨 2 点：家人记忆蒸馏（对话 → Kuzu 知识图谱）+ Andy H
 log('凌晨 3 点：team_observation（Andy 分析家人行为模式 → Lucas 理解更深）');
 log('凌晨 4 点：家人协作关系蒸馏（谁和谁一起讨论什么 → Kuzu 协作边）');
 log('凌晨 5 点：代码图谱增量重建（CrewClaw + Scripts，~39s）');
+log('每周一凌晨 6 点：L4 DPO 周级扫描（generate_dpo_good_responses threshold=10，有结果推工程师审批）');
 log(`长流程任务扫描：每 ${TASK_SCAN_INTERVAL_MS / 1000}s 扫描 processing 超时任务（阈值 ${TASK_STUCK_MS / 60000} 分钟）`);
 log(`群消息推送检测：每 ${GROUP_SILENCE_SCAN_MS / 60000} 分钟扫描（静默阈值 ${GROUP_SILENCE_THRESHOLD_MS / 3_600_000} 小时，告警间隔 ${GROUP_SILENCE_ALERT_INTERVAL_MS / 3_600_000} 小时）`);
 log('访客沉寂检测：每小时扫描一次，凌晨 3 点执行——30 天无对话 → dormant；expiresAt 到期或 dormant 超 90 天 → 蒸馏 + 归档（shadow_status=archived）');
