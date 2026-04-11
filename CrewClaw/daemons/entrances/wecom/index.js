@@ -2968,8 +2968,8 @@ os._exit(0)
         const objData = objResp.ok ? await objResp.json() : { ids: [] };
         const objCount = (objData.ids || []).length;
         const hasLearnings = andyCount > 0 || lisaCount > 0;
-        results.push(`${hasLearnings ? '✅' : '⚠️'} Track A 蒸馏产出：Andy design_learning ${andyCount} 条，Lisa impl_learning ${lisaCount} 条${!hasLearnings ? '（尚未运行，周日 1 点触发）' : ''}`);
-        results.push(`${objCount > 0 ? '✅' : '⚠️'} Track C 学习目标：${objCount} 条${objCount === 0 ? '（尚未运行，周日 1 点触发）' : ''}`);
+        results.push(`${hasLearnings ? '✅' : '⚠️'} Track A 蒸馏产出：Andy design_learning ${andyCount} 条，Lisa impl_learning ${lisaCount} 条${!hasLearnings ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
+        results.push(`${objCount > 0 ? '✅' : '⚠️'} Track C 学习目标：${objCount} 条${objCount === 0 ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
         if (!hasLearnings && score === '✅') score = '⚠️';
       }
     } catch (e) {
@@ -3392,7 +3392,7 @@ os._exit(0)
     try {
       const logPath = path.join(HOMEAI_ROOT, 'Logs', 'distill-relationship-dynamics.log');
       if (!fs.existsSync(logPath)) {
-        results.push('⚪ 关系蒸馏日志：尚无运行记录（每周日 4am 触发）');
+        results.push('⚪ 关系蒸馏日志：尚无运行记录（每日凌晨 4am 触发）');
       } else {
         const logContent = fs.readFileSync(logPath, 'utf8');
         const logLines = logContent.split('\n').filter(l => l.trim());

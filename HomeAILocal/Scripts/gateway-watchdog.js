@@ -871,7 +871,7 @@ async function runLucasHeartbeat() {
 
 function shouldRunDistill() {
   const now = new Date();
-  // 周日（0）凌晨 2~3 点之间
+  // 每日凌晨 2~3 点之间
   return now.getHours() === 2;
 }
 
@@ -911,8 +911,8 @@ function runDistill() {
 
 let lastDistillDay       = -1;  // 防止同一天重复触发
 let lastTeamObsDay       = '';  // team_observation 蒸馏每日触发去重
-let lastPersonalizeDay   = '';  // Track A/C 个人化蒸馏每周日触发去重
-let lastCollabDistillDay = '';  // 协作关系蒸馏每周日触发去重
+let lastPersonalizeDay   = '';  // Track A/C 个人化蒸馏每日触发去重
+let lastCollabDistillDay = '';  // 协作关系蒸馏每日触发去重
 let lastCodeGraphDay     = '';  // 代码图谱每日增量重建触发去重
 
 function shouldRunTeamObs() {
