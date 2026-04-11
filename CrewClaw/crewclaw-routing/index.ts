@@ -4999,7 +4999,7 @@ const crewclawRoutingPlugin = {
 
       // ── L3 成员影子能力视图（shadow agent 专属）────────────────────────────
       // 影子接收请求时，注入家庭可用能力清单，帮助影子为成员推荐合适能力
-      if (agentId.startsWith("workspace-")) {
+      if (agentId.startsWith("shadow-")) {
         const capView = buildShadowCapabilityView();
         if (capView) appendSystem.push(capView);
       }
@@ -8759,9 +8759,9 @@ const crewclawRoutingPlugin = {
         agent_id: Type.String({ description: "子 Agent 唯一标识（英文小写，如 yiyi / frontend-spec-helper）。Lucas 创建家人影子时建议用 `shadow-{昵称}`" }),
         role_description: Type.String({ description: "该子 Agent 的职责描述（如 专注前端样式设计规范审查）。家人影子会自动生成描述" }),
         tier: Type.Optional(Type.String({ description: '"1"（轻量，10个上限）或 "2"（标准，5个上限）；Lisa 只能用 1；家人影子默认 Tier 2' })),
-        member_name: Type.Optional(Type.String({ description: "家人影子专用：成员姓名（中文，如 曾玥语桐）。传入此参数触发影子模板渲染' }),
-        relationship: Type.Optional(Type.String({ description: "家人影子专用：与 Lucas 的关系（如 女儿 / 妈妈 / 小姨 / 爸爸）' }),
-        description: Type.Optional(Type.String({ description: "家人影子专用：成员特点描述（如 初一学生，喜欢数学）' }),
+        member_name: Type.Optional(Type.String({ description: "家人影子专用：成员姓名（中文，如 曾玥语桐）。传入此参数触发影子模板渲染" })),
+        relationship: Type.Optional(Type.String({ description: "家人影子专用：与 Lucas 的关系（如 女儿 / 妈妈 / 小姨 / 爸爸）" })),
+        description: Type.Optional(Type.String({ description: "家人影子专用：成员特点描述（如 初一学生，喜欢数学）" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const { agent_id, role_description, tier: tierStr, member_name, relationship, description } = params as {
@@ -8799,7 +8799,7 @@ const crewclawRoutingPlugin = {
 
         if (isShadow) {
           // 影子模式：从框架层模板渲染 SOUL.md + AGENTS.md
-          const templateDir = join(PROJECT_ROOT, "crewclaw/daemons/workspace-templates/member-shadow");
+          const templateDir = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/daemons/workspace-templates/member-shadow");
           const renderTemplate = (src: string): string => {
             const descBlock = description ? `## 关于 ${member_name}\n\n${description}\n` : "";
             return src
@@ -8843,70 +8843,127 @@ const crewclawRoutingPlugin = {
           status: "active",
         });
 
+        // ── 写入 openclaw.json + 重启 Gateway ──────────────────────────────
+        const ocJsonPath = join(home, ".openclaw/openclaw.json");
+        try {
+          const raw = readFileSync(ocJsonPath, "utf8");
+          const ocCfg = JSON.parse(raw) as { agents?: { list?: Array<Record<string, unknown>> } };
+          if (!ocCfg.agents) ocCfg.agents = {};
+          if (!Array.isArray(ocCfg.agents.list)) ocCfg.agents.list = [];
+          const existingIdx = ocCfg.agents.list.findIndex((a) => a.id === agent_id);
+          const agentEntry: Record<string, unknown> = {
+            id: agent_id,
+            workspace: workspaceDir,
+            model: "deepseek/deepseek-chat",
+          };
+          if (existingIdx >= 0) {
+            ocCfg.agents.list[existingIdx] = agentEntry;
+          } else {
+            ocCfg.agents.list.push(agentEntry);
+          }
+          writeFileSync(ocJsonPath, JSON.stringify(ocCfg, null, 2) + "\n", "utf8");
+          // 重启 Gateway（LaunchAgent KeepAlive 自动拉起，约 15s 后可用）
+          execSync("kill -9 $(pgrep -f openclaw-gateway) 2>/dev/null || true", { shell: "/bin/bash" });
+        } catch (ocErr: unknown) {
+          const typeLabel2 = isShadow ? `家人影子（${member_name}）` : "任务型子 Agent";
+          return {
+            content: [{ type: "text", text: `⚠️ ${typeLabel2} "${agent_id}" workspace 已创建，但写入 openclaw.json 失败：${ocErr instanceof Error ? ocErr.message : String(ocErr)}` }],
+            details: { agentId: agent_id, tier, parentId, workspaceDir, isShadow, error: String(ocErr) },
+          };
+        }
+
         const typeLabel = isShadow ? `家人影子（${member_name}）` : "任务型子 Agent";
         return {
-          content: [{ type: "text", text: `✅ ${typeLabel} "${agent_id}" 已创建（Tier ${tier}，父 Agent: ${parentId}）` }],
+          content: [{ type: "text", text: `✅ ${typeLabel} "${agent_id}" 已创建并注册到 Gateway（Tier ${tier}，父 Agent: ${parentId}）。Gateway 重启中，约 15 秒后可用。请用 sessions_spawn 工具（agentId="${agent_id}"）与其对话。` }],
           details: { agentId: agent_id, tier, parentId, workspaceDir, isShadow },
         };
       },
     }));
+
+    // ── query_member_profile：查询成员影子 Profile ────────────────────────
+    api.registerTool((_toolCtx) => ({
+      label: "查询家人影子 Profile",
+      name: "query_member_profile",
+      description: [
+        "Lucas 专属：查询家人影子 Agent 的当前状态。",
+        "返回影子是否存在、registry 状态、Tier、最后活跃次数等信息。",
+        "可在 sessions_spawn 调用前先确认影子已就绪。",
+      ].join("\n"),
+      parameters: Type.Object({
+        member_id: Type.String({ description: "家人昵称或影子 Agent ID（如 yiyi 或 shadow-yiyi）" }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: "❌ 此工具仅限前台 Agent 使用" }], details: {} };
-        }
-        const p = params as { member_id: string; question: string };
-        const shadowAgentId = `shadow-${p.member_id}`;
-
-        // 检查分身是否存在
+        const p = params as { member_id: string };
+        const shadowAgentId = p.member_id.startsWith("shadow-") ? p.member_id : `shadow-${p.member_id}`;
         const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
         const rec = registry.getAgent(shadowAgentId);
         if (!rec || rec.status === "evicted") {
           return {
-            content: [{ type: "text", text: `❌ 成员分身 "${shadowAgentId}" 不存在或已被驱逐，请先调用 create_member_shadow 创建。` }],
-            details: { shadowAgentId },
+            content: [{ type: "text", text: `❌ 影子 "${shadowAgentId}" 不存在或已被驱逐，请先调用 create_sub_agent（传入 member_name + relationship）创建。` }],
+            details: { shadowAgentId, exists: false },
           };
         }
+        return {
+          content: [{ type: "text", text: `✅ 影子 "${shadowAgentId}" 存在（Tier ${rec.tier}，活跃次数 ${rec.activityCount}，状态 ${rec.status}）。可用 sessions_spawn（agentId="${shadowAgentId}"）调用。` }],
+          details: { shadowAgentId, exists: true, tier: rec.tier, activityCount: rec.activityCount, status: rec.status },
+        };
+      },
+    }));
 
+    // ── evict_sub_agent：主动驱逐子 Agent ───────────────────────────────
+    api.registerTool((toolCtx) => ({
+      label: "驱逐子 Agent",
+      name: "evict_sub_agent",
+      description: [
+        "Lucas / Andy / Lisa 均可调用：主动驱逐（停用）某个子 Agent。",
+        "驱逐后该 Agent 从 registry 标记为 evicted，对话历史归档，并从 openclaw.json 移除。",
+        "仅允许驱逐自己创建的子 Agent（parentAgentId 匹配）。",
+      ].join("\n"),
+      parameters: Type.Object({
+        agent_id: Type.String({ description: "要驱逐的子 Agent ID（如 shadow-yiyi）" }),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const { agent_id } = params as { agent_id: string };
+        const parentId = toolCtx.agentId ?? DESIGNER_AGENT_ID;
+        const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
+        const rec = registry.getAgent(agent_id);
+        if (!rec) {
+          return {
+            content: [{ type: "text", text: `❌ 子 Agent "${agent_id}" 不存在。` }],
+            details: { agentId: agent_id, success: false },
+          };
+        }
+        if (rec.parentAgentId && rec.parentAgentId !== parentId) {
+          return {
+            content: [{ type: "text", text: `❌ 无权驱逐 "${agent_id}"（创建者为 ${rec.parentAgentId}）。` }],
+            details: { agentId: agent_id, success: false },
+          };
+        }
+        registry.evict(agent_id);
+        void archiveAgentMemory(agent_id, "evicted");
+        void writeAgentRecord({
+          agentId: agent_id,
+          tier: rec.tier,
+          parentAgentId: rec.parentAgentId ?? parentId,
+          description: `（已驱逐）活跃次数 ${rec.activityCount}`,
+          status: "evicted",
+        });
+        // 同步从 openclaw.json 移除并重启 Gateway
+        const ocHome = process.env.HOME ?? "/";
+        const ocJsonPath2 = join(ocHome, ".openclaw/openclaw.json");
         try {
-          const gatewayUrl = process.env.GATEWAY_URL ?? "http://localhost:18789";
-          const token = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
-          const resp = await fetch(`${gatewayUrl}/v1/chat/completions`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify({
-              model: `openclaw/${shadowAgentId}`,
-              messages: [{ role: "user", content: p.question }],
-              user: FRONTEND_AGENT_ID,
-              stream: false,
-            }),
-            signal: AbortSignal.timeout(60_000),
-          });
-          if (!resp.ok) throw new Error(`Gateway 返回 ${resp.status}`);
-          const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
-          const answer = data.choices?.[0]?.message?.content ?? "（分身未回复）";
-
-          // 记录此次交互到 agent_interactions 集合
-          void writeAgentInteraction({
-            fromAgent: FRONTEND_AGENT_ID,
-            toAgent: shadowAgentId,
-            content: `问：${p.question}\n答：${answer}`,
-            taskId: `profile-query-${Date.now()}`,
-          });
-
-          return {
-            content: [{ type: "text", text: answer }],
-            details: { shadowAgentId, question: p.question },
-          };
-        } catch (e: unknown) {
-          return {
-            content: [{ type: "text", text: `❌ 查询分身失败：${e instanceof Error ? e.message : String(e)}` }],
-            details: { shadowAgentId, error: String(e) },
-          };
-        }
+          const raw2 = readFileSync(ocJsonPath2, "utf8");
+          const ocCfg2 = JSON.parse(raw2) as { agents?: { list?: Array<Record<string, unknown>> } };
+          if (Array.isArray(ocCfg2.agents?.list)) {
+            ocCfg2.agents!.list = ocCfg2.agents!.list.filter((a) => a.id !== agent_id);
+            writeFileSync(ocJsonPath2, JSON.stringify(ocCfg2, null, 2) + "\n", "utf8");
+            execSync("kill -9 $(pgrep -f openclaw-gateway) 2>/dev/null || true", { shell: "/bin/bash" });
+          }
+        } catch { /* 移除失败不致命 */ }
+        return {
+          content: [{ type: "text", text: `✅ 子 Agent "${agent_id}" 已驱逐并归档，Gateway 重启中。` }],
+          details: { agentId: agent_id, success: true },
+        };
       },
     }));
 
