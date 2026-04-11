@@ -1937,8 +1937,8 @@ PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
 规则：某层无问题写 ✅ 无异常，不要省略。L0 必须包含具体进程状态。
 
 系统评估工具（业主发「系统评估」时使用）：
-- evaluate_system：依次调用 evaluate_l0~l3，输出 L0~L3 评分卡
-- evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3：单层评估
+- evaluate_system：依次调用 evaluate_l0~l4，输出 L0~L4 评分卡
+- evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4：单层评估
 - inspect_agent_context：查看 Andy 或 Lisa 上下文快照`;
 
 const MAIN_TOOLS = [
@@ -2123,8 +2123,13 @@ const MAIN_TOOLS = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'evaluate_l4',
+    description: '评估 L4（行为内化进度）：按 pattern_type 统计 dpo-candidates.jsonl 积累量（距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势（判断 L2 干预是否有效收敛）、Lucas AGENTS.md 幻觉禁令条数（当前 L2 临时拦截状态）、Gemma 4 本地模型就绪检查。',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
     name: 'evaluate_system',
-    description: '系统全面评估（L0~L3）：依次运行 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3，汇总为一张评分卡。业主发「系统评估」时调用此工具。',
+    description: '系统全面评估（L0~L4）：依次运行 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4，汇总为一张评分卡。业主发「系统评估」时调用此工具。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   // run_claude_code 暂时禁用（2026-03-26）：子进程 execFileSync 阻塞事件循环 120s，
@@ -3402,16 +3407,116 @@ os._exit(0)
     return `**L3 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
 
+  if (toolName === 'evaluate_l4') {
+    const results = [];
+    let score = '✅';
+    const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+
+    // 1. DPO 模式积累进度（按 pattern_type 分组，追踪距内化阈值的缺口）
+    try {
+      const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
+      if (!fs.existsSync(dpoCandPath)) {
+        results.push('⚪ dpo-candidates.jsonl：文件不存在（尚无 L4 训练信号）');
+      } else {
+        const lines = fs.readFileSync(dpoCandPath, 'utf8').split('\n').filter(l => l.trim());
+        const patternCounts = {};
+        const nowTs = Date.now();
+        const sevenDaysAgo = nowTs - 7 * 24 * 3600 * 1000;
+        const fourteenDaysAgo = nowTs - 14 * 24 * 3600 * 1000;
+        let recentCount = 0;
+        let prevWeekCount = 0;
+
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            const ts = new Date(entry.t).getTime();
+            if (ts > sevenDaysAgo) recentCount++;
+            else if (ts > fourteenDaysAgo) prevWeekCount++;
+            for (const reason of (entry.reasons || [])) {
+              const m = reason.match(/^([a-z_]+):/);
+              if (m) {
+                const pt = m[1];
+                patternCounts[pt] = (patternCounts[pt] || 0) + 1;
+              }
+            }
+          } catch (_) {}
+        }
+
+        const THRESHOLD = 50;
+        const patternLines = Object.entries(patternCounts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([pt, n]) => {
+            const icon = n >= THRESHOLD ? '🔴' : n >= 20 ? '🟡' : '⚪';
+            return `${icon} ${pt}：${n} 条${n >= THRESHOLD ? '（已达阈值，待内化）' : `（距阈值还差 ${THRESHOLD - n} 条）`}`;
+          });
+
+        results.push(`✅ DPO 信号总计：${lines.length} 条`);
+        patternLines.forEach(l => results.push(`   ${l}`));
+
+        // 近 7 天趋势（判断 L2 干预是否在收敛问题）
+        const trendIcon = recentCount < prevWeekCount ? '📉' : recentCount > prevWeekCount ? '📈' : '➡️';
+        const trendMsg  = recentCount < prevWeekCount ? 'L2 干预有效，问题在收敛' : recentCount > prevWeekCount ? '问题在增加，L2 干预需加强' : '持平';
+        results.push(`${trendIcon} 近 7 天新增 ${recentCount} 条 vs 前 7 天 ${prevWeekCount} 条（${trendMsg}）`);
+
+        const ripePatterns = Object.entries(patternCounts).filter(([, n]) => n >= THRESHOLD);
+        if (ripePatterns.length > 0) {
+          score = '🔴';
+          results.push(`🔴 ${ripePatterns.length} 个模式已达内化阈值，等待工程师确认触发微调`);
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ DPO 信号读取失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 2. L2 临时干预状态（Lucas AGENTS.md 幻觉禁令条数）
+    try {
+      const agentsPath = path.join(process.env.HOME, '.openclaw', 'workspace-lucas', 'AGENTS.md');
+      if (!fs.existsSync(agentsPath)) {
+        results.push('⚠️ Lucas AGENTS.md 不存在');
+        if (score === '✅') score = '⚠️';
+      } else {
+        const content = fs.readFileSync(agentsPath, 'utf8');
+        const halluLines = content.split('\n').filter(l =>
+          /幻觉|承诺幻觉|已提交|pretend|false.*commit|禁止.*承诺|不得.*承诺/i.test(l)
+        );
+        if (halluLines.length > 0) {
+          results.push(`✅ L2 临时拦截：AGENTS.md 中有 ${halluLines.length} 行幻觉/承诺禁令`);
+        } else {
+          results.push('⚠️ L2 临时拦截：AGENTS.md 未检测到幻觉禁令（L2 干预可能缺失）');
+          if (score === '✅') score = '⚠️';
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ AGENTS.md 读取失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 3. Gemma 4 本地模型就绪检查（L4 执行前置条件）
+    try {
+      const gemmaOut = execSync(
+        `${PYTHON3} -c "from mlx_vlm.models import gemma4; print('ready')"`,
+        { timeout: 10000, stdio: 'pipe' }
+      ).toString().trim();
+      results.push(`✅ Gemma 4：${gemmaOut}（L4 微调可触发）`);
+    } catch (_) {
+      results.push('⏳ Gemma 4：尚未就绪（阻塞 L4 微调执行）');
+    }
+
+    return `**L4 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
+  }
+
   if (toolName === 'evaluate_system') {
-    // 依次调用 L0~L3 子评估，汇总为评分卡
+    // 依次调用 L0~L4 子评估，汇总为评分卡
     const l0 = await executeMainTool('evaluate_l0', {});
     const l1 = await executeMainTool('evaluate_l1', {});
     const l2 = await executeMainTool('evaluate_l2', {});
     const l3 = await executeMainTool('evaluate_l3', {});
+    const l4 = await executeMainTool('evaluate_l4', {});
 
     // 从各层结果提取评分符号
     const extractScore = (text) => {
-      const m = text.match(/\*\*L\d 评估 ([✅⚠️❌]+)\*\*/);
+      const m = text.match(/\*\*L\d 评估 ([✅⚠️❌🔴]+)\*\*/);
       return m ? m[1] : '❓';
     };
 
@@ -3420,11 +3525,11 @@ os._exit(0)
       `L1 Agent 人格化 ${extractScore(l1)}`,
       `L2 进化循环 ${extractScore(l2)}`,
       `L3 组织协作 ${extractScore(l3)}`,
-      `L4 行为内化 ⬜（未进入）`,
+      `L4 行为内化 ${extractScore(l4)}`,
     ].join('\n');
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡**\n${scoreCard}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}`;
+    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡**\n${scoreCard}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}`;
   }
 
   return `未知工具：${toolName}`;
@@ -5186,7 +5291,7 @@ async function runMainMonitorLoop() {
     } catch {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n请按四层监控协议执行：\n\nStep 1：调用 scan_pipeline_health\n- 任何进程不在线 / Gateway 不可达 → 立即推送工程师，一句话描述问题（不用等后续步骤）\n- 一切正常 → 继续 Step 2\n\nStep 2：质量扫描（若「上次质量扫描」不是今天）\n- 调用 scan_lucas_quality\n- 5条以上质量问题 → 立即推送工程师\n- 1-4条质量问题 → 追加到 HEARTBEAT.md「待汇总观察」节，格式：- [${now}] 具体描述\n- 无问题 → 不记录\n\nStep 3：日报判断\n- 若「上次日报发送」字段距今超过 20 小时，且「待汇总观察」节非空 → 发送日报给工程师（列出所有积累观察），更新「上次日报发送」为当前时间，清空「待汇总观察」节\n\nStep 4：系统改进点识别\n- 综合 Step 1~3 结果及 HEARTBEAT.md 历史，判断是否存在值得工程师在下次工作周期处理的改进点（非紧急告警、非日报级问题，而是架构缺口 / 持续积累的模式性问题 / 优化机会）\n- 发现改进点 → 调用 log_improvement_task（priority: high=架构缺口, medium=影响体验, low=优化机会）\n- 无改进点 → 跳过\n\nStep 5：完成\n- 已推送或发日报或记录改进任务 → 按 L0~L3 分层格式简述操作\n- 什么都没做 → 回复 HEARTBEAT_OK`;
+    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n请按五步监控协议执行：\n\nStep 1：调用 scan_pipeline_health（L0 快速检查）\n- 任何进程不在线 / Gateway 不可达 → 立即推送工程师，一句话描述问题（不用等后续步骤）\n- 一切正常 → 继续 Step 2\n\nStep 2：L1 质量巡检（若「上次质量扫描」不是今天）\n- 调用 evaluate_l1\n- 5条以上质量问题 → 立即推送工程师\n- 1-4条质量问题 → 追加到 HEARTBEAT.md「待汇总观察」节，格式：- [${now}] 具体描述\n- 无问题 → 不记录\n\nStep 3：L2~L4 进化巡检（若「上次L2~L4巡检」不是今天，与质量扫描同频）\n- 依次调用 evaluate_l2 / evaluate_l3 / evaluate_l4\n- L4 有模式达到内化阈值（🔴）→ 立即推送工程师\n- 有 ⚠️ 或 ❌ → 追加到「待汇总观察」节\n- 全部 ✅ → 不记录\n\nStep 4：日报判断\n- 若「上次日报发送」字段距今超过 20 小时，且「待汇总观察」节非空 → 发送日报给工程师（列出所有积累观察），更新「上次日报发送」为当前时间，清空「待汇总观察」节\n\nStep 5：系统改进点识别\n- 综合 Step 1~4 结果及 HEARTBEAT.md 历史，判断是否存在值得工程师在下次工作周期处理的改进点（非紧急告警、非日报级问题，而是架构缺口 / 持续积累的模式性问题 / 优化机会）\n- 发现改进点 → 调用 log_improvement_task（priority: high=架构缺口, medium=影响体验, low=优化机会）\n- 无改进点 → 跳过\n\nStep 6：完成\n- 已推送或发日报或记录改进任务 → 按 L0~L4 分层格式简述操作\n- 什么都没做 → 回复 HEARTBEAT_OK`;
 
     // 使用独立消息历史，不污染业主会话
     const messages = [{ role: 'user', content: heartbeatPrompt }];
@@ -5194,7 +5299,7 @@ async function runMainMonitorLoop() {
     let iterations = 0;
     let reply = '';
 
-    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。\n\n**汇报格式（强制）**：所有推送给工程师的消息必须按 Lx 分层组织：\n## L0 基础设施\n[各 PM2 进程名称+状态+运行时长+重启次数、Gateway 状态、关键端口]\n## L1 Agent 人格化\n[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]\n## L2 进化循环\n[蒸馏/技能/进化信号/DPO]\n## L3 组织协作\n[协作边/成员分身/关系蒸馏/访客影子]\n规则：某层无问题写 ✅ 无异常，不要省略该层。L0 必须包含具体进程状态和数据。\n\n可用评估工具：evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_system（依次调用 L0~L3）。';
+    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。\n\n**汇报格式（强制）**：所有推送给工程师的消息必须按 Lx 分层组织：\n## L0 基础设施\n[各 PM2 进程名称+状态+运行时长+重启次数、Gateway 状态、关键端口]\n## L1 Agent 人格化\n[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]\n## L2 进化循环\n[蒸馏/技能/进化信号/DPO]\n## L3 组织协作\n[协作边/成员分身/关系蒸馏/访客影子]\n## L4 行为内化\n[DPO 积累进度（各 pattern 条数/阈值）、L2 临时干预状态、Gemma 4 就绪状态]\n规则：某层无问题写 ✅ 无异常，不要省略该层。L0 必须包含具体进程状态和数据。\n\n可用评估工具：evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_system（依次调用 L0~L4）。';
     while (iterations++ < 10) {
       const response = await callMainModel(heartbeatSystem, messages);
 
@@ -5240,9 +5345,12 @@ async function runMainMonitorLoop() {
       const nowIso = nowCST();
       let hb = fs.readFileSync(heartbeatPath, 'utf8');
       hb = hb.replace(/- 上次健康检查：.*/,  `- 上次健康检查：${nowIso}`);
-      if (toolsCalled.includes('scan_lucas_quality')) {
+      if (toolsCalled.includes('evaluate_l1') || toolsCalled.includes('scan_lucas_quality')) {
         hb = hb.replace(/- 上次质量扫描：.*/, `- 上次质量扫描：${nowIso}`);
         hb = hb.replace(/  - 上次扫描：.*/,   `  - 上次扫描：${nowIso}`);
+      }
+      if (toolsCalled.includes('evaluate_l2') || toolsCalled.includes('evaluate_l3') || toolsCalled.includes('evaluate_l4')) {
+        hb = hb.replace(/- 上次L2~L4巡检：.*/, `- 上次L2~L4巡检：${nowIso}`);
       }
       fs.writeFileSync(heartbeatPath, hb, 'utf8');
     } catch (e) {

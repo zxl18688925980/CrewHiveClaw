@@ -1200,7 +1200,16 @@ Lucas 在以下情况主动在对话入口提醒业主：
 
 **`<think>` 块剥离**：部分模型（如 DeepSeek R1、GLM-5.1）会在回复中夹带推理过程（`<think>...</think>` 块）。wecom-entrance 在取 reply 之前统一调用 `stripThink()` 剥离，业主只看到最终结论，不看到推理中间态。Lucas 路径同样在 `stripMarkdownForWecom()` 首行处理，全路径一致。
 
-**主动监控**：Main 不只是被动响应器。wecom-entrance 内置 30min 监控循环，定时触发 Main agent 执行健康扫描：检查 PM2 + Gateway + 日志错误，每天扫描一次 Lucas 对话质量。发现异常主动推送给业主；全部正常则静默（不打扰）。监控状态记录在 `~/.openclaw/workspace-main/HEARTBEAT.md`，Main 也可在响应模式中直接调用这两个扫描工具进行按需诊断。
+**主动监控**：Main 不只是被动响应器。wecom-entrance 内置 30min 监控循环，定时触发 Main agent 按六步协议执行 L0~L4 全链路巡检：
+
+- **Step 1（每次）**：`scan_pipeline_health` — L0 快速检查（PM2 + Gateway + 日志错误），发现异常立即推送
+- **Step 2（每日一次）**：`evaluate_l1` — Agent 质量巡检（Lucas 对话质量 + Andy/Lisa 活跃度 + 蒸馏产出）
+- **Step 3（每日一次，与 Step 2 同频）**：`evaluate_l2` / `evaluate_l3` / `evaluate_l4` — 进化层全面巡检；L4 有模式达到内化阈值（🔴）时立即推送
+- **Step 4**：日报判断（待汇总观察积累超 20h → 发日报 + 清空）
+- **Step 5**：识别架构缺口 / 模式性问题 → `log_improvement_task`
+- **Step 6**：完成，按 L0~L4 分层格式汇报或静默（`HEARTBEAT_OK`）
+
+监控状态记录在 `~/.openclaw/workspace-main/HEARTBEAT.md`（含 `上次健康检查` / `上次质量扫描` / `上次L2~L4巡检` / `上次日报发送` 四个时间戳）。Main 在响应模式中也可直接调用 `evaluate_system`（L0~L4 全景评分卡）进行按需诊断。
 
 #### Main 工具集
 
@@ -1217,13 +1226,14 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `write_file`           | 直接写入本机任意路径文件（不需要生成脚本，适合写 Obsidian 笔记、保存报告等）              |
 | `send_file`            | 将 HomeAI 目录下的文件通过企业微信发给业主                                |
 | `trigger_finetune`     | 后台触发增量微调                                                  |
-| `scan_pipeline_health` | 全面扫描系统健康：PM2 + Gateway（`/health`）+ wecom + 最近 1h 日志错误摘要  |
-| `scan_lucas_quality`   | 扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空/过短回复 |
+| `scan_pipeline_health` | L0 快速检查：PM2 + Gateway（`/health`）+ wecom + 最近 1h 日志错误摘要（心跳 Step 1，每 30min）|
+| `scan_lucas_quality`   | 扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空/过短回复（已被 evaluate_l1 取代，保留作备用工具）|
 | `evaluate_l0`          | 蒸馏管道健康：watchdog PM2 状态、Kuzu Fact/Entity 总数、ChromaDB conversations + decisions 总量、家人档案更新时间、Kuzu 协作边数量（L3 就绪信号） |
 | `evaluate_l1`          | Agent 认知质量：Lucas 最近对话质量扫描（格式/幻觉/空回复）、Andy/Lisa agent_interactions 抽查、家人档案注入文件存在性、Track A/C 蒸馏产出条数、Kuzu has_pattern 积累量 |
 | `evaluate_l2`          | 进化循环状态：skill-candidates 候选数、dpo-candidates 负例数、Andy HEARTBEAT 上次巡检时间（`上次巡检:` 字段，超 30h 标黄）、opencode 近 10 次成功率 + 平均 spec 吻合率、codebase_patterns 条数、三角色 Skill 总数 |
 | `evaluate_l3`          | 组织协作状态：Kuzu 协作边（co_discusses / requests_from / supports / role_in_context）+ active_thread、ChromaDB shadow_interactions 演进环记录数、访客 Registry active/dormant/archived 统计、关系蒸馏日志上次运行时间 |
-| `evaluate_system`      | 总入口：依次调 L0~L3 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`），业主发「系统评估」即触发 |
+| `evaluate_l4`          | 行为内化进度：按 pattern_type 分组统计 dpo-candidates.jsonl 积累量（⚪/🟡/🔴，距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势（判断 L2 临时干预是否有效收敛问题）、Lucas AGENTS.md 幻觉禁令条数（当前 L2 临时拦截状态）、Gemma 4 本地模型就绪检查 |
+| `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`），业主发「系统评估」即触发 |
 | `update_heartbeat`     | 追加监控观察（`append_observation`）/ 标记日报已发（`mark_daily_sent`，清空待汇总观察）|
 | `log_improvement_task` | 记录监控发现的系统改进点到 `data/main-pending-tasks.json`；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
 
@@ -2843,6 +2853,10 @@ L2 外化：pattern -[crystallized_into]-> capability（Tool 出现）
 L4 内化：pattern -[internalized_into]-> weights（Tool 下线）
 扩张 → 收缩 → 扩张：系统在这个循环中持续进化，工具越来越少 = 越来越成熟
 ```
+
+**L4 巡检（Main 主动监控，执行前置于微调就绪）**：
+
+L4 训练执行依赖 Gemma 4 本地模型就绪，但 L4 巡检现在就应该运行。Main 通过 `evaluate_l4` 持续跟踪三个维度：① 按 pattern_type 统计 DPO 信号积累进度（距 50 条内化阈值还差多少）；② L2 临时干预效果（近 7 天 vs 前 7 天趋势，判断 AGENTS.md 补丁是否在收敛问题）；③ Gemma 4 就绪状态。L2 是 L4 未就绪前的临时拦截手段——模式匹配、禁令注入、路由层后检；L4 就绪后，对应 L2 补丁随微调完成逐步撤除，SOUL.md 同步瘦身。
 
 ---
 
