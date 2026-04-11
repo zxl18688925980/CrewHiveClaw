@@ -694,7 +694,7 @@ async function callGatewayAgent(agentId, message, userId, timeoutMs = 180000, hi
     const resp = await axios.post(
       `${GATEWAY_URL}/v1/chat/completions`,
       {
-        model:    agentId,
+        model:    `openclaw/${agentId}`,
         messages,
         user:     sessionUserId,
         stream:   false,
@@ -2473,6 +2473,8 @@ async function executeMainTool(toolName, toolInput) {
         const lines = buf.toString('utf8').split('\n');
         for (const line of lines) {
           if (!line.includes('error') && !line.includes('Error') && !line.includes('ERROR')) continue;
+          // 已知噪音：未配对 WebSocket 连接缺少 operator.read scope（非致命，等 OpenClaw 升级解决）
+          if (line.includes('missing scope: operator.read')) continue;
           // 尝试解析时间戳判断是否在 1h 内
           try {
             const tsMatch = line.match(/"timestamp":"([^"]+)"/);
@@ -4879,7 +4881,7 @@ app.post('/api/demo-proxy/submit-requirement', async (req, res) => {
         'x-openclaw-agent-id': 'andy',
       },
       body: JSON.stringify({
-        model: 'andy',
+        model: 'openclaw/andy',
         messages: [{ role: 'user', content: andyMessage }],
         stream: false,
       }),

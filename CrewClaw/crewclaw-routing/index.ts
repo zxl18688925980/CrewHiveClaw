@@ -2186,7 +2186,7 @@ async function callGatewayAgent(
       "x-openclaw-agent-id": agentId,
     },
     body: JSON.stringify({
-      model: agentId,
+      model: `openclaw/${agentId}`,
       messages,
       stream: false,
     }),
@@ -8865,7 +8865,7 @@ const crewclawRoutingPlugin = {
               ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({
-              model: shadowAgentId,
+              model: `openclaw/${shadowAgentId}`,
               messages: [{ role: "user", content: p.question }],
               user: FRONTEND_AGENT_ID,
               stream: false,

@@ -63,7 +63,7 @@ function log(msg) {
 function probe() {
   return new Promise((resolve) => {
     const body = JSON.stringify({
-      model: 'lucas',
+      model: 'openclaw/lucas',
       messages: [{ role: 'user', content: 'watchdog probe' }],
       user: `watchdog:${Date.now()}`,
       stream: false,
@@ -635,7 +635,7 @@ function probeAndyHeartbeat() {
   const messageContent = `HEARTBEAT\n\n${heartbeatContext}`;
   return new Promise((resolve) => {
     const body = JSON.stringify({
-      model: 'andy',
+      model: 'openclaw/andy',
       messages: [{ role: 'user', content: messageContent }],
       user: `heartbeat:andy:${Date.now()}`,
       stream: false,
