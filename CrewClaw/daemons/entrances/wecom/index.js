@@ -2968,12 +2968,12 @@ os._exit(0)
         const objData = objResp.ok ? await objResp.json() : { ids: [] };
         const objCount = (objData.ids || []).length;
         const hasLearnings = andyCount > 0 || lisaCount > 0;
-        results.push(`${hasLearnings ? '✅' : '⚠️'} Track A 蒸馏产出：Andy design_learning ${andyCount} 条，Lisa impl_learning ${lisaCount} 条${!hasLearnings ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
-        results.push(`${objCount > 0 ? '✅' : '⚠️'} Track C 学习目标：${objCount} 条${objCount === 0 ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
+        results.push(`${hasLearnings ? '✅' : '⚠️'} Andy/Lisa 每日自我进化产出：design_learning ${andyCount} 条，impl_learning ${lisaCount} 条${!hasLearnings ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
+        results.push(`${objCount > 0 ? '✅' : '⚠️'} Andy 每日学习目标：${objCount} 条${objCount === 0 ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
         if (!hasLearnings && score === '✅') score = '⚠️';
       }
     } catch (e) {
-      results.push(`⚠️ Track A/C 蒸馏产出检查失败：${e.message.slice(0, 60)}`);
+      results.push(`⚠️ Andy/Lisa 每日自我进化产出检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
 

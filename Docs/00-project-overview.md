@@ -1229,7 +1229,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `scan_pipeline_health` | L0 快速检查：PM2 + Gateway（`/health`）+ wecom + 最近 1h 日志错误摘要（心跳 Step 1，每 30min）|
 | `scan_lucas_quality`   | 扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空/过短回复（已被 evaluate_l1 取代，保留作备用工具）|
 | `evaluate_l0`          | 蒸馏管道健康：watchdog PM2 状态、Kuzu Fact/Entity 总数、ChromaDB conversations + decisions 总量、家人档案更新时间、Kuzu 协作边数量（L3 就绪信号） |
-| `evaluate_l1`          | Agent 认知质量：Lucas 最近对话质量扫描（格式/幻觉/空回复）、Andy/Lisa agent_interactions 抽查、家人档案注入文件存在性、Track A/C 蒸馏产出条数、Kuzu has_pattern 积累量 |
+| `evaluate_l1`          | Agent 认知质量：Lucas 最近对话质量扫描（格式/幻觉/空回复）、Andy/Lisa agent_interactions 抽查、家人档案注入文件存在性、Andy/Lisa 每日自我进化产出条数、Kuzu has_pattern 积累量 |
 | `evaluate_l2`          | 进化循环状态：skill-candidates 候选数、dpo-candidates 负例数、Andy HEARTBEAT 上次巡检时间（`上次巡检:` 字段，超 30h 标黄）、opencode 近 10 次成功率 + 平均 spec 吻合率、codebase_patterns 条数、三角色 Skill 总数 |
 | `evaluate_l3`          | 组织协作状态：Kuzu 协作边（co_discusses / requests_from / supports / role_in_context）+ active_thread、ChromaDB shadow_interactions 演进环记录数、访客 Registry active/dormant/archived 统计、关系蒸馏日志上次运行时间 |
 | `evaluate_l4`          | 行为内化进度：按 pattern_type 分组统计 dpo-candidates.jsonl 积累量（⚪/🟡/🔴，距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势（判断 L2 临时干预是否有效收敛问题）、Lucas AGENTS.md 幻觉禁令条数（当前 L2 临时拦截状态）、Gemma 4 本地模型就绪检查 |
@@ -1706,7 +1706,7 @@ Raw Data（ChromaDB / 静态文件）
 
 | 脚本 | 输入 | 输出 | 触发时机 |
 |---|---|---|---|
-| `distill-agent-memories.py`（Andy 分支）| ChromaDB decisions + agent_interactions + 外部参考文章 + 进化历史 | Kuzu `pattern` Entity + `has_pattern` Fact（agent=andy，full refresh）| **每日凌晨 1 点**自动触发（Andy/Lisa 个人化蒸馏链）|
+| `distill-agent-memories.py`（Andy 分支）| ChromaDB decisions + agent_interactions + 外部参考文章 + 进化历史 | Kuzu `pattern` Entity + `has_pattern` Fact（agent=andy，full refresh）| **每日凌晨 1 点**自动触发（Andy/Lisa 每日自我进化链）|
 | `render-knowledge.py --agent andy` | Kuzu `has_pattern` Facts（`valid_until IS NULL`，agent=andy）| `MEMORY.md` DISTILLED-START/END 区块替换 | `distill-agent-memories.py` 完成后 subprocess 自动触发 |
 | `init-capabilities.py` | `CAPABILITY_REGISTRY` | Kuzu `capability` + `has_capability`（owner=andy）| 手动运行，幂等 |
 
@@ -1741,7 +1741,7 @@ Raw Data（ChromaDB / 静态文件）
 
 | 脚本 | 输入 | 输出 | 触发时机 |
 |---|---|---|---|
-| `distill-agent-memories.py`（Lisa 分支）| ChromaDB decisions + code_history + agent_interactions（agentId=lisa）+ `docs/10-engineering-notes.md`（按时间+影响面双重权重蒸馏）| Kuzu `pattern` Entity + `has_pattern` Fact（agent=lisa，full refresh）| **每日凌晨 1 点**自动触发（Andy/Lisa 个人化蒸馏链）|
+| `distill-agent-memories.py`（Lisa 分支）| ChromaDB decisions + code_history + agent_interactions（agentId=lisa）+ `docs/10-engineering-notes.md`（按时间+影响面双重权重蒸馏）| Kuzu `pattern` Entity + `has_pattern` Fact（agent=lisa，full refresh）| **每日凌晨 1 点**自动触发（Andy/Lisa 每日自我进化链）|
 | `render-knowledge.py --agent lisa` | Kuzu `has_pattern` Facts（`valid_until IS NULL`，agent=lisa）| **`CODEBASE.md`** DISTILLED-START/END 区块替换（最关键 3-5 条）| `distill-agent-memories.py` 完成后 subprocess 自动触发 |
 | `init-capabilities.py` | `CAPABILITY_REGISTRY` | Kuzu `capability` + `has_capability`（owner=lisa）| 手动运行，幂等 |
 
@@ -1777,7 +1777,7 @@ CODE_CALLS（有向边）
 
 | 时间 | 任务 | 说明 |
 |------|------|------|
-| 凌晨 1 点 | Andy/Lisa 个人化蒸馏 | `distill-design-learnings.py` + `distill-impl-learnings.py` + `distill-learning-objectives.py`，三脚本依次 fire-and-forget |
+| 凌晨 1 点 | Andy/Lisa 每日自我进化 | `distill-design-learnings.py` + `distill-impl-learnings.py` + `distill-learning-objectives.py`，三脚本依次 fire-and-forget |
 | 凌晨 2 点 | 记忆蒸馏 + Andy HEARTBEAT | `distill-memories.py`（串行完成后延迟 5min）→ `distill-agent-memories.py`；同时触发 Andy HEARTBEAT 自评 |
 | 凌晨 3 点 | 团队洞察蒸馏 | `distill-team-observations.py`，Andy 视角分析家人行为模式 → Kuzu `andy→person` Fact |
 | 凌晨 4 点 | 协作关系蒸馏 | `distill-relationship-dynamics.py`，人与人协作边 + 演进环 |

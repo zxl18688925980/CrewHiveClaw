@@ -911,7 +911,7 @@ function runDistill() {
 
 let lastDistillDay       = -1;  // 防止同一天重复触发
 let lastTeamObsDay       = '';  // team_observation 蒸馏每日触发去重
-let lastPersonalizeDay   = '';  // Track A/C 个人化蒸馏每日触发去重
+let lastPersonalizeDay   = '';  // Andy/Lisa 每日自我进化触发去重
 let lastCollabDistillDay = '';  // 协作关系蒸馏每日触发去重
 let lastCodeGraphDay     = '';  // 代码图谱每日增量重建触发去重
 
