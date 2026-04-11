@@ -5584,7 +5584,7 @@ async function runLucasProactiveLoop() {
 // Main agent 读取 HEARTBEAT.md → 调 scan_pipeline_health / scan_lucas_quality
 // → 有异常才推送给业主；正常回复 HEARTBEAT_OK 不推送。
 
-const MAIN_MONITOR_INTERVAL_MS = 30 * 60 * 1000; // 每 30 分钟
+const MAIN_MONITOR_INTERVAL_MS = 4 * 60 * 60 * 1000; // 每 4 小时（Layer 3 故障探测足够；Layer 2 日报在 HEARTBEAT.md 时间控制下每日一次）
 
 async function runMainMonitorLoop() {
   if (!WECOM_OWNER_ID) return;
@@ -5598,7 +5598,7 @@ async function runMainMonitorLoop() {
     } catch {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n请按五步监控协议执行：\n\nStep 1：调用 scan_pipeline_health（L0 快速检查）\n- 任何进程不在线 / Gateway 不可达 → 立即推送工程师，一句话描述问题（不用等后续步骤）\n- 一切正常 → 继续 Step 2\n\nStep 2：L1 质量巡检（若「上次质量扫描」不是今天）\n- 调用 evaluate_l1\n- 5条以上质量问题 → 立即推送工程师\n- 1-4条质量问题 → 追加到 HEARTBEAT.md「待汇总观察」节，格式：- [${now}] 具体描述\n- 无问题 → 不记录\n\nStep 3：L2~L4 进化巡检（若「上次L2~L4巡检」不是今天，与质量扫描同频）\n- 依次调用 evaluate_l2 / evaluate_l3 / evaluate_l4\n- L4 有模式达到内化阈值（🔴）→ 立即推送工程师\n- 有 ⚠️ 或 ❌ → 追加到「待汇总观察」节\n- 全部 ✅ → 不记录\n\nStep 4：日报判断\n- 若「上次日报发送」字段距今超过 20 小时，且「待汇总观察」节非空 → 发送日报给工程师（列出所有积累观察），更新「上次日报发送」为当前时间，清空「待汇总观察」节\n\nStep 5：系统改进点识别\n- 综合 Step 1~4 结果及 HEARTBEAT.md 历史，判断是否存在值得工程师在下次工作周期处理的改进点（非紧急告警、非日报级问题，而是架构缺口 / 持续积累的模式性问题 / 优化机会）\n- 发现改进点 → 调用 log_improvement_task（priority: high=架构缺口, medium=影响体验, low=优化机会）\n- 无改进点 → 跳过\n\nStep 6：完成\n- 已推送或发日报或记录改进任务 → 按 L0~L4 分层格式简述操作\n- 什么都没做 → 回复 HEARTBEAT_OK`;
+    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n**三层监控协议（严格执行，禁止混层）**：\n\n【Layer 3 · 紧急故障探测】\n调用 scan_pipeline_health。\n- 任何进程不在线 / Gateway 不可达 → 立即调用 notify_engineer 推送，一句话说清楚问题，然后回复 HEARTBEAT_OK 结束。\n- 一切正常 → 不推送，继续 Layer 2 判断。\n\n【Layer 2 · 每日巡检日报】\n仅当「上次日报发送」距今超过 20 小时时才执行，否则跳过直接回复 HEARTBEAT_OK。\n执行时：\n1. 依次调用 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4\n2. 汇总为一条日报（按 L0~L4 分层），包含：各层状态、DPO 积累进度（审核待办）、待处理改进点\n3. 调用 notify_engineer 发送日报\n4. 更新「上次日报发送」时间\n\n【Layer 1 · 正常静默】\n以上两层均无需推送时 → 直接回复 HEARTBEAT_OK，不生成任何其他内容。\n\n**铁律：除 notify_engineer 推送和日报发送外，禁止生成面向工程师的文字内容。OK 就是 OK。**`;
 
     // 使用独立消息历史，不污染业主会话
     const messages = [{ role: 'user', content: heartbeatPrompt }];
@@ -5847,7 +5847,7 @@ app.listen(PORT, () => {
       runMainMonitorLoop();
       setInterval(runMainMonitorLoop, MAIN_MONITOR_INTERVAL_MS);
     }, 10 * 60 * 1000);
-    logger.info('Main 监控循环已注册', { intervalMinutes: MAIN_MONITOR_INTERVAL_MS / 60000 });
+    logger.info('Main 监控循环已注册', { intervalHours: MAIN_MONITOR_INTERVAL_MS / 3600000, 协议: 'Layer3紧急实时/Layer2每日日报/Layer1静默' });
   }
 
   // 启动 Andy HEARTBEAT 巡检循环（L2 进化循环，启动后延迟 15 分钟首次触发，之后每 24 小时）
