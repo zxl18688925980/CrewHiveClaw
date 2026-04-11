@@ -3410,8 +3410,9 @@ function detectDpoCandidates(params: {
   toolUseCounts: Record<string, number>;
   sessionKey: string | undefined;
   userId: string;
+  isCloud?: boolean;                  // 本次响应是否由云端模型处理（路由决策结果）
 }): boolean {
-  const { agentId, prompt, response, sendToolContents, commitToolResults, toolUseCounts, sessionKey, userId } = params;
+  const { agentId, prompt, response, sendToolContents, commitToolResults, toolUseCounts, sessionKey, userId, isCloud } = params;
   const patterns = getDpoPatterns(agentId);
 
   const commitTools  = new Set(patterns.commitment_tools);
@@ -3486,12 +3487,12 @@ function detectDpoCandidates(params: {
     t: nowIso,
     sessionKey,
     userId,
+    source: isCloud ? "cloud" : "local",  // 标记响应来源，云端/本地都是本地模型的负向训练语料
     reasons,
     prompt: prompt.slice(0, 300),
     bad_response: allOutputText.slice(0, 500),
     toolsCalled: toolUseCounts,
-    // good_response 留空，由系统工程师人工填写后才进训练集
-    good_response: "",
+    good_response: "",   // 由 generate_dpo_good_responses 批量生成后填入
     confirmed: false,
   });
 
@@ -3521,8 +3522,9 @@ function detectUserCorrection(params: {
   messages: Array<{ role?: string; content?: unknown }>;
   sessionKey: string | undefined;
   userId: string;
+  isCloud?: boolean;                  // 被纠正的回复是否由云端处理
 }): void {
-  const { agentId, currentUserMsg, messages, sessionKey, userId } = params;
+  const { agentId, currentUserMsg, messages, sessionKey, userId, isCloud } = params;
   const correctionSignals = getDpoPatterns(agentId).user_correction_signals;
 
   const correctionHit = correctionSignals.find(s => currentUserMsg.includes(s));
@@ -3567,12 +3569,13 @@ function detectUserCorrection(params: {
     t:                nowCST(),
     sessionKey,
     userId,
+    source:           isCloud ? "cloud" : "local",
     type:             "user_correction",
     reasons:          [`user_correction: "${correctionHit}"`],
     prompt:           currentUserMsg.slice(0, 300),
     bad_response:     prevAssistant.slice(0, 600),
     correction_signal: currentUserMsg.slice(0, 300),
-    good_response:    "",   // 系统工程师人工填写后才进训练集
+    good_response:    "",   // 由 generate_dpo_good_responses 批量生成后填入
     confirmed:        false,
   });
 }
@@ -5780,6 +5783,7 @@ const crewclawRoutingPlugin = {
         toolUseCounts,
         sessionKey: ctx.sessionKey,
         userId,
+        isCloud: isCloudResponse,
       });
 
       // 用户纠正信号检测：用户说"你没做/你骗我/这是幻觉"等 → 捕获上一条 bad_response 写入 DPO 候选
@@ -5790,6 +5794,7 @@ const crewclawRoutingPlugin = {
           messages: msgs,
           sessionKey: ctx.sessionKey,
           userId,
+          isCloud: isCloudResponse,
         });
       }
 
