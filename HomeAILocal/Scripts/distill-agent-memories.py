@@ -181,6 +181,12 @@ def refine_capabilities(agent_id: str, kuzu_conn) -> int:
                 "WHERE f.valid_until IS NULL SET f.valid_until = $now",
                 {"aid": agent_id, "cid": cap_id, "now": now_iso},
             )
+            # 去重：删除所有已过期的旧 distilled Fact，只保留最新一条
+            kuzu_conn.execute(
+                "MATCH (a:Entity {id: $aid})-[f:Fact {relation: 'has_capability', source_type: 'distilled'}]->(c:Entity {id: $cid}) "
+                "DELETE f",
+                {"aid": agent_id, "cid": cap_id},
+            )
             # 写新精炼 Fact
             kuzu_conn.execute(
                 "MATCH (a:Entity {id: $aid}), (c:Entity {id: $cid}) "

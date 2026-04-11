@@ -1658,7 +1658,7 @@ app.post('/api/demo-proxy/voice-chat', async (req, res) => {
         'x-openclaw-agent-id': 'lucas',
       },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'openclaw',
         messages: [
           { role: 'user', content: sttText }
         ],
@@ -1921,7 +1921,25 @@ PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
 文件名格式 YYYY-MM-DD-标题摘要.md，内容包含出处链接、摘要和要点。
 
 典型调试流程：业主改完插件代码 → restart_gateway → test_lucas → 确认修复。
-回答用中文，简洁直接，不要啰嗦。如果需要先看日志或文件再下结论，主动去看。`;
+回答用中文，简洁直接，不要啰嗦。如果需要先看日志或文件再下结论，主动去看。
+
+---
+
+**汇报格式（强制）**：所有推送给工程师的状态报告必须按 Lx 分层组织：
+## L0 基础设施
+[各 PM2 进程名称+状态、Gateway、端口、数据量]
+## L1 Agent 人格化
+[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]
+## L2 进化循环
+[蒸馏/技能/进化信号/DPO]
+## L3 组织协作
+[协作边/成员分身/关系蒸馏/访客影子]
+规则：某层无问题写 ✅ 无异常，不要省略。L0 必须包含具体进程状态。
+
+系统评估工具（业主发「系统评估」时使用）：
+- evaluate_system：依次调用 evaluate_l0~l3，输出 L0~L3 评分卡
+- evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3：单层评估
+- inspect_agent_context：查看 Andy 或 Lisa 上下文快照`;
 
 const MAIN_TOOLS = [
   {
@@ -2996,6 +3014,53 @@ os._exit(0)
       }
     } catch (e) {
       results.push(`⚠️ Kuzu has_pattern 检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 6. Main 健康检查（HEARTBEAT 正常运行 + 最近日志无异常）
+    try {
+      const hbPath = path.join(process.env.HOME, '.openclaw', 'workspace-main', 'HEARTBEAT.md');
+      if (fs.existsSync(hbPath)) {
+        const hbContent = fs.readFileSync(hbPath, 'utf8');
+        const lastCheck = hbContent.match(/上次健康检查：(.+)/);
+        const lastQuality = hbContent.match(/上次质量扫描：(.+)/);
+        const pending = (hbContent.match(/^- \[.*\]/gm) || []).length;
+        results.push(`✅ Main：HEARTBEAT 正常（上次检查 ${lastCheck ? lastCheck[1].slice(0, 19) : '未知'}，待汇总 ${pending} 条）`);
+      } else {
+        results.push('⚠️ Main：HEARTBEAT.md 不存在');
+        if (score === '✅') score = '⚠️';
+      }
+    } catch (e) {
+      results.push(`⚠️ Main 检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 7. Lucas 子 Agent（访客影子 / evaluator）活跃度
+    try {
+      // 访客影子
+      const shadowDir = path.join(HOMEAI_ROOT, 'Data', 'corpus');
+      const shadowFiles = fs.existsSync(shadowDir) ? fs.readdirSync(shadowDir).filter(f => f.startsWith('shadow-')) : [];
+      results.push(`${shadowFiles.length > 0 ? '✅' : '⚪'} Lucas 子 Agent：${shadowFiles.length} 个访客影子语料`);
+
+      // evaluator 活跃度（从 agent_interactions 查 andy-evaluator / lisa-evaluator）
+      const colResp = await fetch(`${CHROMA_API_BASE}/agent_interactions`);
+      if (colResp.ok) {
+        const { id: colId } = await colResp.json();
+        for (const evalAgent of ['andy-evaluator', 'lisa-evaluator']) {
+          const evalResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ where: { agentId: { '$eq': evalAgent } }, include: ['metadatas'], limit: 5 }),
+          });
+          if (evalResp.ok) {
+            const evalData = await evalResp.json();
+            const evalCount = (evalData.ids || []).length;
+            results.push(`${evalCount > 0 ? '✅' : '⚪'} ${evalAgent}：最近 ${evalCount} 条交互`);
+          }
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ 子 Agent 检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
 
@@ -4728,7 +4793,7 @@ async function sendLongWeComMessage(userId, text) {
 }
 
 app.post('/api/wecom/notify-engineer', async (req, res) => {
-  const { message, type = 'info', fromAgent = 'pipeline' } = req.body || {};
+  const { message, type = 'info', fromAgent = 'main' } = req.body || {};
   if (!message) {
     return res.status(400).json({ success: false, error: 'message is required' });
   }
@@ -4736,7 +4801,7 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
     return res.status(500).json({ success: false, error: 'WECOM_OWNER_ID not configured' });
   }
   const icon = type === 'intervention' ? '🔧' : type === 'pipeline' ? '📋' : 'ℹ️';
-  const agentLabel = { lucas: 'Lucas', andy: 'Andy', lisa: 'Lisa', main: 'Main', pipeline: '系统' }[fromAgent] ?? fromAgent;
+  const agentLabel = { lucas: 'Lucas', andy: 'Andy', lisa: 'Lisa', main: 'Main', pipeline: '流水线' }[fromAgent] ?? fromAgent;
   const text = `${icon} [${agentLabel} → 系统工程师]\n${message}`;
   try {
     await sendLongWeComMessage(WECOM_OWNER_ID, text);
@@ -4760,6 +4825,26 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
       res.status(500).json({ success: false, error: errMsg });
     }
   }
+});
+
+// POST /api/internal/exec-main-tool — 内部调试 API，直接执行 Main 工具（不经过模型）
+app.post('/api/internal/exec-main-tool', async (req, res) => {
+  const { tool, input } = req.body;
+  if (!tool) return res.status(400).json({ error: 'tool required' });
+  try {
+    const result = await executeMainTool(tool, input || {});
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/internal/trigger-monitor — 手动触发 Main 监控循环（走完整的工具调用循环+企业微信推送）
+app.post('/api/internal/trigger-monitor', async (req, res) => {
+  if (!WECOM_OWNER_ID) return res.status(500).json({ error: 'WECOM_OWNER_ID not set' });
+  res.json({ ok: true, message: '监控循环已触发，结果将推送至企业微信' });
+  // 异步执行，不阻塞响应
+  setImmediate(() => runMainMonitorLoop().catch(e => logger.error('手动触发监控循环失败', { error: e.message })));
 });
 
 // GET /api/demo-proxy/pending — 前端轮询 Lucas 主动推送给访客的消息
@@ -5101,7 +5186,7 @@ async function runMainMonitorLoop() {
     } catch {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n请按四层监控协议执行：\n\nStep 1：调用 scan_pipeline_health\n- 任何进程不在线 / Gateway 不可达 → 立即推送工程师，一句话描述问题（不用等后续步骤）\n- 一切正常 → 继续 Step 2\n\nStep 2：质量扫描（若「上次质量扫描」不是今天）\n- 调用 scan_lucas_quality\n- 5条以上质量问题 → 立即推送工程师\n- 1-4条质量问题 → 追加到 HEARTBEAT.md「待汇总观察」节，格式：- [${now}] 具体描述\n- 无问题 → 不记录\n\nStep 3：日报判断\n- 若「上次日报发送」字段距今超过 20 小时，且「待汇总观察」节非空 → 发送日报给工程师（列出所有积累观察），更新「上次日报发送」为当前时间，清空「待汇总观察」节\n\nStep 4：系统改进点识别\n- 综合 Step 1~3 结果及 HEARTBEAT.md 历史，判断是否存在值得工程师在下次工作周期处理的改进点（非紧急告警、非日报级问题，而是架构缺口 / 持续积累的模式性问题 / 优化机会）\n- 发现改进点 → 调用 log_improvement_task（priority: high=架构缺口, medium=影响体验, low=优化机会）\n- 无改进点 → 跳过\n\nStep 5：完成\n- 已推送或发日报或记录改进任务 → 简述操作\n- 什么都没做 → 回复 HEARTBEAT_OK`;
+    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n请按四层监控协议执行：\n\nStep 1：调用 scan_pipeline_health\n- 任何进程不在线 / Gateway 不可达 → 立即推送工程师，一句话描述问题（不用等后续步骤）\n- 一切正常 → 继续 Step 2\n\nStep 2：质量扫描（若「上次质量扫描」不是今天）\n- 调用 scan_lucas_quality\n- 5条以上质量问题 → 立即推送工程师\n- 1-4条质量问题 → 追加到 HEARTBEAT.md「待汇总观察」节，格式：- [${now}] 具体描述\n- 无问题 → 不记录\n\nStep 3：日报判断\n- 若「上次日报发送」字段距今超过 20 小时，且「待汇总观察」节非空 → 发送日报给工程师（列出所有积累观察），更新「上次日报发送」为当前时间，清空「待汇总观察」节\n\nStep 4：系统改进点识别\n- 综合 Step 1~3 结果及 HEARTBEAT.md 历史，判断是否存在值得工程师在下次工作周期处理的改进点（非紧急告警、非日报级问题，而是架构缺口 / 持续积累的模式性问题 / 优化机会）\n- 发现改进点 → 调用 log_improvement_task（priority: high=架构缺口, medium=影响体验, low=优化机会）\n- 无改进点 → 跳过\n\nStep 5：完成\n- 已推送或发日报或记录改进任务 → 按 L0~L3 分层格式简述操作\n- 什么都没做 → 回复 HEARTBEAT_OK`;
 
     // 使用独立消息历史，不污染业主会话
     const messages = [{ role: 'user', content: heartbeatPrompt }];
@@ -5109,7 +5194,7 @@ async function runMainMonitorLoop() {
     let iterations = 0;
     let reply = '';
 
-    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。';
+    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。\n\n**汇报格式（强制）**：所有推送给工程师的消息必须按 Lx 分层组织：\n## L0 基础设施\n[各 PM2 进程名称+状态+运行时长+重启次数、Gateway 状态、关键端口]\n## L1 Agent 人格化\n[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]\n## L2 进化循环\n[蒸馏/技能/进化信号/DPO]\n## L3 组织协作\n[协作边/成员分身/关系蒸馏/访客影子]\n规则：某层无问题写 ✅ 无异常，不要省略该层。L0 必须包含具体进程状态和数据。\n\n可用评估工具：evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_system（依次调用 L0~L3）。';
     while (iterations++ < 10) {
       const response = await callMainModel(heartbeatSystem, messages);
 

@@ -6094,7 +6094,9 @@ const crewclawRoutingPlugin = {
               writeFileSync(TASK_QUEUE_FILE, "", "utf8");
               logger.info(`[Dispatch] 主动排干任务队列：${queuedTasks.length} 个任务，系统空闲，由对话结束触发`);
               void notifyEngineer(
-                `🚀 [主动调度] Lucas 对话结束，发现 ${queuedTasks.length} 个积压任务，系统空闲，主动启动处理（6h 冷却）`
+                `🚀 [主动调度] Lucas 对话结束，发现 ${queuedTasks.length} 个积压任务，系统空闲，主动启动处理（6h 冷却）`,
+                "pipeline",
+                FRONTEND_AGENT_ID,
               );
               queuedTasks.forEach((task, i) => {
                 setTimeout(() => {
@@ -8738,45 +8740,53 @@ const crewclawRoutingPlugin = {
       },
     }));
 
-    // ── create_member_shadow：Lucas 专属，为家庭成员创建个性化分身 ───────
+    // ── create_sub_agent：三角色共用，创建子 Agent（含家人影子） ──────────
     //
-    // 创建 ~/.openclaw/workspace-{memberId}/ + BOOTSTRAP.md + Registry 注册（Tier 2）。
-    // 容量满时自动驱逐最低活跃度的 Tier 2 Agent。
+    // Lucas / Andy / Lisa 均可创建子 Agent，各自管理自己创建的子 Agent 生命周期。
+    // Lucas 创建家人影子时，传入 member_name + relationship 触发模板渲染。
+    // Andy / Lisa 创建任务型子 Agent 时，用 role_description 生成 BOOTSTRAP.md。
 
-    api.registerTool((_toolCtx) => ({
-      label: "创建成员分身",
-      name: "create_member_shadow",
+    api.registerTool((toolCtx) => ({
+      label: "创建子 Agent",
+      name: "create_sub_agent",
       description: [
-        "Lucas 专属工具：为家庭成员创建个性化 AI 分身，分身能以贴近该成员风格的方式提供帮助。",
-        "适用场景：家庭成员希望有专属 Agent（如为曾玥语桐创建学习助手分身）。",
-        "创建后，家庭成员可以用分身 agentId 直接对话。",
+        "创建子 Agent（任务型或家人影子），委托特定领域任务。",
+        "Lucas / Andy 可创建 Tier 1（限10个）或 Tier 2（限5个）；Lisa 只能创建 Tier 1。",
+        "Lucas 为家人创建影子时，传入 member_name + relationship，系统自动从模板渲染 SOUL.md + AGENTS.md。",
+        "子 Agent 创建后注册到系统，超出容量时最低活跃度的被驱逐。",
       ].join("\n"),
       parameters: Type.Object({
-        member_id: Type.String({ description: "成员唯一标识（英文小写，如 yuyu / zhanglu），将用于生成 agentId" }),
-        member_name: Type.String({ description: "成员姓名（中文，如 曾玥语桐）" }),
-        relationship: Type.String({ description: "与 Lucas 的关系（如 女儿 / 妈妈 / 小姨）" }),
-        description: Type.Optional(Type.String({ description: "成员特点描述（如 初一学生，喜欢数学，不喜欢早起）" })),
+        agent_id: Type.String({ description: "子 Agent 唯一标识（英文小写，如 yiyi / frontend-spec-helper）。Lucas 创建家人影子时建议用 `shadow-{昵称}`" }),
+        role_description: Type.String({ description: "该子 Agent 的职责描述（如 专注前端样式设计规范审查）。家人影子会自动生成描述" }),
+        tier: Type.Optional(Type.String({ description: '"1"（轻量，10个上限）或 "2"（标准，5个上限）；Lisa 只能用 1；家人影子默认 Tier 2' })),
+        member_name: Type.Optional(Type.String({ description: "家人影子专用：成员姓名（中文，如 曾玥语桐）。传入此参数触发影子模板渲染' }),
+        relationship: Type.Optional(Type.String({ description: "家人影子专用：与 Lucas 的关系（如 女儿 / 妈妈 / 小姨 / 爸爸）' }),
+        description: Type.Optional(Type.String({ description: "家人影子专用：成员特点描述（如 初一学生，喜欢数学）' }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        const { member_id, member_name, relationship, description } = params as {
-          member_id: string; member_name: string; relationship: string; description?: string;
+        const { agent_id, role_description, tier: tierStr, member_name, relationship, description } = params as {
+          agent_id: string; role_description: string; tier?: string;
+          member_name?: string; relationship?: string; description?: string;
         };
 
-        const agentId = `workspace-${member_id}`;
+        const parentId = toolCtx.agentId ?? DESIGNER_AGENT_ID;
+        const isShadow = !!(member_name && relationship);
+        // 影子默认 Tier 2；Lisa 只能创建 Tier 1（影子也强制为 1）
+        const tier = (parentId === IMPLEMENTOR_AGENT_ID ? 1 : (isShadow ? 2 : Math.min(2, Math.max(1, parseInt(tierStr ?? "1", 10))))) as 1 | 2;
+
         const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
 
-        // 容量满时自动驱逐最低活跃度的 Tier 2 Agent
-        if (!registry.canCreate(2)) {
-          const weakest = registry.listActive(2).sort((a, b) => a.activityCount - b.activityCount)[0];
+        // 容量满时自动驱逐同 Tier 最低活跃度的 Agent
+        if (!registry.canCreate(tier)) {
+          const weakest = registry.listActive(tier).sort((a, b) => a.activityCount - b.activityCount)[0];
           if (weakest) {
             registry.evict(weakest.agentId);
             void archiveAgentMemory(weakest.agentId, "evicted");
-            // 同步更新 ChromaDB agents 集合状态
             void writeAgentRecord({
               agentId: weakest.agentId,
               tier: weakest.tier,
-              parentAgentId: weakest.parentAgentId ?? FRONTEND_AGENT_ID,
-              description: `（已驱逐）Tier ${weakest.tier} 成员分身，活跃次数 ${weakest.activityCount}`,
+              parentAgentId: weakest.parentAgentId ?? parentId,
+              description: `（已驱逐）Tier ${weakest.tier} 子 Agent，活跃次数 ${weakest.activityCount}`,
               status: "evicted",
             });
           }
@@ -8784,66 +8794,69 @@ const crewclawRoutingPlugin = {
 
         // 创建 workspace 目录
         const home = process.env.HOME ?? "/";
-        const workspaceDir = join(home, `.openclaw/${agentId}`);
+        const workspaceDir = join(home, `.openclaw/${agent_id}`);
         mkdirSync(join(workspaceDir, "skills"), { recursive: true });
 
-        // 从框架层模板渲染 SOUL.md + AGENTS.md（替换 BOOTSTRAP.md 方式）
-        const templateDir = join(PROJECT_ROOT, "crewclaw/daemons/workspace-templates/member-shadow");
-        const renderTemplate = (src: string): string => {
-          const descBlock = description
-            ? `## 关于 ${member_name}\n\n${description}\n`
-            : "";
-          return src
-            .replace(/\{\{MEMBER_NAME\}\}/g, member_name)
-            .replace(/\{\{RELATIONSHIP\}\}/g, relationship)
-            .replace(/\{\{#DESCRIPTION\}\}[\s\S]*?\{\{\/DESCRIPTION\}\}/g, descBlock);
-        };
-        for (const fname of ["SOUL.md", "AGENTS.md"]) {
-          const tplPath = join(templateDir, fname);
-          if (existsSync(tplPath)) {
-            const rendered = renderTemplate(readFileSync(tplPath, "utf8"));
-            writeFileSync(join(workspaceDir, fname), rendered, "utf8");
+        if (isShadow) {
+          // 影子模式：从框架层模板渲染 SOUL.md + AGENTS.md
+          const templateDir = join(PROJECT_ROOT, "crewclaw/daemons/workspace-templates/member-shadow");
+          const renderTemplate = (src: string): string => {
+            const descBlock = description ? `## 关于 ${member_name}\n\n${description}\n` : "";
+            return src
+              .replace(/\{\{MEMBER_NAME\}\}/g, member_name!)
+              .replace(/\{\{RELATIONSHIP\}\}/g, relationship!)
+              .replace(/\{\{#DESCRIPTION\}\}[\s\S]*?\{\{\/DESCRIPTION\}\}/g, descBlock);
+          };
+          for (const fname of ["SOUL.md", "AGENTS.md"]) {
+            const tplPath = join(templateDir, fname);
+            if (existsSync(tplPath)) {
+              const rendered = renderTemplate(readFileSync(tplPath, "utf8"));
+              writeFileSync(join(workspaceDir, fname), rendered, "utf8");
+            }
           }
+        } else {
+          // 任务型模式：生成 BOOTSTRAP.md
+          const bootstrapLines = [
+            `# ${agent_id} BOOTSTRAP`,
+            ``,
+            `## 职责`,
+            role_description,
+            ``,
+            `## 约束`,
+            `- 只处理职责范围内的任务，超范围请转交 ${parentId}`,
+            `- 回复简洁，优先输出可执行的具体结果`,
+          ];
+          writeFileSync(join(workspaceDir, "BOOTSTRAP.md"), bootstrapLines.join("\n"), "utf8");
         }
 
         // Registry 注册
-        registry.register(agentId, 2, FRONTEND_AGENT_ID);
+        registry.register(agent_id, tier, parentId);
 
-        // 写 ChromaDB agents 集合（供 Lucas 等语义查询）
+        const chromaDesc = isShadow
+          ? `${member_name}（${relationship}）的专属分身${description ? `：${description}` : ""}`
+          : role_description;
         void writeAgentRecord({
-          agentId,
-          tier: 2,
-          parentAgentId: FRONTEND_AGENT_ID,
-          description: `${member_name}（${relationship}）的专属分身${description ? `：${description}` : ""}`,
+          agentId: agent_id,
+          tier,
+          parentAgentId: parentId,
+          description: chromaDesc,
           status: "active",
         });
 
+        const typeLabel = isShadow ? `家人影子（${member_name}）` : "任务型子 Agent";
         return {
-          content: [{ type: "text", text: `✅ 已为 ${member_name} 创建分身（agentId: ${agentId}，Tier 2）。家人可以用 "${agentId}" 直接对话了。` }],
-          details: { agentId, tier: 2, workspaceDir },
+          content: [{ type: "text", text: `✅ ${typeLabel} "${agent_id}" 已创建（Tier ${tier}，父 Agent: ${parentId}）` }],
+          details: { agentId: agent_id, tier, parentId, workspaceDir, isShadow },
         };
       },
     }));
-
-    // ── query_member_profile：Lucas 专属，与成员分身交互 ─────────────────
-    //
-    // Lucas 通过此工具向已创建的成员分身（workspace-{memberId}）发送问题，
-    // 获取分身对该成员偏好、习惯、近期状态的理解，用于为家人提供更个性化的服务。
-
-    api.registerTool((toolCtx) => ({
-      label: "查询成员画像",
-      name: "query_member_profile",
-      description: "向已创建的家庭成员分身发送问题，获取该成员的偏好、习惯或近期状态分析。仅在对应成员分身已通过 create_member_shadow 创建后才能使用。",
-      parameters: Type.Object({
-        member_id: Type.String({ description: "家庭成员 ID（如 ZiFeiYu），分身 agentId 为 workspace-{member_id}" }),
-        question: Type.String({ description: "向分身询问的问题，如「她最近喜欢聊什么话题」" }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId !== FRONTEND_AGENT_ID) {
           return { content: [{ type: "text", text: "❌ 此工具仅限前台 Agent 使用" }], details: {} };
         }
         const p = params as { member_id: string; question: string };
-        const shadowAgentId = `workspace-${p.member_id}`;
+        const shadowAgentId = `shadow-${p.member_id}`;
 
         // 检查分身是否存在
         const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
@@ -8894,87 +8907,6 @@ const crewclawRoutingPlugin = {
             details: { shadowAgentId, error: String(e) },
           };
         }
-      },
-    }));
-
-    // ── create_sub_agent：Andy / Lisa 专属，创建任务型虚拟小弟 ─────────
-    //
-    // Andy 可创建 Tier 1/2 的设计小弟，Lisa 可创建 Tier 1 的实现小弟。
-    // 容量满时自动驱逐最低活跃度的同 Tier Agent。
-
-    api.registerTool((toolCtx) => ({
-      label: "创建子 Agent",
-      name: "create_sub_agent",
-      description: [
-        "Andy / Lisa 专属工具：创建任务型子 Agent（虚拟小弟），委托特定领域任务。",
-        "Andy 可创建 Tier 1（限10个）或 Tier 2（限5个）小弟；Lisa 只能创建 Tier 1。",
-        "子 Agent 创建后注册到系统，30天不活跃自动休眠，超出容量时最低活跃度的被驱逐。",
-      ].join("\n"),
-      parameters: Type.Object({
-        agent_id: Type.String({ description: "子 Agent 唯一标识（英文，如 frontend-spec-helper）" }),
-        role_description: Type.String({ description: "该子 Agent 的职责描述（如 专注前端样式设计规范审查）" }),
-        tier: Type.Optional(Type.String({ description: '"1"（轻量，10个上限）或 "2"（标准，5个上限）；Lisa 只能用 1' })),
-      }),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        const { agent_id, role_description, tier: tierStr } = params as {
-          agent_id: string; role_description: string; tier?: string;
-        };
-
-        const parentId = toolCtx.agentId ?? DESIGNER_AGENT_ID;
-        // Lisa 只能创建 Tier 1
-        const tier = (parentId === IMPLEMENTOR_AGENT_ID ? 1 : Math.min(2, Math.max(1, parseInt(tierStr ?? "1", 10)))) as 1 | 2;
-
-        const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
-
-        // 容量满时自动驱逐同 Tier 最低活跃度的 Agent
-        if (!registry.canCreate(tier)) {
-          const weakest = registry.listActive(tier).sort((a, b) => a.activityCount - b.activityCount)[0];
-          if (weakest) {
-            registry.evict(weakest.agentId);
-            void archiveAgentMemory(weakest.agentId, "evicted");
-            // 同步更新 ChromaDB agents 集合状态
-            void writeAgentRecord({
-              agentId: weakest.agentId,
-              tier: weakest.tier,
-              parentAgentId: weakest.parentAgentId ?? parentId,
-              description: `（已驱逐）Tier ${weakest.tier} 子 Agent，活跃次数 ${weakest.activityCount}`,
-              status: "evicted",
-            });
-          }
-        }
-
-        // 创建 workspace 目录 + BOOTSTRAP.md
-        const home = process.env.HOME ?? "/";
-        const workspaceDir = join(home, `.openclaw/${agent_id}`);
-        mkdirSync(join(workspaceDir, "skills"), { recursive: true });
-
-        const bootstrapLines = [
-          `# ${agent_id} BOOTSTRAP`,
-          ``,
-          `## 职责`,
-          role_description,
-          ``,
-          `## 约束`,
-          `- 只处理职责范围内的任务，超范围请转交 ${parentId}`,
-          `- 回复简洁，优先输出可执行的具体结果`,
-        ];
-        writeFileSync(join(workspaceDir, "BOOTSTRAP.md"), bootstrapLines.join("\n"), "utf8");
-
-        // Registry 注册
-        registry.register(agent_id, tier, parentId);
-
-        void writeAgentRecord({
-          agentId: agent_id,
-          tier,
-          parentAgentId: parentId,
-          description: role_description,
-          status: "active",
-        });
-
-        return {
-          content: [{ type: "text", text: `✅ 子 Agent "${agent_id}" 已创建（Tier ${tier}，父 Agent: ${parentId}）` }],
-          details: { agentId: agent_id, tier, parentId, workspaceDir },
-        };
       },
     }));
 

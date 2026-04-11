@@ -827,7 +827,7 @@ async function runLucasHeartbeat() {
   log('Lucas HEARTBEAT 开始（开发任务跟进）...');
   const messageContent = `HEARTBEAT\n\n${followupCtx}`;
   const body = JSON.stringify({
-    model: 'lucas',
+    model: 'openclaw/lucas',
     messages: [{ role: 'user', content: messageContent }],
     user: `heartbeat:lucas:${Date.now()}`,
     stream: false,

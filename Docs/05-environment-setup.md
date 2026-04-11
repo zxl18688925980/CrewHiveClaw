@@ -24,7 +24,7 @@ Claude Code 需要一个大模型 API。推荐方案：
 
 - **方案 A（推荐）**：申请 Anthropic API Key（直接用 Claude）
   - 访问 console.anthropic.com，注册并创建 API Key
-- **方案 B**：使用 GLM-4（国内替代，同一个 API 后续 Lisa 也用）
+- **方案 B**：使用 GLM-5.1（国内替代，同一个 API 后续 Main 也用）
   - 访问 open.bigmodel.cn，注册 → 创建 API Key
 
 ### 1.2 安装 Homebrew
@@ -55,9 +55,9 @@ npm install -g @anthropic-ai/claude-code
 # 方案 A：Anthropic API
 export ANTHROPIC_AUTH_TOKEN="你的Anthropic_API_Key"
 
-# 方案 B：GLM-4
+# 方案 B：GLM-5.1
 export ANTHROPIC_BASE_URL="https://open.bigmodel.cn/api/paas/v4"
-export ANTHROPIC_AUTH_TOKEN="你的GLM-4_API_Key"
+export ANTHROPIC_AUTH_TOKEN="你的GLM-5.1_API_Key"
 
 # 写入 shell 配置，避免每次重新设置
 echo 'export ANTHROPIC_AUTH_TOKEN="..."' >> ~/.zshrc
@@ -91,7 +91,7 @@ claude   # 启动 Claude Code，开始第二阶段
 1. 指导我注册以下云端账号并获取 API Key：
    - DeepSeek（Lucas 云端模型 deepseek-chat + Andy 云端模型 deepseek-reasoner/R1）：DEEPSEEK_API_KEY
    - MiniMax（Lisa 云端模型 MiniMax-M2.7）：MINIMAX_API_KEY
-   - ZAI/智谱（Main 云端模型 GLM-5 + lisa-evaluator GLM-5）：ZAI_API_KEY / ZHIPU_API_KEY
+   - ZAI/智谱（Main 云端模型 GLM-5.1）：ZAI_API_KEY / ZHIPU_API_KEY
    - Anthropic（Main 代理 Claude 驱动）：ANTHROPIC_API_KEY
    - 企业微信自建应用（消息入口）：
      WECOM_CORP_ID / WECOM_AGENT_ID / WECOM_SECRET / WECOM_TOKEN / WECOM_ENCODING_AES_KEY

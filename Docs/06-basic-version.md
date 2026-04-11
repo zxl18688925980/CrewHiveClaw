@@ -35,8 +35,8 @@ OpenClaw Gateway（端口 18789，launchd 管理）
        │   Layer 1 意图路由 → 对话 / 成员专属 Agent / 开发需求 / 工具 / 人工干预
        │   Layer 2 模型路由 → 本地置信度足够→ollama/homeai-assistant，不足→云端
        │     Lucas 云端：deepseek/deepseek-chat
-       │     Andy 云端：minimax/MiniMax-M2.7
-       │     Lisa 云端：deepseek/deepseek-reasoner
+       │     Andy 云端：deepseek/deepseek-reasoner（R1）
+       │     Lisa 云端：minimax/MiniMax-M2.7
        ├─ after_model_resolve：写路由事件 data/learning/route-events.jsonl
        ├─ before_prompt_build：context-sources 多源注入
        │     Lucas：ChromaDB conversations（语义召回）+ Kuzu person（家人档案）→ appendSystemContext
@@ -56,7 +56,7 @@ OpenClaw Gateway（端口 18789，launchd 管理）
 
 系统工程师（Main）
   ├─ 本地：Claude Code / openclaw CLI（直连 Gateway，对所有 Agent 可见）
-  └─ 远程：企业微信单聊 → Main（同一 Gateway，Claude MiniMax-M2.7 驱动）
+  └─ 远程：企业微信单聊 → Main（同一 Gateway，GLM-5.1 驱动）
 ```
 
 ### 关键路径说明
@@ -64,7 +64,7 @@ OpenClaw Gateway（端口 18789，launchd 管理）
 - **Lucas = OpenClaw embedded agent**：不是独立进程，由 Gateway 统一管理
 - **Andy / Lisa = Gateway proxy 代理**：通过 crewclaw-routing 插件的 `triggerDevelopmentPipeline` 调用，走 Gateway `/api/chat` 代理路由
 - **wecom-entrance 是唯一外部入口**：所有企业微信消息都经 wecom-entrance → Gateway → Lucas
-- **PM2 管三个进程**：wecom-entrance（3003）+ cloudflared-tunnel（Cloudflare 隧道）+ gateway-watchdog（三重保活：Gateway LLM / Ollama embedding / cloudflared tunnel，每小时一轮）
+- **PM2 管三个进程**：wecom-entrance（3003）+ cloudflared-tunnel（Cloudflare 隧道）+ gateway-watchdog（三重保活：Gateway LLM / ChromaDB / cloudflared tunnel，每 5 分钟一轮）
 
 ---
 
