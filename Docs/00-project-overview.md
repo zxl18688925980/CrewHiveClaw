@@ -1271,7 +1271,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `scan_lucas_quality`   | 扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空/过短回复（已被 evaluate_l1 取代，保留作备用工具）|
 | `evaluate_l0`          | 基础设施健康：进程存活状态 + 软硬件性能指标（磁盘空间/内存占用/模型推理延迟/ChromaDB·Kuzu 响应时间）+ 定时任务执行健康 + 数据层健康（Kuzu Fact 总数/ChromaDB 对话量/家人档案新鲜度） |
 | `evaluate_l1`          | 行为质量评估（两大核心维度）：①记忆质量——上下文组装完整性 + 关键信息 recall 准确率（待评测方案落地后量化）②输出质量——幻觉率/格式合规/空回复 + 人格化程度（是否把握住做人的感觉）；附带 Andy/Lisa 活跃度 |
-| `evaluate_l2`          | 系统自进化评估（学术五维度）：①适应性（Skill 获取速率 / opencode 成功率趋势 / 蒸馏→结晶转化率）②保持性（新学习后旧任务表现）③泛化性（跨领域 Skill 复用率）④效率（每单位改善成本）⑤安全性（行为漂移 / 对齐度追踪）；核心原则：度量轨迹而非快照，关注改善率本身的改善 |
+| `evaluate_l2`          | 系统自进化评估（两个原始诉求）：①开发流水线成效——Andy 方案质量、Lisa 实现成功率/一次通过率、端到端交付家人满意度 ②自进化机制运转——蒸馏管道是否在产出、结晶是否在发生、同类错误是否在减少（看轨迹而非快照） |
 | `evaluate_l3`          | 组织协作状态：Kuzu 协作边（co_discusses / requests_from / supports / role_in_context）+ active_thread、ChromaDB shadow_interactions 演进环记录数、访客 Registry active/dormant/archived 统计、关系蒸馏日志上次运行时间 |
 | `evaluate_l4`          | 行为内化进度：按 pattern_type 分组统计 dpo-candidates.jsonl 积累量（⚪/🟡/🔴，距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势（判断 L2 临时干预是否有效收敛问题）、Lucas AGENTS.md 幻觉禁令条数（当前 L2 临时拦截状态）、本地模型就绪状态（Qwen2.5-Coder-32B-4bit 已可用，Gemma 4 为进化终态） |
 | `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`），业主发「系统评估」即触发 |
