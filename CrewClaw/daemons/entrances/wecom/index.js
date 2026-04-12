@@ -5857,7 +5857,11 @@ async function runMainMonitorLoop() {
 
     // 只在有异常时推送（非 HEARTBEAT_OK）
     if (reply && !reply.toUpperCase().includes('HEARTBEAT_OK')) {
-      const alertText = `📋 [Main → 系统工程师]\n${reply}`;
+      // 从回复中提取告警等级
+      let alertLevel = '🟡';
+      if (reply.includes('🔴') || reply.includes('❌')) alertLevel = '🔴';
+      else if (reply.includes('🟢') || (!reply.includes('⚠️') && !reply.includes('❌'))) alertLevel = '🟢';
+      const alertText = `[Main 监控报告] 告警等级：${alertLevel}\n${reply}`;
       // bot 协议不支持 userId，只走 HTTP API
       try {
         await sendWeComMessage(WECOM_OWNER_ID, alertText);
@@ -6016,7 +6020,7 @@ ${precomputedSkillCandidates}
 
         // 有主动行动时推送工程师通道（fire-and-forget，不阻塞时间戳更新）
         if (reply && !reply.toUpperCase().includes('HEARTBEAT_OK') && WECOM_OWNER_ID) {
-          sendLongWeComMessage(WECOM_OWNER_ID, `📋 [Andy → 系统工程师]\n[HEARTBEAT 巡检报告 · ${now}]\n\n${reply}`)
+          sendLongWeComMessage(WECOM_OWNER_ID, `[Andy HEARTBEAT 报告] 告警等级：${reply.includes('❌') || reply.includes('🔴') ? '🔴' : '🟡'}\n[${now}]\n\n${reply}`)
             .then(() => logger.info('Andy HEARTBEAT：巡检报告已推送工程师'))
             .catch(e => logger.warn('Andy HEARTBEAT：推送工程师失败', { error: e.message }));
         }
