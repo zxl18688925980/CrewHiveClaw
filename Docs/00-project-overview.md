@@ -1079,17 +1079,17 @@ Lucas 识别需求 → Andy 方案 → Lisa 实现
 
 流水线各层的验证责任：
 
-| 层    | 执行方   | 验证责任                     |
-| ---- | ----- | ------------------------ |
-| 需求确认 | Lucas | 模糊需求先澄清再触发；感知家人情绪/时间敏感度/可接受替代方案时通过 `trigger_development_pipeline` 的 `context` 字段传给 Andy，写入任务注册表（`lucasContext`）跟任务走 |
-| 高层设计 | Andy  | **Read-before-Edit**（修改现有文件时 spec 必须含 `code_evidence` 字段，`trigger_lisa_implementation` 基础设施层 symbol grep 验证，找不到 symbol → 阻断）；spec 自验（exec 逐项核查文件路径/函数名/npm包/validation_cmd）；方案可行性；`test_cases` 定义；**读取 `lucasContext`**，设计时优先满足家人真实偏好 |
-| 系统测试 | Lisa  | 四阶段测试（静态 → 启动 → 健康 → 功能），生成 `test-report.json`，最多 2 轮自我修复 |
-| 实现阻塞反馈 | Lisa → Andy | Lisa 2轮仍失败 → `report_implementation_issue`（含完整错误、已尝试修法、根因猜测）→ Andy 判断路径 |
-| opencode 结果通知 | 基础设施层 | `proc.on("close")` 自动：① 持久化结果到 `data/learning/opencode-results.jsonl`；② 持久化 session 到 `data/learning/opencode-sessions.json`；③ fire-and-forget 通知 Andy（含 Spec vs git diff **对抗性验证**对照表：✅ 符合预期 / ❌ spec 预期但未变更 / ⚠️ 实际有变但 spec 未提及）；④ 更新任务 `currentPhase: "completed"`；⑤ detached spawn `build-code-graph.py --incremental --paths CrewClaw/crewclaw-routing HomeAILocal/Scripts`（~39s，不阻塞主流程，保持 Kuzu CodeNode 图谱与最新代码同步）；彻底消除 opencode 结果黑洞 |
-| 设计验收 | Andy  | 基于 `test-report.json` + 对抗性验证对照表做设计意图校验（不重复 Lisa 已做的运行时验证）|
-| 交付简报 | Andy → Lucas | 验收通过后 Andy 以**家人语言**向 Lucas 发送简报：① 家人能感知的变化 ② 注意事项/限制 ③ 下次类似需求怎么说；若有 `lucasContext` 则在简报中呼应家人的原始诉求 |
-| 用户验收 | Lucas | 交付结果是否满足原始需求，以组织语气包装推给用户 |
-| 流水线阶段可见性 | 基础设施层 | 任务注册表 `currentPhase`：`andy_designing` → `lisa_implementing` → `completed`；`designNote` 存 Andy 方案摘要；`deliveryBrief` 存 Andy 验收后的家人语言简报；`lucasAcked` 记录 Lucas 是否已主动告知家人（false=待告知）。Lucas `before_prompt_build` 注入两块：`【当前进行中任务】`（含阶段标签 + 方案要点）和 `【待告知家人任务】`（completed + lucasAcked=false），Lucas 无需主动询问即可向家人解释进展，告知后调 `ack_task_delivered` 标记已告知 |
+| 层             | 执行方          | 验证责任                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 需求确认          | Lucas        | 模糊需求先澄清再触发；感知家人情绪/时间敏感度/可接受替代方案时通过 `trigger_development_pipeline` 的 `context` 字段传给 Andy，写入任务注册表（`lucasContext`）跟任务走                                                                                                                                                                                                                                                                                                                         |
+| 高层设计          | Andy         | **Read-before-Edit**（修改现有文件时 spec 必须含 `code_evidence` 字段，`trigger_lisa_implementation` 基础设施层 symbol grep 验证，找不到 symbol → 阻断）；spec 自验（exec 逐项核查文件路径/函数名/npm包/validation_cmd）；方案可行性；`test_cases` 定义；**读取 `lucasContext`**，设计时优先满足家人真实偏好                                                                                                                                                                                                       |
+| 系统测试          | Lisa         | 四阶段测试（静态 → 启动 → 健康 → 功能），生成 `test-report.json`，最多 2 轮自我修复                                                                                                                                                                                                                                                                                                                                                                                   |
+| 实现阻塞反馈        | Lisa → Andy  | Lisa 2轮仍失败 → `report_implementation_issue`（含完整错误、已尝试修法、根因猜测）→ Andy 判断路径                                                                                                                                                                                                                                                                                                                                                                     |
+| opencode 结果通知 | 基础设施层        | `proc.on("close")` 自动：① 持久化结果到 `data/learning/opencode-results.jsonl`；② 持久化 session 到 `data/learning/opencode-sessions.json`；③ fire-and-forget 通知 Andy（含 Spec vs git diff **对抗性验证**对照表：✅ 符合预期 / ❌ spec 预期但未变更 / ⚠️ 实际有变但 spec 未提及）；④ 更新任务 `currentPhase: "completed"`；⑤ detached spawn `build-code-graph.py --incremental --paths CrewClaw/crewclaw-routing HomeAILocal/Scripts`（~39s，不阻塞主流程，保持 Kuzu CodeNode 图谱与最新代码同步）；彻底消除 opencode 结果黑洞 |
+| 设计验收          | Andy         | 基于 `test-report.json` + 对抗性验证对照表做设计意图校验（不重复 Lisa 已做的运行时验证）                                                                                                                                                                                                                                                                                                                                                                                  |
+| 交付简报          | Andy → Lucas | 验收通过后 Andy 以**家人语言**向 Lucas 发送简报：① 家人能感知的变化 ② 注意事项/限制 ③ 下次类似需求怎么说；若有 `lucasContext` 则在简报中呼应家人的原始诉求                                                                                                                                                                                                                                                                                                                                          |
+| 用户验收          | Lucas        | 交付结果是否满足原始需求，以组织语气包装推给用户                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 流水线阶段可见性      | 基础设施层        | 任务注册表 `currentPhase`：`andy_designing` → `lisa_implementing` → `completed`；`designNote` 存 Andy 方案摘要；`deliveryBrief` 存 Andy 验收后的家人语言简报；`lucasAcked` 记录 Lucas 是否已主动告知家人（false=待告知）。Lucas `before_prompt_build` 注入两块：`【当前进行中任务】`（含阶段标签 + 方案要点）和 `【待告知家人任务】`（completed + lucasAcked=false），Lucas 无需主动询问即可向家人解释进展，告知后调 `ack_task_delivered` 标记已告知                                                                                                 |
 
 **spec `test_cases` 字段格式**（Andy 写，Lisa 据此生成 `test.js`）：
 
@@ -1349,6 +1349,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `list_files` | 列出 HomeAI 目录下某路径的文件列表，配合 read_file 导航大型代码库 |
 | `write_file` | 原子写入 workspace-andy/ 内的文件（tmp→rename 防脏文件）；持久化 spec 草稿、研究笔记，防止被 context 压缩冲掉 |
 | `notify_engineer` | 向系统工程师发信号：技术干预请求 / 流水线通报 |
+| `restart_service` | 重启 HomeAI 关键服务（gateway / chromadb / wecom-entrance / watchdog）；gateway 重启前自动编译检查；每次重启自动通知系统工程师 |
 
 **框架层进化机制（自动运行）**：
 - `agent_end` 写入 ChromaDB `decisions`，积累设计决策语料
@@ -1791,8 +1792,8 @@ CODE_CALLS（有向边）
 
 | 时间 | 任务 | 说明 |
 |------|------|------|
-| 凌晨 1 点 | Andy/Lisa 每日自我进化 | `distill-design-learnings.py` + `distill-impl-learnings.py` + `distill-learning-objectives.py`，三脚本依次 fire-and-forget |
-| 凌晨 2 点 | 记忆蒸馏 + Andy HEARTBEAT | `distill-memories.py`（串行完成后延迟 5min）→ `distill-agent-memories.py`；同时触发 Andy HEARTBEAT 自评 |
+| 凌晨 1 点 | Andy/Lisa 每日自我进化 | `distill-design-learnings.py` + `distill-impl-learnings.py` + `distill-learning-objectives.py` + `distill-knowledge-discussions.py`，四脚本依次 fire-and-forget |
+| 凌晨 2 点 | 记忆蒸馏 → Andy HEARTBEAT → Agent 蒸馏 | `distill-memories.py` 完成后触发 Andy HEARTBEAT（串行，避免 Kuzu 锁冲突），HEARTBEAT 完成后延迟 5min → `distill-agent-memories.py` |
 | 凌晨 3 点 | 团队洞察蒸馏 | `distill-team-observations.py`，Andy 视角分析家人行为模式 → Kuzu `andy→person` Fact |
 | 凌晨 4 点 | 协作关系蒸馏 | `distill-relationship-dynamics.py`，人与人协作边 + 演进环 |
 | 凌晨 5 点 | 代码图谱增量重建 | `build-code-graph.py --incremental --paths`，约 39 秒 |

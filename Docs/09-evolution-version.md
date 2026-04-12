@@ -7,10 +7,46 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v642
-> **最后更新**: 2026-04-11
+> **版本**: v644
+> **最后更新**: 2026-04-12
 
 ---
+
+## v644 · Andy 新增 restart_service 工具 + watchdog 小修复（2026-04-12）
+
+**干预类型**：架构变更
+
+**背景**：Andy 作为架构师需要能重启关键进程以应对系统故障，当前只能 notify_engineer 等人来修，无法自主掌控架构演进。
+
+**变更**：
+1. **`restart_service` 工具（Andy 专属）**：可重启 gateway / chromadb / wecom-entrance / watchdog 四个关键服务
+   - gateway 重启前自动执行插件编译检查（check-plugin.sh），编译失败拒绝重启
+   - 每次重启自动通过企业应用通道 notify_engineer，系统工程师知情但无需操作
+   - 工具注册在 `index.ts`，白名单校验 service 名称，非 Andy agentId 拒绝
+2. **watchdog Ollama 重启修正**：移除不存在的 plist bootstrap（Ollama 由 App 注册到 launchd，无 plist 文件，用 kickstart 即可）
+3. **watchdog 死代码清理**：删除未使用的 `ARCHIVE_KUZU_SCRIPT` 常量
+
+**代码变更文件**：`index.ts`（restart_service 工具注册）、`TOOLS.md`（Andy 工具表追加）、`gateway-watchdog.js`（Ollama 重启 + 清理）
+
+**设计判断**：Andy 有了执行能力，可以从「只能建议」升级为「能自行修复基础设施问题」，减少系统工程师干预频率。
+
+---
+
+## v643 · 蒸馏脚本路径修复 + _call_llm 异常安全 + Kuzu 锁冲突串行化（2026-04-12）
+
+**干预类型**：Bug 修复 + 可靠性增强
+
+**背景**：检查 2026-04-12 凌晨自动化任务执行情况，发现三个问题：distill-agent-memories 引用过时路径（04-08 重构后）、distill-impl-learnings SSL 连接失败直接崩溃、Andy HEARTBEAT 与 distill-memories 同时访问 Kuzu 导致锁冲突。
+
+**变更**：
+1. **distill-agent-memories 路径修复**：新增 `CREWCLAW_DIR` / `DOCS_DIR` 常量，修正 `render-knowledge.py`、`09-evolution-version.md`、`10-engineering-notes.md` 三处路径
+2. **watchdog 全部脚本路径修正**：9 个蒸馏脚本 + 代码图谱脚本从 `CrewHiveClaw/scripts/` 改为 `HomeAILocal/Scripts/`（__dirname 同目录），日志路径同步修正
+3. **7 个 distill-*.py `_call_llm` 异常安全**：裸 `requests.post()` 改为 `try/except RequestException` + 端点循环 fallback（SSL/连接异常时自动切换备用 API）
+4. **Andy HEARTBEAT 串行化**：从 2am 与 distill-memories 并行改为 distill-memories 完成后触发，执行时序变为 distill-memories → Andy HEARTBEAT → 5min → distill-agent-memories
+
+**代码变更文件**：`distill-agent-memories.py`、`distill-{impl,design,active-threads,learning-objectives,team-observations,memories,relationship-dynamics}.py`（7 个）、`gateway-watchdog.js`
+
+**设计判断**：蒸馏是 L2 进化的输入管道，管道可靠性直接影响系统自进化质量。SSL 错误重试 + 路径修正 + 锁冲突串行化 = 蒸馏流水线从「偶发失败」升级为「稳定运行」。
 
 ## v638 · 合并 create_member_shadow → create_sub_agent + 三角色文档同步（2026-04-11）
 
