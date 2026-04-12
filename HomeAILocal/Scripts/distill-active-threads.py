@@ -38,7 +38,7 @@ COOLDOWN_SECONDS    = 6 * 3600   # 同一用户 6h 冷却
 # ChromaDB userId（小写）→ Kuzu Entity ID
 CHROMA_TO_KUZU_ID = {
     "zengxiaolong":         "ZengXiaoLong",
-    "xiamogqiufengliang":   "XiaMoQiuFengLiang",
+    "xiamoqiufengliang":   "XiaMoQiuFengLiang",
     "zifeiyu":              "ZiFeiYu",
     "zengyueyutong":        "ZengYueYuTong",
 }

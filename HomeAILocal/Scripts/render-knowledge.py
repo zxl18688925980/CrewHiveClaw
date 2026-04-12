@@ -317,7 +317,7 @@ def _inject_key(user_id: str) -> str:
     """userId → inject 文件名 key（小写，兼容旧文件命名约定）"""
     mapping = {
         "ZengXiaoLong":     "zengxiaolong",
-        "XiaMoQiuFengLiang": "xiamoqufengliang",
+        "XiaMoQiuFengLiang": "xiamoqiufengliang",
         "ZiFeiYu":          "zifeitu",   # 历史文件名 zifeitu
         "ZengYueYuTong":    "zengyueyutong",
     }

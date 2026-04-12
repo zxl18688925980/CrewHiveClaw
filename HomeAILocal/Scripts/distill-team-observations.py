@@ -39,7 +39,7 @@ OBS_VALID_DAYS   = 30    # team_observation 有效期（30 天后过期，不再
 # ChromaDB userId（小写）→ Kuzu Entity ID
 CHROMA_TO_KUZU_ID = {
     "zengxiaolong":         "ZengXiaoLong",
-    "xiamogqiufengliang":   "XiaMoQiuFengLiang",
+    "xiamoqiufengliang":   "XiaMoQiuFengLiang",
     "zifeiyu":              "ZiFeiYu",
     "zengyueyutong":        "ZengYueYuTong",
 }

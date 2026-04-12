@@ -50,7 +50,7 @@ MEMBER_NAMES = {
     "ZengXiaoLong":       "爸爸曾小龙（系统工程师）",
     "zengxiaolong":       "爸爸曾小龙（系统工程师）",
     "XiaMoQiuFengLiang":  "妈妈张璐",
-    "xiamogqiufengliang": "妈妈张璐",
+    "xiamoqiufengliang": "妈妈张璐",
     "ZiFeiYu":            "小姨肖山",
     "zifeiyu":            "小姨肖山",
 }
@@ -58,7 +58,7 @@ MEMBER_NAMES = {
 # ChromaDB userId（小写）→ Kuzu Entity ID（大驼峰，与 init-family-relations.py 保持一致）
 CHROMA_TO_KUZU_ID = {
     "zengxiaolong":       "ZengXiaoLong",
-    "xiamogqiufengliang": "XiaMoQiuFengLiang",
+    "xiamoqiufengliang": "XiaMoQiuFengLiang",
     "zifeiyu":            "ZiFeiYu",
     "zengyueyutong":      "ZengYueYuTong",
 }
@@ -851,9 +851,32 @@ def call_llm_distill(member_label: str, conversations: list[str],
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        # fallback：取第一个 {...} 块
-        m = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        parsed = json.loads(m.group()) if m else {}
+        # 修复常见 LLM JSON 错误：尾逗号 + 缺逗号
+        repaired = re.sub(r',\s*([}\]])', r'\1', cleaned)          # 尾逗号
+        repaired = re.sub(r'}\s*\{', '},{', repaired)               # 对象间缺逗号
+        repaired = re.sub(r'"\s*\n\s*"', '",\n"', repaired)         # 字符串间缺逗号
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            # 最后手段：正则提取 facts 数组中的每个 {...} 块
+            facts_match = re.search(r'"facts"\s*:\s*\[', repaired)
+            if facts_match:
+                arr_start = facts_match.end()
+                # 逐个提取 {} 块
+                depth, i, items = 0, arr_start, []
+                while i < len(repaired):
+                    if repaired[i] == '{':
+                        if depth == 0: start = i
+                        depth += 1
+                    elif repaired[i] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            try: items.append(json.loads(repaired[start:i+1]))
+                            except: pass
+                    i += 1
+                parsed = {"facts": items, "summary": raw[:200]}
+            else:
+                parsed = {}
 
     raw_facts   = parsed.get("facts", [])
     summary     = parsed.get("summary", raw)  # summary 缺失时用原始输出
@@ -1231,7 +1254,7 @@ def main():
         if updated_users:
             print(f"\n── 触发知识渲染管道（父进程退出后运行）──")
             import subprocess
-            render_script = HOMEAI_ROOT / "scripts" / "render-knowledge.py"
+            render_script = _SCRIPTS_DIR / "render-knowledge.py"
             if render_script.exists():
                 # 全量渲染一次（不传 --user），避免多个实例并发争 Kuzu 锁
                 # Popen fire-and-forget：父进程 os._exit 释放锁后子进程再接管

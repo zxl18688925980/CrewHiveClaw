@@ -41,7 +41,7 @@ COOLDOWN_SECONDS = 12 * 3600
 # ChromaDB userId（小写）→ 显示名称
 USER_DISPLAY = {
     "zengxiaolong":         "爸爸曾小龙",
-    "xiamogqiufengliang":   "妈妈张璐",
+    "xiamoqiufengliang":   "妈妈张璐",
     "zifeiyu":              "小姨肖山",
     "zengyueyutong":        "姐姐黟黟",
 }

@@ -34,7 +34,7 @@ DEDUP_THRESHOLD  = 0.95   # cosine 相似度阈值：超过此值视为重复节
 # Kuzu 大驼峰 userId → ChromaDB 小写 userId
 KUZU_TO_CHROMA_ID = {
     "ZengXiaoLong":       "zengxiaolong",
-    "XiaMoQiuFengLiang":  "xiamogqiufengliang",
+    "XiaMoQiuFengLiang":  "xiamoqiufengliang",
     "ZiFeiYu":            "zifeiyu",
     "ZengYueYuTong":      "zengyueyutong",
     "lucas":              "lucas",
