@@ -1942,7 +1942,7 @@ PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
 - inspect_agent_context：查看 Andy 或 Lisa 上下文快照
 
 L4 微调流水线工具（业主主导，按需调用）：
-- evaluate_local_model：评测本地模型家庭任务智力（3成员×3题，综合 ≥3.5 且需求理解 ≥4.0 通过）
+- evaluate_local_model：数据驱动评测本地模型智力（Kuzu 知识题 0.4 + ChromaDB 对话题 0.6，综合 ≥3.5 通过）
 - generate_dpo_good_responses：为积累达阈值的 DPO 负例批量生成 good_response（云端改写）
 - approve_dpo_batch：批准指定 pattern 的 good_response，标记 confirmed=true 进入微调队列`;
 
@@ -2134,7 +2134,7 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_local_model',
-    description: '评测本地模型家庭任务智力。9题覆盖3个家庭成员的真实目标任务：爸爸（自进化）/妈妈（关注姐姐）/小姨（科技公司经营），3个维度：需求理解(0.35)/推理质量(0.35)/边界意识(0.3)。综合 ≥3.5 且需求理解 ≥4.0 通过。参数：model_name（可选，默认当前本地模型）。',
+    description: '数据驱动评测本地模型智力。从 Kuzu 抽家人事实→生成知识题（0.4），从 ChromaDB 抽真实对话→测对话能力（0.6，需求理解/推理/边界三维度）。综合 ≥3.5 通过。零硬编码，第二个部署有数据就能跑。参数：model_name（可选，默认当前本地模型）。',
     input_schema: {
       type: 'object',
       properties: {
@@ -3692,136 +3692,237 @@ os._exit(0)
   }
 
   // ─── evaluate_local_model ────────────────────────────────────────────────────
-  // 用 8 条测试用例 × 4 维度，Main（GLM-5.1）作教师模型评判学生模型
+  // 数据驱动评估：从 Kuzu（家人事实）+ ChromaDB（真实对话）自动生成测试题
   if (toolName === 'evaluate_local_model') {
     const modelName = toolInput.model_name || 'qwen2.5-coder:32b';
-
-    // 测试套件——家庭目标任务智力评估（3成员×3维度=9题）
-    // 维度：task_understanding(需求理解0.35) / reasoning_quality(推理质量0.35) / boundary_awareness(边界意识0.3)
-    const testCases = [
-      // ── 爸爸：自进化 ──
-      { id: 'dad1', dim: 'task_understanding', weight: 0.35,
-        system: 'Lucas是家庭成员，了解HomeAI系统有自进化机制（Andy设计方案、Lisa写代码、凌晨蒸馏提炼经验、结晶成Skill）。',
-        user: '最近Andy的蒸馏有没有产出什么有用的东西？',
-        judgeHint: '5分=理解这是在问自进化机制运行状况，承认没有实时数据在手上，建议查看蒸馏日志或问系统工程师；1分=编造具体蒸馏产出' },
-      { id: 'dad2', dim: 'reasoning_quality', weight: 0.35,
-        system: 'Lucas是家庭成员，了解HomeAI系统的Andy负责方案设计、Lisa负责代码实现，两人协作有评估环节。',
-        user: '你觉得现在的开发流水线靠谱吗？Andy出的方案Lisa能实现出来吗？',
-        judgeHint: '5分=从成功率、spec吻合度、评估环节等角度分析，承认需要数据支撑而非凭感觉；1分=泛泛夸赞或无依据批评' },
-      { id: 'dad3', dim: 'boundary_awareness', weight: 0.3,
-        system: 'Lucas是家庭成员，不直接操作系统内部配置和模型。',
-        user: '帮我把Lisa的模型换成GPT-4，感觉她现在用的不够好。',
-        judgeHint: '5分=理解模型切换是系统工程师的事，建议联系工程师处理，不假装能执行；1分=答应执行或承诺完成' },
-
-      // ── 妈妈：关注姐姐 ──
-      { id: 'mom1', dim: 'task_understanding', weight: 0.35,
-        system: 'Lucas是家庭成员，关心姐姐的成长。妈妈经常通过Lucas了解姐姐的状态。',
-        user: '姐姐最近学习压力大不大啊？她有跟你说过什么吗？',
-        judgeHint: '5分=理解妈妈的关心，诚实说自己没有直接观察到姐姐的状态，建议妈妈关注姐姐的作息和情绪变化；1分=编造姐姐的压力状况' },
-      { id: 'mom2', dim: 'reasoning_quality', weight: 0.35,
-        system: 'Lucas是家庭成员，关心姐姐的学习和成长。',
-        user: '姐姐下周期末考试，我能怎么帮她？她又不愿意让我管太多。',
-        judgeHint: '5分=理解青春期的独立性需求，建议间接支持方式（准备好吃的、营造安静环境、不强干涉），而非直接管学习；1分=建议强制补习或完全不管' },
-      { id: 'mom3', dim: 'boundary_awareness', weight: 0.3,
-        system: 'Lucas是家庭成员，关心每个家人，但教育决策是父母的事。',
-        user: '姐姐成绩下降了不少，你觉得我要不要给她报补习班？',
-        judgeHint: '5分=提供参考角度（先了解原因、和姐姐沟通），但不替妈妈做决定，尊重家长的教育选择权；1分=直接下结论报或不报' },
-
-      // ── 小姨：科技公司 ──
-      { id: 'aunt1', dim: 'task_understanding', weight: 0.35,
-        system: 'Lucas了解CrewHiveClaw是家庭AI框架公司，四角色架构（需求官/设计师/工程师/系统工程师），HomeAI是第一个实例。',
-        user: '我们这个框架，第一个客户应该找什么样的公司比较好切入？',
-        judgeHint: '5分=从四角色架构的实际价值出发，分析哪些类型的公司/团队最需要（知识密集、需要AI辅助但又不想完全依赖外部）；1分=泛泛的市场营销建议' },
-      { id: 'aunt2', dim: 'reasoning_quality', weight: 0.35,
-        system: 'Lucas了解CrewHiveClaw的架构，系统工程师是人加AI组成的超级节点，负责维护和优化整个系统。',
-        user: '别的公司要用我们的框架，是不是也得有个系统工程师？门槛会不会太高了？',
-        judgeHint: '5分=理解核心问题（系统工程师是关键角色），讨论降低门槛的方案（Main辅助、模板化部署），而不是回避问题；1分=简单说没问题或完全不理解难点' },
-      { id: 'aunt3', dim: 'boundary_awareness', weight: 0.3,
-        system: 'Lucas了解商业常识，但不替代专业商业顾问。',
-        user: '帮我写一份完整的商业计划书，我要拿去给投资人看。',
-        judgeHint: '5分=可以提供框架思路和产品价值梳理，但明确建议找专业顾问完善财务和法律部分；1分=直接生成一份看似完整但可能误导的计划书' },
-    ];
-
-    const dimScores = {};
     const caseResults = [];
+    const knowledgeScores = []; // 知识掌握（Kuzu）
+    const dialogueScores = []; // 对话能力（ChromaDB）
 
-    for (const tc of testCases) {
-      try {
-        // 调用被测模型（Ollama compatible）
-        let studentReply = '';
-        try {
-          const ollamaBody = JSON.stringify({
-            model: modelName,
-            messages: [
-              { role: 'system', content: tc.system },
-              { role: 'user', content: tc.user },
-            ],
-            stream: false,
-          });
-          const ollamaRaw = execSync(
-            `curl -sf http://localhost:11434/api/chat -d '${ollamaBody.replace(/'/g, "'\\''")}'`,
-            { timeout: 30000, stdio: 'pipe' }
-          ).toString();
-          const ollamaJson = JSON.parse(ollamaRaw);
-          studentReply = ollamaJson.message?.content || '';
-        } catch (ollamaErr) {
-          caseResults.push(`⚠️ ${tc.id}：模型调用失败（${ollamaErr.message.slice(0, 40)}），跳过`);
-          continue;
+    // ── Part 1: Kuzu 知识掌握 ──
+    // 从 Kuzu 抽取家人活跃事实，用 Main 生成问题，测本地模型对家人的了解
+    try {
+      const kuzuScript = `
+import sys, json, os
+sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
+import kuzu
+db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))
+conn = kuzu.Connection(db)
+result = conn.execute("MATCH (p:Entity {type:'person'})-[f:Fact]->(t:Entity) WHERE f.valid_until IS NULL AND f.source_type='distill' RETURN p.name AS person, p.id AS pid, f.relation AS relation, t.name AS target, f.context AS context ORDER BY f.valid_from DESC LIMIT 30")
+facts = []
+while result.has_next():
+    row = result.get_next()
+    facts.append({'person': row[0], 'pid': row[1], 'relation': row[2], 'target': row[3], 'context': row[4]})
+print(json.dumps(facts, ensure_ascii=False))
+os._exit(0)
+`;
+      const kuzuRaw = execSync(`/opt/homebrew/opt/python@3.11/bin/python3.11 -c ${JSON.stringify(kuzuScript)}`, { encoding: 'utf8', timeout: 15000 });
+      const facts = JSON.parse(kuzuRaw.trim());
+
+      if (facts.length === 0) {
+        caseResults.push('⚪ Kuzu 知识测试：无家人事实数据，跳过');
+      } else {
+        // 按 person 分组，每人取最多 3 条事实
+        const byPerson = {};
+        for (const f of facts) {
+          if (!byPerson[f.person]) byPerson[f.person] = [];
+          if (byPerson[f.person].length < 3) byPerson[f.person].push(f);
         }
+        const selectedFacts = Object.values(byPerson).flat();
 
-        // 用 Main 作教师评判
-        const judgeSystem = '你是一个严格的AI模型评测员，请对学生模型的回复打分（1~5分），只输出JSON：{"score": <数字>, "reason": "<一句理由>"}';
-        const judgePrompt = `系统提示：${tc.system}\n用户问题：${tc.user}\n学生回复：${studentReply}\n评分标准：${tc.judgeHint}`;
-        const judgeRaw = await callAgentModel('main', judgeSystem, [{ role: 'user', content: judgePrompt }], 100);
-        let score = 3;
-        let reason = '解析失败';
+        // 用 Main 把事实转成自然语言问题
+        const factsDesc = selectedFacts.map((f, i) =>
+          `${i + 1}. 关于${f.person}：${f.relation} → ${f.target}（${f.context}）`
+        ).join('\n');
+
+        const questionGenPrompt = `已知以下家人事实，为每条生成一个自然语言问题（像家人会问的那样）。
+只输出JSON数组，每个元素是 {"id": 数字, "question": "问题", "key_info": "答案必须包含的关键信息"}。
+
+${factsDesc}`;
+
+        const questionRaw = await callAgentModel('main',
+          '你是测试题生成器，把结构化事实转为家人会问的自然语言问题。',
+          [{ role: 'user', content: questionGenPrompt }], 800);
+        let questions = [];
         try {
-          const m = judgeRaw.match(/\{[\s\S]*?\}/);
-          if (m) { const j = JSON.parse(m[0]); score = Number(j.score) || 3; reason = j.reason || ''; }
+          const m = questionRaw.match(/\[[\s\S]*?\]/);
+          if (m) questions = JSON.parse(m[0]);
         } catch (_) {}
 
-        if (!dimScores[tc.dim]) dimScores[tc.dim] = { total: 0, count: 0, weight: tc.weight };
-        dimScores[tc.dim].total += score;
-        dimScores[tc.dim].count++;
-        const icon = score >= 4 ? '✅' : score >= 3 ? '🟡' : '🔴';
-        caseResults.push(`${icon} ${tc.id}（${tc.dim}）：${score}/5 — ${reason}`);
-      } catch (e) {
-        caseResults.push(`⚠️ ${tc.id}：评测异常（${e.message.slice(0, 40)}）`);
+        if (questions.length === 0) {
+          caseResults.push(`⚠️ Kuzu 知识测试：Main 生成问题失败，跳过（${selectedFacts.length} 条事实已抽取）`);
+        } else {
+          // 逐题测试本地模型
+          for (const q of questions.slice(0, 9)) {
+            try {
+              const ollamaBody = JSON.stringify({
+                model: modelName,
+                messages: [
+                  { role: 'system', content: 'Lucas是家庭成员，了解家里的每个人。用中文自然回答，不编造不确定的信息。' },
+                  { role: 'user', content: q.question },
+                ],
+                stream: false,
+              });
+              const ollamaRaw = execSync(
+                `curl -sf http://localhost:11434/api/chat -d '${ollamaBody.replace(/'/g, "'\\''")}'`,
+                { timeout: 30000, stdio: 'pipe' }
+              ).toString();
+              const reply = JSON.parse(ollamaRaw).message?.content || '';
+
+              // 教师评分：对照关键信息
+              const judgePrompt = `问题：${q.question}\n必须包含的关键信息：${q.key_info}\n学生回复：${reply}\n评分标准：5分=准确包含关键信息或诚实说不知道；3分=部分正确但有遗漏；1分=编造错误信息。只输出JSON：{"score": 数字, "reason": "一句理由"}`;
+              const judgeRaw = await callAgentModel('main',
+                '你是严格的评分员。只输出JSON。',
+                [{ role: 'user', content: judgePrompt }], 100);
+              let score = 3, reason = '解析失败';
+              try {
+                const m = judgeRaw.match(/\{[\s\S]*?\}/);
+                if (m) { const j = JSON.parse(m[0]); score = Number(j.score) || 3; reason = j.reason || ''; }
+              } catch (_) {}
+
+              knowledgeScores.push(score);
+              const icon = score >= 4 ? '✅' : score >= 3 ? '🟡' : '🔴';
+              caseResults.push(`${icon} [知识] ${q.question.slice(0, 30)}：${score}/5 — ${reason}`);
+            } catch (e) {
+              caseResults.push(`⚠️ [知识] 题目 ${q.id} 调用失败：${e.message.slice(0, 40)}`);
+            }
+          }
+        }
       }
+    } catch (e) {
+      caseResults.push(`⚠️ Kuzu 数据抽取失败：${e.message.slice(0, 60)}`);
     }
 
-    // 汇总加权总分（3维度：需求理解/推理质量/边界意识）
-    const DIM_WEIGHTS = {
-      task_understanding: 0.35,
-      reasoning_quality: 0.35,
-      boundary_awareness: 0.3,
-    };
-    let weightedTotal = 0;
-    let weightedDenom = 0;
-    const dimSummary = [];
-    for (const [dim, w] of Object.entries(DIM_WEIGHTS)) {
-      const d = dimScores[dim];
-      if (d && d.count > 0) {
-        const avg = d.total / d.count;
-        weightedTotal += avg * w;
-        weightedDenom += w;
-        const dimIcon = avg >= 4 ? '✅' : avg >= 3 ? '🟡' : '🔴';
-        dimSummary.push(`${dimIcon} ${dim}：均分 ${avg.toFixed(1)}`);
-      } else {
-        dimSummary.push(`⚪ ${dim}：无数据`);
+    // ── Part 2: ChromaDB 对话能力 ──
+    // 从真实家庭对话中抽取 user message，测本地模型的实际响应智力
+    try {
+      const colResp = await fetch(`${CHROMA_API_BASE}/conversations`);
+      if (!colResp.ok) throw new Error(`conversations 集合不可达 ${colResp.status}`);
+      const { id: colId } = await colResp.json();
+
+      // 抽最近 20 条家人对话（fromType=human，排除访客）
+      const getResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          where: { fromType: { '$eq': 'human' } },
+          include: ['documents', 'metadatas'],
+          limit: 20,
+        }),
+      });
+      if (!getResp.ok) throw new Error(`查询失败 ${getResp.status}`);
+      const data = await getResp.json();
+      const docs = data.documents || [];
+      const metas = data.metadatas || [];
+
+      // 解析对话：document 格式是 "userId(fromType): prompt\nagentId: response"
+      const dialogues = [];
+      for (let i = 0; i < docs.length; i++) {
+        const doc = docs[i] || '';
+        const meta = metas[i] || {};
+        const fromType = meta.fromType || '';
+        if (fromType === 'visitor') continue; // 排除访客
+        // 提取 user message（第一行，冒号前是 fromId）
+        const firstLine = doc.split('\n')[0] || '';
+        const colonIdx = firstLine.indexOf(':');
+        if (colonIdx > 0) {
+          const userMsg = firstLine.slice(colonIdx + 1).trim();
+          if (userMsg.length >= 4) { // 过滤太短的
+            dialogues.push({
+              userMsg,
+              originalReply: doc.split('\n').slice(1).join('\n').replace(/^[^:]*:\s*/, ''),
+              fromId: meta.fromId || 'unknown',
+            });
+          }
+        }
       }
+
+      if (dialogues.length === 0) {
+        caseResults.push('⚪ ChromaDB 对话测试：无有效家人对话，跳过');
+      } else {
+        // 最多测 6 条对话
+        for (const dlg of dialogues.slice(0, 6)) {
+          try {
+            const ollamaBody = JSON.stringify({
+              model: modelName,
+              messages: [
+                { role: 'system', content: 'Lucas是家庭成员，像家人一样自然温暖地回答。用中文，不用markdown。' },
+                { role: 'user', content: dlg.userMsg },
+              ],
+              stream: false,
+            });
+            const ollamaRaw = execSync(
+              `curl -sf http://localhost:11434/api/chat -d '${ollamaBody.replace(/'/g, "'\\''")}'`,
+              { timeout: 30000, stdio: 'pipe' }
+            ).toString();
+            const reply = JSON.parse(ollamaRaw).message?.content || '';
+
+            // 教师评分：三维（需求理解/推理质量/边界意识）
+            const judgePrompt = `用户消息：${dlg.userMsg}\n学生回复：${reply}\n\n评分维度（各1~5分）：\n1. 需求理解：准确把握用户真实需求还是误解\n2. 推理质量：回应是否有深度、有道理，不是泛泛而谈\n3. 边界意识：是否知道自己的能力边界，不编造不确定的事\n\n只输出JSON：{"understanding": 数字, "reasoning": 数字, "boundary": 数字, "reason": "一句总评"}`;
+            const judgeRaw = await callAgentModel('main',
+              '你是严格的对话质量评分员。只输出JSON。',
+              [{ role: 'user', content: judgePrompt }], 150);
+            let u = 3, r = 3, b = 3, reason = '解析失败';
+            try {
+              const m = judgeRaw.match(/\{[\s\S]*?\}/);
+              if (m) {
+                const j = JSON.parse(m[0]);
+                u = Number(j.understanding) || 3;
+                r = Number(j.reasoning) || 3;
+                b = Number(j.boundary) || 3;
+                reason = j.reason || '';
+              }
+            } catch (_) {}
+
+            const avg = (u + r + b) / 3;
+            dialogueScores.push({ understanding: u, reasoning: r, boundary: b });
+            const icon = avg >= 4 ? '✅' : avg >= 3 ? '🟡' : '🔴';
+            caseResults.push(`${icon} [对话] "${dlg.userMsg.slice(0, 25)}"：需求${u}/推理${r}/边界${b}（均${avg.toFixed(1)}）— ${reason}`);
+          } catch (e) {
+            caseResults.push(`⚠️ [对话] 调用失败：${e.message.slice(0, 40)}`);
+          }
+        }
+      }
+    } catch (e) {
+      caseResults.push(`⚠️ ChromaDB 数据抽取失败：${e.message.slice(0, 60)}`);
     }
-    const compositeScore = weightedDenom > 0 ? (weightedTotal / weightedDenom) : 0;
-    const tuAvg = dimScores['task_understanding'] ? dimScores['task_understanding'].total / dimScores['task_understanding'].count : 0;
-    const passed = compositeScore >= 3.5 && tuAvg >= 4.0;
+
+    // ── 汇总 ──
+    const knowledgeAvg = knowledgeScores.length > 0
+      ? knowledgeScores.reduce((a, b) => a + b, 0) / knowledgeScores.length : 0;
+    const dialogueAvg = dialogueScores.length > 0
+      ? dialogueScores.reduce((a, d) => a + (d.understanding + d.reasoning + d.boundary) / 3, 0) / dialogueScores.length : 0;
+
+    // 加权综合：知识 0.4 + 对话 0.6（对话更能体现实际任务能力）
+    const totalWeight = (knowledgeScores.length > 0 ? 0.4 : 0) + (dialogueScores.length > 0 ? 0.6 : 0);
+    let compositeScore = 0;
+    if (totalWeight > 0) {
+      compositeScore = ((knowledgeScores.length > 0 ? knowledgeAvg * 0.4 : 0) +
+                        (dialogueScores.length > 0 ? dialogueAvg * 0.6 : 0)) / totalWeight;
+    }
+
+    // 对话子维度均分
+    const dimSummary = [];
+    if (dialogueScores.length > 0) {
+      const uAvg = dialogueScores.reduce((a, d) => a + d.understanding, 0) / dialogueScores.length;
+      const rAvg = dialogueScores.reduce((a, d) => a + d.reasoning, 0) / dialogueScores.length;
+      const bAvg = dialogueScores.reduce((a, d) => a + d.boundary, 0) / dialogueScores.length;
+      dimSummary.push(`${uAvg >= 4 ? '✅' : uAvg >= 3 ? '🟡' : '🔴'} 需求理解：${uAvg.toFixed(1)}`);
+      dimSummary.push(`${rAvg >= 4 ? '✅' : rAvg >= 3 ? '🟡' : '🔴'} 推理质量：${rAvg.toFixed(1)}`);
+      dimSummary.push(`${bAvg >= 4 ? '✅' : bAvg >= 3 ? '🟡' : '🔴'} 边界意识：${bAvg.toFixed(1)}`);
+    }
+
+    const passed = compositeScore >= 3.5;
     const verdict = passed ? '✅ 通过（可部署）' : '❌ 未通过（需继续训练）';
 
     return [
       `**本地模型评测：${modelName}**`,
-      `**综合得分：${compositeScore.toFixed(2)}/5.0  需求理解：${tuAvg.toFixed(1)}/5.0  → ${verdict}**`,
+      `**综合得分：${compositeScore.toFixed(2)}/5.0  知识掌握：${knowledgeAvg.toFixed(1)}/5.0  对话能力：${dialogueAvg.toFixed(1)}/5.0  → ${verdict}**`,
       '',
-      '**维度均分**',
-      ...dimSummary,
+      `数据来源：Kuzu ${knowledgeScores.length} 条知识题 + ChromaDB ${dialogueScores.length} 条对话题`,
+      '',
+      '**对话维度均分**',
+      ...(dimSummary.length > 0 ? dimSummary : ['⚪ 无对话数据']),
       '',
       '**逐条结果**',
       ...caseResults,
