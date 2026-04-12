@@ -143,8 +143,9 @@ function probeOllama() {
 function restartOllama() {
   log('Ollama embedding 异常，执行重启...');
   try {
+    // Ollama 由 Ollama App 注册到 launchd（无 plist 文件），用 kickstart 重启
     execSync(
-      'launchctl kickstart -k gui/$UID/com.ollama.ollama 2>/dev/null || launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.ollama.ollama.plist 2>/dev/null || true',
+      'launchctl kickstart -k gui/$UID/com.ollama.ollama 2>/dev/null || true',
       { shell: true, env: { ...process.env, UID: String(process.getuid()) } }
     );
     log('Ollama 重启指令已发出，等待启动...');
@@ -1286,7 +1287,7 @@ setInterval(scanStuckTasks, TASK_SCAN_INTERVAL_MS);
 // 蒸馏：spawn distill-memories.py --user visitor:TOKEN --force（即使数据少也蒸馏留档）
 const VISITOR_REGISTRY_PATH      = path.join(__dirname, '../data/visitor-registry.json');
 const VISITOR_SILENCE_SCAN_MS    = 60 * 60 * 1000;  // 每小时扫一次（确保凌晨 3 点命中）
-const ARCHIVE_KUZU_SCRIPT        = path.join(__dirname, '_archive_visitor_kuzu.py');
+
 let lastVisitorSilenceScanDay    = '';
 
 function shouldRunVisitorSilenceScan() {

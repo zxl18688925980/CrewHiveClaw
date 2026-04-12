@@ -8627,6 +8627,99 @@ const crewclawRoutingPlugin = {
       },
     }));
 
+    // ── restart_service：Andy 专属，重启 HomeAI 关键进程 ──────────────────
+    //
+    // Andy 作为架构师，需要能重启关键进程以应对系统故障和部署变更。
+    // 允许重启的服务：gateway、chromadb、wecom-entrance、watchdog
+    // 重启前自动执行插件编译检查（gateway 重启时）。
+    // 每次重启自动 notify_engineer，系统工程师知情。
+
+    api.registerTool((toolCtx) => ({
+      label: "重启关键服务",
+      name: "restart_service",
+      description: [
+        "Andy 专属工具：重启 HomeAI 关键服务进程。",
+        "适用场景：Gateway 无响应、ChromaDB 异常、wecom-entrance 消息积压、watchdog 失效等。",
+        "可重启的服务：gateway | chromadb | wecom-entrance | watchdog",
+        "gateway 重启前会自动执行插件编译检查，编译失败则拒绝重启。",
+        "每次重启都会自动通知系统工程师（企业应用通道）。",
+      ].join("\n"),
+      parameters: Type.Object({
+        service: Type.String({ description: "要重启的服务名：gateway | chromadb | wecom-entrance | watchdog" }),
+        reason: Type.String({ description: "重启原因（简要说明为什么要重启，记录到日志）" }),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
+          return { content: [{ type: "text", text: "Error: restart_service 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+        }
+
+        const { service, reason } = params as { service: string; reason: string };
+        const allowed = new Set(["gateway", "chromadb", "wecom-entrance", "watchdog"]);
+        if (!allowed.has(service)) {
+          return {
+            content: [{ type: "text", text: `❌ 不支持重启 "${service}"。允许的服务：gateway / chromadb / wecom-entrance / watchdog` }],
+            details: { error: "invalid_service", service },
+          };
+        }
+
+        const ECOSYSTEM = join(__dirname, "../daemons/ecosystem.config.js");
+        const logRestart = (msg: string) => console.log(`[restart_service] [${service}] ${msg}`);
+
+        try {
+          // Gateway 重启前先编译检查
+          if (service === "gateway") {
+            const checkScript = join(__dirname, "../HomeAILocal/Scripts/check-plugin.sh");
+            logRestart(`编译检查中... (${checkScript})`);
+            try {
+              execSync(`bash "${checkScript}"`, { timeout: 30_000, stdio: "pipe" });
+            } catch (e) {
+              const errMsg = e instanceof Error ? e.message : String(e);
+              logRestart(`编译检查失败，拒绝重启: ${errMsg}`);
+              // 通知系统工程师
+              fetch("http://localhost:3003/api/wecom/notify-engineer", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: `Andy 尝试重启 Gateway 但插件编译检查失败，需要人工介入。原因：${reason}`, type: "intervention", fromAgent: "andy" }),
+              }).catch(() => {});
+              return {
+                content: [{ type: "text", text: `❌ 插件编译检查失败，Gateway 未重启。需要系统工程师介入修复。` }],
+                details: { error: "compile_check_failed", reason: errMsg },
+              };
+            }
+          }
+
+          logRestart(`执行重启，原因：${reason}`);
+
+          if (service === "gateway") {
+            // Gateway 是 launchd 管理的，用 kickstart 重启
+            execSync("launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway", { shell: true, timeout: 10_000 });
+          } else {
+            // PM2 管理的服务
+            execSync(`pm2 restart ${service}`, { shell: true, timeout: 30_000 });
+          }
+
+          // 自动通知系统工程师
+          fetch("http://localhost:3003/api/wecom/notify-engineer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: `Andy 重启了 ${service}。原因：${reason}`, type: "pipeline", fromAgent: "andy" }),
+          }).catch(() => {});
+
+          return {
+            content: [{ type: "text", text: `✅ ${service} 已重启。原因：${reason}\n系统工程师已收到通知。` }],
+            details: { service, reason, restarted: true },
+          };
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          logRestart(`重启失败: ${errMsg}`);
+          return {
+            content: [{ type: "text", text: `❌ 重启 ${service} 失败：${errMsg}` }],
+            details: { error: "restart_failed", service, message: errMsg },
+          };
+        }
+      },
+    }));
+
     // ── notify_engineer：三角色通用，向系统工程师通道发通知 ──────────────────
     //
     // 走企业应用 HTTP API，消息显示「系统工程师」名称，与家庭 bot 通道隔离。
