@@ -165,33 +165,31 @@ DISTILL_PROMPT = """\
 
 
 def _call_llm(prompt: str) -> str:
+    endpoints = []
     if DEEPSEEK_KEY:
-        r = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {DEEPSEEK_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1500, "temperature": 0.3,
-            },
-            timeout=90,
-        )
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
+        endpoints.append(("DeepSeek", "https://api.deepseek.com/v1/chat/completions", DEEPSEEK_KEY, "deepseek-chat"))
     if ZAI_KEY:
-        r = requests.post(
-            "https://api.zaiasktheai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {ZAI_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "glm-5",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1500, "temperature": 0.3,
-            },
-            timeout=90,
-        )
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
-    raise RuntimeError("无可用 LLM（DEEPSEEK_API_KEY 或 ZAI_API_KEY 均未设置）")
+        endpoints.append(("ZAI", "https://api.zaiasktheai.com/v1/chat/completions", ZAI_KEY, "glm-5"))
+    last_err = None
+    for name, url, key, model in endpoints:
+        try:
+            r = requests.post(
+                url,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1500, "temperature": 0.3,
+                },
+                timeout=90,
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            print(f"  WARN: {name} API 返回 {r.status_code}，尝试下一个", file=sys.stderr)
+        except requests.exceptions.RequestException as e:
+            print(f"  WARN: {name} API 异常 ({type(e).__name__})，尝试下一个", file=sys.stderr)
+            last_err = e
+    raise RuntimeError(f"所有 LLM API 均失败: {last_err}")
 
 
 def extract_learnings(decisions: list[dict], existing: list[dict]) -> list[dict]:

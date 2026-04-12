@@ -23,25 +23,26 @@ const CHECK_INTERVAL_MS = 3_600_000;  // 1 小时检查一次
 const PROBE_TIMEOUT_MS  = 180_000;  // 3 分钟内没回应 = 挂死（本地模型响应可能需要几分钟）
 const LOG_FILE = path.join(__dirname, '../logs/pm2/gateway-watchdog.log');
 
-const HOMEAI_ROOT           = path.join(__dirname, '..');
-const DISTILL_SCRIPT        = path.join(HOMEAI_ROOT, 'scripts', 'distill-memories.py');
-const DISTILL_LOG           = path.join(HOMEAI_ROOT, 'logs', 'distill-memories.log');
-const DISTILL_AGENTS_SCRIPT  = path.join(HOMEAI_ROOT, 'scripts', 'distill-agent-memories.py');
-const DISTILL_AGENTS_LOG     = path.join(HOMEAI_ROOT, 'logs', 'distill-agent-memories.log');
-const TEAM_OBS_SCRIPT        = path.join(HOMEAI_ROOT, 'scripts', 'distill-team-observations.py');
-const TEAM_OBS_LOG           = path.join(HOMEAI_ROOT, 'logs', 'distill-team-observations.log');
-const DESIGN_LEARN_SCRIPT    = path.join(HOMEAI_ROOT, 'scripts', 'distill-design-learnings.py');
-const DESIGN_LEARN_LOG       = path.join(HOMEAI_ROOT, 'logs', 'distill-design-learnings.log');
-const IMPL_LEARN_SCRIPT      = path.join(HOMEAI_ROOT, 'scripts', 'distill-impl-learnings.py');
-const IMPL_LEARN_LOG         = path.join(HOMEAI_ROOT, 'logs', 'distill-impl-learnings.log');
-const LEARN_OBJ_SCRIPT       = path.join(HOMEAI_ROOT, 'scripts', 'distill-learning-objectives.py');
-const LEARN_OBJ_LOG          = path.join(HOMEAI_ROOT, 'logs', 'distill-learning-objectives.log');
-const KNOW_DISC_SCRIPT       = path.join(HOMEAI_ROOT, 'scripts', 'distill-knowledge-discussions.py');
-const KNOW_DISC_LOG          = path.join(HOMEAI_ROOT, 'logs', 'distill-knowledge-discussions.log');
-const COLLAB_DISTILL_SCRIPT  = path.join(HOMEAI_ROOT, 'scripts', 'distill-relationship-dynamics.py');
-const COLLAB_DISTILL_LOG     = path.join(HOMEAI_ROOT, 'logs', 'distill-relationship-dynamics.log');
-const CODE_GRAPH_SCRIPT      = path.join(HOMEAI_ROOT, 'Scripts', 'build-code-graph.py');
-const CODE_GRAPH_LOG         = path.join(HOMEAI_ROOT, 'logs', 'build-code-graph.log');
+const HOMEAI_ROOT           = path.join(__dirname, '..');       // ~/HomeAI/CrewHiveClaw
+const SCRIPTS_DIR           = __dirname;                        // ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts
+const DISTILL_SCRIPT        = path.join(SCRIPTS_DIR, 'distill-memories.py');
+const DISTILL_LOG           = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-memories.log');
+const DISTILL_AGENTS_SCRIPT  = path.join(SCRIPTS_DIR, 'distill-agent-memories.py');
+const DISTILL_AGENTS_LOG     = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-agent-memories.log');
+const TEAM_OBS_SCRIPT        = path.join(SCRIPTS_DIR, 'distill-team-observations.py');
+const TEAM_OBS_LOG           = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-team-observations.log');
+const DESIGN_LEARN_SCRIPT    = path.join(SCRIPTS_DIR, 'distill-design-learnings.py');
+const DESIGN_LEARN_LOG       = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-design-learnings.log');
+const IMPL_LEARN_SCRIPT      = path.join(SCRIPTS_DIR, 'distill-impl-learnings.py');
+const IMPL_LEARN_LOG         = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-impl-learnings.log');
+const LEARN_OBJ_SCRIPT       = path.join(SCRIPTS_DIR, 'distill-learning-objectives.py');
+const LEARN_OBJ_LOG          = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-learning-objectives.log');
+const KNOW_DISC_SCRIPT       = path.join(SCRIPTS_DIR, 'distill-knowledge-discussions.py');
+const KNOW_DISC_LOG          = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-knowledge-discussions.log');
+const COLLAB_DISTILL_SCRIPT  = path.join(SCRIPTS_DIR, 'distill-relationship-dynamics.py');
+const COLLAB_DISTILL_LOG     = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-relationship-dynamics.log');
+const CODE_GRAPH_SCRIPT      = path.join(SCRIPTS_DIR, 'build-code-graph.py');
+const CODE_GRAPH_LOG         = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'build-code-graph.log');
 
 let token = '';
 try {
@@ -893,9 +894,21 @@ function runDistill() {
   // Agent 蒸馏（distill-agent-memories.py）必须在 distill-memories.py 退出后再启动：
   //   两者都需要 Kuzu 独占锁；distill-memories.py 末尾还会 spawn render-knowledge.py，
   //   所以等 distill-memories.py 退出后再延迟 5 分钟，确保 render-knowledge.py 也完成。
-  if (fs.existsSync(DISTILL_AGENTS_SCRIPT)) {
-    child.on('close', (code) => {
-      log(`记忆蒸馏完成（code ${code}），5 分钟后启动 Agent 记忆蒸馏...`);
+  // Andy HEARTBEAT 也在蒸馏完成后、Agent 蒸馏之前触发（避免 Kuzu 锁冲突）。
+  child.on('close', (code) => {
+    log(`记忆蒸馏完成（code ${code}）`);
+
+    // 先触发 Andy HEARTBEAT（蒸馏新数据可用，Kuzu 锁已释放）
+    if (pendingHeartbeatToday && lastHeartbeatDay !== new Date().toDateString()) {
+      lastHeartbeatDay = new Date().toDateString();
+      pendingHeartbeatToday = false;
+      log('蒸馏完成后触发 Andy HEARTBEAT...');
+      runAndyHeartbeat().catch(e => log(`Andy HEARTBEAT 异常: ${e.message}`));
+    }
+
+    // 5 分钟后启动 Agent 蒸馏（等待 HEARTBEAT 和 render-knowledge.py 完成）
+    if (fs.existsSync(DISTILL_AGENTS_SCRIPT)) {
+      log('5 分钟后启动 Agent 记忆蒸馏...');
       setTimeout(() => {
         const agentChild = spawn(PYTHON3, [DISTILL_AGENTS_SCRIPT], {
           env,
@@ -905,11 +918,12 @@ function runDistill() {
         agentChild.unref();
         log(`Agent 记忆蒸馏已启动（PID ${agentChild.pid}），日志：${DISTILL_AGENTS_LOG}`);
       }, 5 * 60 * 1000);
-    });
-  }
+    }
+  });
 }
 
 let lastDistillDay       = -1;  // 防止同一天重复触发
+let pendingHeartbeatToday = false;  // 蒸馏完成后触发 HEARTBEAT（串行避免 Kuzu 锁冲突）
 let lastTeamObsDay       = '';  // team_observation 蒸馏每日触发去重
 let lastPersonalizeDay   = '';  // Andy/Lisa 每日自我进化触发去重
 let lastCollabDistillDay = '';  // 协作关系蒸馏每日触发去重
@@ -1089,12 +1103,15 @@ async function check() {
     if (lastDistillDay !== today) {
       lastDistillDay = today;
       runDistill();
+      // Andy HEARTBEAT 改为蒸馏完成后触发（串行，避免 Kuzu 锁冲突）
+      // 标记今日需要运行 HEARTBEAT，由 runDistill 的 child.on('close') 回调链触发
+      pendingHeartbeatToday = true;
     }
   }
 
-  // Andy HEARTBEAT：每日凌晨 2 点触发一次（蒸馏完成后进行，新 pattern 数据可用）
+  // Andy HEARTBEAT：如果今日没有蒸馏任务（非 2 点时段），则在原时段直接触发
   if (shouldRunAndyHeartbeat()) {
-    if (lastHeartbeatDay !== today) {
+    if (lastHeartbeatDay !== today && !pendingHeartbeatToday) {
       lastHeartbeatDay = today;
       // fire-and-forget：不阻塞 check() 的返回，HEARTBEAT 可能需要 10 分钟
       runAndyHeartbeat().catch(e => log(`Andy HEARTBEAT 异常: ${e.message}`));

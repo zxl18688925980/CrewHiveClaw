@@ -206,6 +206,8 @@ def refine_capabilities(agent_id: str, kuzu_conn) -> int:
 # ── 配置 ─────────────────────────────────────────────────────────────────────
 _SCRIPTS_DIR = Path(__file__).resolve().parent     # .../HomeAILocal/Scripts
 HOMEAI_ROOT  = _SCRIPTS_DIR.parent.parent.parent  # ~/HomeAI
+CREWCLAW_DIR = _SCRIPTS_DIR.parent.parent         # ~/HomeAI/CrewHiveClaw
+DOCS_DIR     = CREWCLAW_DIR / "Docs"              # ~/HomeAI/CrewHiveClaw/Docs
 _DATA_ROOT   = Path(os.environ.get("HOMEAI_DATA_ROOT", str(HOMEAI_ROOT / "Data")))
 CHROMA_URL   = os.environ.get("CHROMA_URL", "http://localhost:8001")
 CHROMA_BASE  = f"{CHROMA_URL}/api/v2/tenants/default_tenant/databases/default_database/collections"
@@ -229,7 +231,7 @@ AGENT_CONFIGS = {
             },
             {
                 "type":  "file",
-                "path":  HOMEAI_ROOT / "docs" / "09-evolution-version.md",
+                "path":  DOCS_DIR / "09-evolution-version.md",
                 "label": "系统进化历史",
             },
         ],
@@ -266,7 +268,7 @@ AGENT_CONFIGS = {
         "extra_files": [
             {
                 "type":  "file",
-                "path":  HOMEAI_ROOT / "docs" / "10-engineering-notes.md",
+                "path":  DOCS_DIR / "10-engineering-notes.md",
                 "label": "系统工程师实现陷阱积累",
             },
         ],
@@ -602,7 +604,7 @@ def main():
         # 用 Popen fire-and-forget + start_new_session=True，父进程退出后子进程自行获取锁。
         updated_agents = [aid for aid, ok in results if ok]
         if updated_agents:
-            render_script = HOMEAI_ROOT / "scripts" / "render-knowledge.py"
+            render_script = _SCRIPTS_DIR / "render-knowledge.py"
             agent_arg = ",".join(updated_agents)
             print(f"\n触发 render-knowledge.py --agent {agent_arg}（父进程退出后运行）")
             _subprocess.Popen(
