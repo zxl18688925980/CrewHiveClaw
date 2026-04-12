@@ -878,18 +878,47 @@ function loadKuzuEntityMap(): void {
 /** 从 prompt 中提取命中的 Kuzu entityId 列表 */
 function extractEntityHits(prompt: string): string[] {
   const hits = new Set<string>();
+  const lower = prompt.toLowerCase();
   // 1. 别名匹配（短称呼优先，长称呼兜底）
   for (const [alias, entityId] of Object.entries(ENTITY_ALIAS_MAP)) {
-    if (prompt.includes(alias)) hits.add(entityId);
+    if (lower.includes(alias.toLowerCase())) hits.add(entityId);
   }
-  // 2. Kuzu Entity name 匹配（只取 person 和 topic 类型，按 name 长度降序匹配）
+  // 2. Kuzu Entity name 精确匹配（实体名 ⊂ 文本，按 name 长度降序）
   if (kuzuEntityMapLoaded) {
     const names = Array.from(kuzuEntityNameMap.keys()).sort((a, b) => b.length - a.length);
     for (const name of names) {
-      if (name.length >= 3 && prompt.includes(name)) {
+      if (name.length >= 3 && lower.includes(name.toLowerCase())) {
         hits.add(kuzuEntityNameMap.get(name)!);
       }
     }
+    // 3. 反向关键词匹配（文本关键词 ⊂ 实体名）—— 话题级匹配
+    // 实体名通常是长描述（如"协作运营爸爸的抖音账号"），query 中的关键词（"抖音"）比实体名短
+    // 用滑动窗口从实体名中提取 2-4 字片段，检查 query 中是否包含
+    // 最长匹配优先，限制命中数防噪声
+    const topicHits: string[] = [];
+    const scanText = lower.slice(0, 800); // 限制扫描长度防性能问题
+    for (const [name, entityId] of kuzuEntityNameMap) {
+      if (hits.has(entityId)) continue;           // 已精确匹配
+      if (!entityId.startsWith("topic_")) continue; // 只对 topic 做反向匹配
+      if (name.length < 4) continue;              // 短名已由精确匹配覆盖
+      const nameLower = name.toLowerCase();
+      // 从最长片段(4字)到最短(2字)，找到第一个匹配即停止
+      for (let segLen = Math.min(4, nameLower.length); segLen >= 2; segLen--) {
+        let matched = false;
+        for (let i = 0; i <= nameLower.length - segLen; i++) {
+          const seg = nameLower.substring(i, i + segLen);
+          if (seg.length < 2) continue;
+          if (scanText.includes(seg)) {
+            topicHits.push(entityId);
+            matched = true;
+            break;
+          }
+        }
+        if (matched) break; // 最长匹配优先，不再尝试更短片段
+      }
+      if (topicHits.length >= 10) break; // 限制话题命中数
+    }
+    topicHits.forEach(id => hits.add(id));
   }
   return Array.from(hits);
 }
@@ -1262,23 +1291,22 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
     // 安全边界：访客 session 跳过图增强——避免家庭图结构（人物名/话题名）通过检索路径泄漏
     const isVisitorSession = userId.startsWith("visitor:");
     let graphKeywords = "";
-    if (!isGroup && kuzuEntityMapLoaded && !isVisitorSession) {
-      const entityHits = extractEntityHits(prompt);
-      if (entityHits.length > 0) {
-        const { topicNames, personNames } = graphExpandEntities(entityHits);
-        // 图遍历结果拼入检索词（取 topic name 中的关键词，去掉 topic_ 前缀等噪音）
-        const cleanTopics = topicNames
-          .map(n => n.replace(/^topic_/, "").replace(/_/g, " ").trim())
-          .filter(n => n.length >= 2 && n.length <= 30)
-          .slice(0, 10);  // 最多 10 个话题关键词
-        const cleanPersons = personNames
-          .map(n => n.replace(/^(爸爸|妈妈|小姨|姐姐)/, "").trim())
-          .filter(n => n.length >= 2)
-          .slice(0, 5);   // 最多 5 个人名关键词
-        graphKeywords = [...cleanTopics, ...cleanPersons].join(" ");
-        if (graphKeywords) {
-          console.log(`[P0] graph-enhanced: entities=[${entityHits.join(",")}] keywords="${graphKeywords.slice(0, 80)}"`);
-        }
+    const entityHits = (!isGroup && kuzuEntityMapLoaded && !isVisitorSession)
+      ? extractEntityHits(prompt) : [];
+    if (entityHits.length > 0) {
+      const { topicNames, personNames } = graphExpandEntities(entityHits);
+      // 图遍历结果拼入检索词（取 topic name 中的关键词，去掉 topic_ 前缀等噪音）
+      const cleanTopics = topicNames
+        .map(n => n.replace(/^topic_/, "").replace(/_/g, " ").trim())
+        .filter(n => n.length >= 2 && n.length <= 30)
+        .slice(0, 10);  // 最多 10 个话题关键词
+      const cleanPersons = personNames
+        .map(n => n.replace(/^(爸爸|妈妈|小姨|姐姐)/, "").trim())
+        .filter(n => n.length >= 2)
+        .slice(0, 5);   // 最多 5 个人名关键词
+      graphKeywords = [...cleanTopics, ...cleanPersons].join(" ");
+      if (graphKeywords) {
+        console.log(`[P0] graph-enhanced: entities=[${entityHits.join(",")}] keywords="${graphKeywords.slice(0, 80)}"`);
       }
     }
     // 组合检索词：原始 prompt + ChromaDB topic 关键词 + 图增强关键词
@@ -1316,6 +1344,13 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
     const raw     = await chromaQuery("conversations", searchEmbedding, MEMORY_CONTEXT_SIZE * 2, isGroup ? undefined : where);
     // entity boost reranking: 如果查询命中了实体，给包含相同实体 tag 的记录排序提升
     const queryEntityIds = entityHits.length > 0 ? new Set(entityHits) : null;
+    if (queryEntityIds) {
+      const boostedCount = raw.filter(r => {
+        const tags = (r.metadata?.entityTags as string | undefined) ?? "";
+        return tags.length > 0 && tags.split(",").some((t: string) => queryEntityIds.has(t));
+      }).length;
+      console.log(`[P1] entity boost: ${entityHits.length} entities queried, ${boostedCount}/${raw.length} records matched`);
+    }
     const results = queryEntityIds
       ? timeWeightedRerankWithEntityBoost(raw, MEMORY_CONTEXT_SIZE, queryEntityIds)
       : timeWeightedRerank(raw, MEMORY_CONTEXT_SIZE);
