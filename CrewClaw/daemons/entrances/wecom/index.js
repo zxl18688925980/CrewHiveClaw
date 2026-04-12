@@ -3716,7 +3716,7 @@ while result.has_next():
 print(json.dumps(facts, ensure_ascii=False))
 os._exit(0)
 `;
-      const kuzuRaw = execSync(`/opt/homebrew/opt/python@3.11/bin/python3.11 -c ${JSON.stringify(kuzuScript)}`, { encoding: 'utf8', timeout: 15000 });
+      const kuzuRaw = execSync('/opt/homebrew/opt/python@3.11/bin/python3.11', { input: kuzuScript, encoding: 'utf8', timeout: 15000 });
       const facts = JSON.parse(kuzuRaw.trim());
 
       if (facts.length === 0) {
