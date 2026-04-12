@@ -1003,7 +1003,7 @@ function runCodeGraphRebuild() {
   const child = spawn(PYTHON3, [
     CODE_GRAPH_SCRIPT,
     '--incremental',
-    '--paths', 'CrewClaw/crewclaw-routing', 'HomeAILocal/Scripts',
+    '--paths', 'CrewHiveClaw/CrewClaw', 'CrewHiveClaw/HomeAILocal/Scripts', 'hermes/include', 'hermes/lib', 'hermes/API', 'hermes/tools/hermes-parser',
   ], {
     env: { ...process.env },
     detached: true,

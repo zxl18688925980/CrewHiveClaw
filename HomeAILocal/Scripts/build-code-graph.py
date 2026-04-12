@@ -29,14 +29,16 @@ from typing import Optional
 # ── 路径配置 ─────────────────────────────────────────────────────────────────
 _SCRIPTS_DIR   = Path(__file__).resolve().parent
 HOMEAI_ROOT    = _SCRIPTS_DIR.parent.parent.parent        # ~/HomeAI
-CODE_ROOT      = Path(os.environ.get("CODE_ROOT", HOMEAI_ROOT / "CrewHiveClaw"))
+CODE_ROOT      = Path(os.environ.get("CODE_ROOT", HOMEAI_ROOT))  # ~/HomeAI（覆盖所有代码目录）
 KUZU_DB_PATH   = Path(os.environ.get("KUZU_DB_PATH", HOMEAI_ROOT / "Data" / "kuzu"))
 LOG_FILE       = HOMEAI_ROOT / "Logs" / "build-code-graph.log"
 STATE_FILE     = _SCRIPTS_DIR.parent / "data" / "learning" / "code-graph-state.json"
 
 # 扫描文件类型和排除目录
-INCLUDE_EXTS   = {".ts", ".py"}
-EXCLUDE_DIRS   = {"node_modules", ".git", "dist", "__pycache__", ".openclaw", "migrations"}
+INCLUDE_EXTS   = {".ts", ".py", ".cpp", ".h", ".c", ".hpp", ".js"}
+EXCLUDE_DIRS   = {"node_modules", ".git", "dist", "__pycache__", ".openclaw", "migrations",
+                  "build", "cmake-build-*", "third_party", "external", "vendor",
+                  ".venv", "venv", "__bundled__"}
 # 最大解析文件大小（防止超大生成文件）
 MAX_FILE_BYTES = 500_000
 
@@ -54,12 +56,15 @@ log = logging.getLogger(__name__)
 try:
     import tree_sitter_typescript as tsts
     import tree_sitter_python as tspy
+    import tree_sitter_cpp as tscpp
     from tree_sitter import Language, Parser as TSParser
 
     _TS_LANG = Language(tsts.language_typescript())
     _PY_LANG = Language(tspy.language())
+    _CPP_LANG = Language(tscpp.language())
     _ts_parser = TSParser(_TS_LANG)
     _py_parser = TSParser(_PY_LANG)
+    _cpp_parser = TSParser(_CPP_LANG)
     TREE_SITTER_OK = True
 except Exception as e:
     log.warning(f"tree-sitter 不可用，Python 文件将使用 ast 模块：{e}")
@@ -235,6 +240,133 @@ def parse_python(file_path: Path) -> tuple[list, list]:
     return visitor.nodes, visitor.calls
 
 
+# ── C++ 解析 ─────────────────────────────────────────────────────────────────
+
+def _cpp_node_name(node, src: bytes) -> str:
+    """从 C++ 声明节点中提取标识符名称"""
+    for child in node.children:
+        if child.type in ("identifier", "field_identifier", "destructor_name"):
+            return src[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
+        if child.type == "qualified_identifier":
+            # std::vector 等，取最后一段
+            parts = []
+            for c in child.children:
+                if c.type in ("identifier", "namespace_identifier"):
+                    parts.append(src[c.start_byte:c.end_byte].decode("utf-8", errors="replace"))
+            return "::".join(parts) if parts else ""
+    return ""
+
+
+def _walk_cpp(node, src: bytes, file_str: str, current_fn: Optional[str],
+              nodes: list, calls: list):
+    """递归遍历 C++ AST，提取函数/类/方法定义和调用关系"""
+    ntype = node.type
+
+    # 函数定义
+    if ntype in ("function_definition", "declaration"):
+        # declaration 可能是函数声明（非定义），检查是否有 body
+        is_def = ntype == "function_definition"
+        if is_def or any(c.type == "function_declarator" for c in node.children):
+            name = ""
+            for child in node.children:
+                if child.type in ("function_declarator", "pointer_declarator"):
+                    for c in child.children:
+                        if c.type in ("identifier", "qualified_identifier"):
+                            name = src[c.start_byte:c.end_byte].decode("utf-8", errors="replace")
+                            break
+                elif child.type == "identifier":
+                    name = src[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
+            if name and len(name) < 200:
+                node_id = f"{file_str}::{name}"
+                kind = "function"
+                nodes.append({
+                    "id": node_id, "name": name, "file": file_str,
+                    "line": node.start_point[0] + 1, "kind": kind, "lang": "cpp"
+                })
+                if is_def:
+                    for child in node.children:
+                        _walk_cpp(child, src, file_str, node_id, nodes, calls)
+                    return
+
+    # 类/结构体定义
+    if ntype in ("class_specifier", "struct_specifier"):
+        name = ""
+        for child in node.children:
+            if child.type == "type_identifier":
+                name = src[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
+                break
+        if name and len(name) < 200:
+            node_id = f"{file_str}::{name}"
+            nodes.append({
+                "id": node_id, "name": name, "file": file_str,
+                "line": node.start_point[0] + 1,
+                "kind": "class" if ntype == "class_specifier" else "struct",
+                "lang": "cpp"
+            })
+        for child in node.children:
+            _walk_cpp(child, src, file_str, current_fn, nodes, calls)
+        return
+
+    # 方法定义（在类体内）
+    if ntype == "field_declaration":
+        # class 内的成员函数声明/定义
+        for child in node.children:
+            if child.type == "function_declarator":
+                name = ""
+                for c in child.children:
+                    if c.type in ("identifier", "field_identifier"):
+                        name = src[c.start_byte:c.end_byte].decode("utf-8", errors="replace")
+                        break
+                if name and name not in ("operator=", "operator==") and len(name) < 200:
+                    node_id = f"{file_str}::{name}"
+                    nodes.append({
+                        "id": node_id, "name": name, "file": file_str,
+                        "line": node.start_point[0] + 1, "kind": "method", "lang": "cpp"
+                    })
+                break
+
+    # 函数调用
+    if ntype == "call_expression" and current_fn:
+        fn_node = node.children[0] if node.children else None
+        if fn_node:
+            callee = None
+            if fn_node.type == "identifier":
+                callee = src[fn_node.start_byte:fn_node.end_byte].decode("utf-8", errors="replace")
+            elif fn_node.type == "field_expression":
+                # obj.method() 或 obj->method()
+                for c in fn_node.children:
+                    if c.type == "field_identifier":
+                        callee = src[c.start_byte:c.end_byte].decode("utf-8", errors="replace")
+                        break
+            elif fn_node.type == "qualified_identifier":
+                # ns::func()
+                parts = []
+                for c in fn_node.children:
+                    if c.type in ("identifier", "namespace_identifier"):
+                        parts.append(src[c.start_byte:c.end_byte].decode("utf-8", errors="replace"))
+                callee = parts[-1] if parts else None
+            if callee and callee[0].islower():
+                calls.append((current_fn, callee, file_str))
+
+    for child in node.children:
+        _walk_cpp(child, src, file_str, current_fn, nodes, calls)
+
+
+def parse_cpp(file_path: Path) -> tuple[list, list]:
+    """解析 C++ 文件，返回 (nodes, calls)"""
+    if not TREE_SITTER_OK:
+        return [], []
+    src = file_path.read_bytes()
+    if len(src) > MAX_FILE_BYTES:
+        log.debug(f"跳过超大文件：{file_path}（{len(src)} bytes）")
+        return [], []
+    tree = _cpp_parser.parse(src)
+    file_str = str(file_path.relative_to(CODE_ROOT))
+    nodes, calls = [], []
+    _walk_cpp(tree.root_node, src, file_str, None, nodes, calls)
+    return nodes, calls
+
+
 # ── 文件扫描 ──────────────────────────────────────────────────────────────────
 
 def scan_files(root: Path, only_files: Optional[list[Path]] = None,
@@ -384,8 +516,10 @@ def build(only_files: Optional[list[Path]] = None, incremental: bool = False,
             clear_file_nodes(conn, file_str)
 
         try:
-            if f.suffix == ".ts":
+            if f.suffix in (".ts", ".js"):
                 nodes, calls = parse_typescript(f)
+            elif f.suffix in (".cpp", ".h", ".c", ".hpp"):
+                nodes, calls = parse_cpp(f)
             else:
                 nodes, calls = parse_python(f)
         except Exception as e:

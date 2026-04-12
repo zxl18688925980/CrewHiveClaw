@@ -7,7 +7,7 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v645
+> **版本**: v652
 > **最后更新**: 2026-04-12
 
 ---
@@ -2111,3 +2111,28 @@ L0~L4 全部落地：
 - 87 条 auto_detect 噪声全部标记 rejected（75 种不重复组合，最高频仅 4 次，均为正常工作流）
 - auto_detect 门槛提高：≥2 工具 → ≥3 工具，去重窗口 24h → 7 天，新增排除 list_active_tasks
 - 预期积压速率从每天 ~15 条降到接近零
+
+### v650 · 2026-04-12 · 上下文注入优化 + 访客隐私机制重设计
+
+**上下文注入优化**：
+- 删除 `queryRelevantTopics` 重复调用（hook 和 queryMemories 各调一次 → 只保留 queryMemories 内）
+- 新增 `queryPersonDistilledFacts()`：主动从 Kuzu 查询提到的家人的 `current_status`/`recent_concern`/`key_event`/`cares_most_about` 事实
+- 因果关系从 queryMemories 内部移至 context-sources 独立注入（Kuzu causal_relation 独立 Cypher 查询）
+- Lisa 新增 codebase-patterns 知识源（与 Andy 对齐）
+
+**访客上下文一致性**：
+- 设计转变：从输入侧限制（`!isVisitorSession` 守卫）改为输出侧过滤
+- 访客与家人享有同等上下文注入（记忆检索、受众感知、行为规则等全部开放）
+- 新增输出级隐私过滤：agent_end 检测回复中的隐私泄漏 → 下一轮注入纠正指令 → 泄漏轮次跳过 ChromaDB 写入
+- 隐私模式配置化：`config/visitor-restrictions.json` 的 `privacyPatterns` 数组，实例层管理
+
+**代码图谱扩展**：
+- `build-code-graph.py` 新增 C++ 解析（tree-sitter-cpp），支持 `.cpp/.h/.c/.hpp` 文件
+- 新增 JavaScript 解析（复用 TypeScript parser）
+- 扫描范围从 `PROJECT_ROOT` 扩展到 `HOMEAI_ROOT`（覆盖 hermes 等 C++ 代码库）
+- watchdog 凌晨 5 点增量重建路径更新
+
+**Lucas 上下文优先级重排**：
+- 注入顺序：自我认知 > 受众认知 > 最近对话 > 回忆/背景知识
+- 大量 prepend 源迁移到 appendSystem（conversations、decisions、behavior_patterns 等）
+- 仅保留 user-profile（受众）和 app-capabilities（工具）为 prepend
