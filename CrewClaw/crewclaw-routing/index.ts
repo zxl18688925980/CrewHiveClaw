@@ -1175,6 +1175,45 @@ function queryCausalFacts(userId: string): { value: string; context: string }[] 
   }
 }
 
+// ── 主动注入：查询指定人物的 Kuzu 蒸馏事实（current_status / recent_concern / key_event）────
+// 当 prompt 提到家庭成员时，主动注入该人的最新蒸馏事实到 appendSystemContext。
+// 与 relationship-network 互补：relationship-network 按 userId 静态查所有关系人，
+// 本函数按 prompt 中提到的人动态查，更精准且不依赖 userId 是家庭成员。
+function queryPersonDistilledFacts(entityIds: string[]): Map<string, { relation: string; targetName: string; context: string }[]> {
+  const facts = new Map<string, { relation: string; targetName: string; context: string }[]>();
+  if (entityIds.length === 0) return facts;
+  try {
+    // 只查 person 类型实体（跳过 topic_）
+    const personIds = entityIds.filter(id => !id.startsWith("topic_"));
+    if (personIds.length === 0) return facts;
+    const ids = personIds.map(id => `'${id.replace(/'/g, "''")}'`).join(",");
+    const cypher = `MATCH (p:Entity)-[f:Fact]->(t:Entity)
+                    WHERE p.id IN [${ids}] AND f.valid_until IS NULL
+                      AND f.relation IN ['current_status', 'recent_concern', 'key_event', 'cares_most_about']
+                    RETURN p.name, f.relation, t.name, f.context
+                    LIMIT 20`;
+    const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
+    const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
+    const result = spawnSync(
+      KUZU_PYTHON3,
+      [scriptPath, cypher, "{}"],
+      { encoding: "utf8", timeout: 3000 },
+    );
+    if (result.status !== 0 || !result.stdout?.trim()) return facts;
+    const rows = JSON.parse(result.stdout.trim()) as unknown[][];
+    for (const row of rows) {
+      const personName = String(row[0] ?? "");
+      const relation   = String(row[1] ?? "");
+      const targetName = String(row[2] ?? "");
+      const ctx        = String(row[3] ?? "");
+      if (!personName || !relation) continue;
+      if (!facts.has(personName)) facts.set(personName, []);
+      facts.get(personName)!.push({ relation, targetName, context: ctx });
+    }
+  } catch { /* 静默，不影响主流程 */ }
+  return facts;
+}
+
 // ── Topic-first：从 ChromaDB topics 集合语义匹配话题事实 ──────────────
 //
 // topics 集合由 distill-memories.py 写入（每条 = 某人对某话题的 Fact）。
@@ -1241,15 +1280,7 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
       }
     }
 
-    // ── Step 1b: 因果关系事实（causal_relation，MAGMA 因果维度）──────────
-    let causalBlock = "";
-    if (!isGroup) {
-      const causalFacts = queryCausalFacts(userId);
-      if (causalFacts.length > 0) {
-        const lines = causalFacts.map(cf => `• ${cf.value}${cf.context ? `：${cf.context}` : ""}`);
-        causalBlock = `【因果关系】\n${lines.join("\n")}`;
-      }
-    }
+    // ── Step 1b: 因果关系已移至 context-sources 独立注入（appendSystem），不再在 queryMemories 重复 ──
 
     // ── Step 2: 蒸馏档案（insights 集合）──────────────────────────────────
     let insightBlock = "";
@@ -1360,7 +1391,7 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
     if (timeBlock)    parts.push(timeBlock);   // 时间维度优先，最前面
     if (insightBlock) parts.push(insightBlock);
     if (topicBlock)   parts.push(topicBlock);
-    if (causalBlock)  parts.push(causalBlock);
+    // 因果关系已移至 context-sources 独立注入（appendSystem causal-facts）
     if (results.length > 0) {
       const now = new Date();
       const lines = results.map(r => {
@@ -4708,6 +4739,8 @@ const crewclawRoutingPlugin = {
     // session 级幻觉纠正缓存：agent_end 检测到工具调用幻觉时写入，
     // 下一轮 before_prompt_build 读取并注入 appendSystemContext 打断传播链，随即清除。
     const sessionPendingCorrections = new Map<string, string>();
+    // 访客隐私泄漏纠正（独立的 correction map，不与工具调用幻觉共用）
+    const sessionVisitorPrivacyCorrections = new Map<string, string>();
 
     // ── Gateway 资源池实例（插件生命周期内全局共享）──────────────────────────
     // Lucas 专属保留槽位，其余 agent 使用共享竞争槽位
@@ -5241,8 +5274,39 @@ const crewclawRoutingPlugin = {
       };
       const { prepend, appendSystem } = await buildDynamicContext(sessionParams, buildContextResolvers());
 
-      // ── L3 跨成员协调扫描（Lucas 私聊专属，访客会话跳过）────────────────────
-      if (agentId === FRONTEND_AGENT_ID && !isGroup && !isVisitorSession) {
+      // ── 主动注入：prompt 提到家庭成员时，注入该人的 Kuzu 蒸馏事实 ──────────
+      // 与 relationship-network 静态注入互补：relationship-network 按 userId 查所有关系人，
+      // 本块按 prompt 中实际提到的人动态查，更精准。访客也启用（上下文对齐）。
+      if (agentId === FRONTEND_AGENT_ID && !isGroup && kuzuEntityMapLoaded) {
+        try {
+          const promptText = event.prompt ?? "";
+          const hookEntityHits = extractEntityHits(promptText);
+          if (hookEntityHits.length > 0) {
+            const personFacts = queryPersonDistilledFacts(hookEntityHits);
+            if (personFacts.size > 0) {
+              const lines: string[] = [];
+              for (const [personName, facts] of personFacts) {
+                const factLines = facts.map(f => {
+                  const relLabel = f.relation === "current_status" ? "当前状态"
+                    : f.relation === "recent_concern" ? "近期关注"
+                    : f.relation === "key_event" ? "重要事件"
+                    : f.relation === "cares_most_about" ? "最在意"
+                    : f.relation;
+                  return `• ${personName}${relLabel}：${f.targetName}${f.context ? `（${f.context.slice(0, 80)}）` : ""}`;
+                });
+                lines.push(...factLines);
+              }
+              if (lines.length > 0) {
+                appendSystem.push(`【相关家人近况（自动匹配）】\n${lines.join("\n")}`);
+                console.log(`[ctx-inject] person facts injected: ${personFacts.size} persons, ${lines.length} facts`);
+              }
+            }
+          }
+        } catch { /* 静默 */ }
+      }
+
+      // ── L3 跨成员协调扫描（Lucas 私聊专属，访客也开放——输出侧过滤隐私）────
+      if (agentId === FRONTEND_AGENT_ID && !isGroup) {
         const crossHint = await scanCrossMemberContext(userId, event.prompt);
         if (crossHint) appendSystem.push(crossHint);
       }
@@ -5285,6 +5349,21 @@ const crewclawRoutingPlugin = {
             `上一轮你在回复里提到了"${_pendingCorrection}"，但实际上没有发出 read_file / list_files / search_codebase 工具调用。\n` +
             `**声称调用 ≠ 真实调用。如果需要读取文件或搜索代码，必须实际调用对应工具，不能在文字里描述调用过程。**\n` +
             `如需查看文件，请直接调用 read_file 或 list_files；不需要在文字里先说"我去查一下"。`
+          );
+        }
+        // 访客隐私泄漏纠正（上一轮检测到泄漏时注入）
+        const _pendingPrivacyCorrection = sessionVisitorPrivacyCorrections.get(ctx.sessionKey ?? "");
+        if (_pendingPrivacyCorrection && isVisitorSession) {
+          sessionVisitorPrivacyCorrections.delete(ctx.sessionKey ?? "");
+          appendSystem.push(
+            `【隐私边界纠正】\n` +
+            `上一轮你在回复中泄露了内部信息（${_pendingPrivacyCorrection}）。\n` +
+            `你正在和访客对话。可以正常聊家庭基本情况，但以下内容**严格不可透露**：\n` +
+            `• 家庭成员的个人规划、未公开的人生计划\n` +
+            `• 家庭成员对彼此的内部评价或私下意见\n` +
+            `• 家庭通讯渠道（具体联系方式、内部群组）\n` +
+            `• 系统架构细节（角色名称、流水线机制）\n` +
+            `被追问时，自然地转移话题。`
           );
         }
 
@@ -5377,10 +5456,10 @@ const crewclawRoutingPlugin = {
       }
 
       // ── 盲区摘要（上次蒸馏到当前 N 轮注入之间的信息真空）──────────────────
-      // 覆盖所有渠道（私聊 + 群聊），访客会话跳过（家庭盲区与访客无关）
+      // 覆盖所有渠道（私聊 + 群聊），访客也开放（上下文对齐）
       // contextSensitivity=public 渠道（群聊/广播）：只注入群聊公开内容
       // contextSensitivity=private 渠道（私聊）：注入私聊 + 群聊内容（私聊本人视角可见全部）
-      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession) {
+      if (agentId === FRONTEND_AGENT_ID) {
         try {
           // 读当前渠道的 contextSensitivity
           const audienceCfgPath2 = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config", "channel-audience.json");
@@ -5460,7 +5539,8 @@ const crewclawRoutingPlugin = {
       // 三类抽象：single（单人）/ multiple（多人，已知成员）/ broadcast（广播，不特定）
       // 实例层：channel-audience.json 配置各渠道映射，新渠道只加配置不改代码
       // membersSource=family_members：从家人 inject.md 动态解析，成员增减自动更新
-      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession) {
+      // 访客也启用（上下文对齐——让 Lucas 保持一致的渠道自觉）
+      if (agentId === FRONTEND_AGENT_ID) {
         try {
           const audienceCfgPath = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config", "channel-audience.json");
           if (existsSync(audienceCfgPath)) {
@@ -5550,8 +5630,8 @@ const crewclawRoutingPlugin = {
       // ── 方案B：记忆意图检测 → 基础设施层强制补充检索 ──────────────────────────
       // 当检测到记忆召回意图词时，不等 Lucas 判断是否调用 recall_memory，
       // 在注入层直接额外检索 6 条相关记录并注入——把「是否查记忆」从模型层下沉到基础设施层。
-      // 触发条件：Lucas 私聊/群聊 + 非访客 + 消息含明确召回意图
-      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession) {
+      // 触发条件：Lucas 私聊/群聊 + 消息含明确召回意图（访客也开放，上下文对齐）
+      if (agentId === FRONTEND_AGENT_ID) {
         const MEMORY_INTENT_RE = /记得|还记得|你记得|之前说过|我说过|你说过|上次说|上次提|上次聊|有没有记|记忆里|相关记忆|回忆一下|帮我找/;
         const cleanPrompt = sessionPrompt.get(ctx.sessionKey ?? "") ?? (event.prompt ?? "");
         if (MEMORY_INTENT_RE.test(cleanPrompt)) {
@@ -5596,37 +5676,10 @@ const crewclawRoutingPlugin = {
         }
       }
 
-      // ── 话题命中时 Kuzu Fact 动态置顶（分层上下文·最相关内容优先）─────────────
-      // 与 MEMORY_INTENT_RE 互补：MEMORY_INTENT_RE 检测「回忆意图」，这里检测「当前话题相关性」。
-      // 当消息高度命中已知话题时，主动 pin 该话题的 Kuzu Fact，让模型在最近上下文看到。
-      // 触发条件：Lucas 私聊 + 非访客 + 话题匹配置信度 > 0.82
-      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession && !isGroup) {
-        const topicPrompt = sessionPrompt.get(ctx.sessionKey ?? "") ?? (event.prompt ?? "");
-        try {
-          const topicEmbedding = await embedText(topicPrompt.slice(0, 300));
-          const relevantTopics = await queryRelevantTopics(topicEmbedding, userId);
-          // queryRelevantTopics 内部限 5 条且按相关度排序，取前 3 注入即可
-          const highConfTopics = relevantTopics.slice(0, 3);
-          if (highConfTopics.length > 0) {
-            const topicLines = highConfTopics.map(t => {
-              const label = t.relation === "shared_activity" ? "一起做过"
-                : t.relation === "active_thread" ? "进行中"
-                : t.relation === "has_pattern" ? "行为规律" : t.relation;
-              return `• [${label}] ${t.topicName}${t.context ? `：${t.context.slice(0, 100)}` : ""}`;
-            });
-            appendSystem.push(
-              `【相关图谱事实（自动匹配）】\n` +
-              topicLines.join("\n") +
-              "\n——如需完整详情可调 recall_memory"
-            );
-          }
-        } catch { /* 静默处理，不影响主流程 */ }
-      }
-
       // ── 开发需求快捷路径识别（确定性 Skill 前置）──────────────────────────────
       // 检测用户明确的开发需求信号 → appendSystem 指引 Lucas 直接走工具路径
       // 减少一轮「Lucas 确认是否是开发需求」的澄清，把判断从模型层下沉到基础设施层
-      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession) {
+      if (agentId === FRONTEND_AGENT_ID) {
         const devPrompt = sessionPrompt.get(ctx.sessionKey ?? "") ?? (event.prompt ?? "");
         const DEV_SHORTCUT_RE = /(直接|马上|立刻|帮我)(开发|实现|做一下|搞一下|写一下|建一个).{0,40}(功能|需求|页面|接口|工具)|(^|\n)(开发需求|提交需求|新需求)[:：]/;
         if (DEV_SHORTCUT_RE.test(devPrompt.trim())) {
@@ -5641,8 +5694,8 @@ const crewclawRoutingPlugin = {
       // ── Loop 1：外部知识感知提醒（主动路由给 Andy）──────────────────────────
       // 检测对方分享外部知识/洞察时，提醒 Lucas 考虑调用 share_with_andy。
       // 不强制——Lucas 自主判断是否值得系统消化；只是把这个决策点主动推到视野里。
-      // 触发条件：Lucas 私聊 + 非访客 + 非群聊 + 消息含外部知识分享信号
-      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession && !isGroup) {
+      // 触发条件：Lucas 私聊 + 非群聊 + 消息含外部知识分享信号（访客也开放，上下文对齐）
+      if (agentId === FRONTEND_AGENT_ID && !isGroup) {
         const kPrompt = sessionPrompt.get(ctx.sessionKey ?? "") ?? (event.prompt ?? "");
         const KNOWLEDGE_SHARE_RE = /(分享|转发).{0,20}(文章|资料|研究|论文|报告|教程|知识)|(这篇|这份|这个).{0,10}(文章|资料|内容)|(领域|专业|行业).{0,10}(知识|经验|洞察|见解)|系统.{0,15}(能不能|可以|支持|边界|局限)|值得(了解|学习|关注)/;
         if (KNOWLEDGE_SHARE_RE.test(kPrompt)) {
@@ -5655,10 +5708,10 @@ const crewclawRoutingPlugin = {
       }
 
       // ── 会话开口当前状态感知（进行中任务注入）────────────────────────────────
-      // Lucas 私聊 + 非访客时，检查是否有正在进行的开发任务并注入状态。
+      // Lucas 私聊时，检查是否有正在进行的开发任务并注入状态。
       // 让 Lucas 在对话开头就知道「这个人有任务在跑」，无需等对方主动问。
-      // 只注入与当前用户相关的任务（submittedBy 规范化后比对），不泄漏其他家人的任务。
-      if (agentId === FRONTEND_AGENT_ID && !isVisitorSession && !isGroup) {
+      // 只注入与当前用户相关的任务（submittedBy 规范化后比对），不泄漏其他人的任务。
+      if (agentId === FRONTEND_AGENT_ID && !isGroup) {
         try {
           const allTasks = readTaskRegistry().filter(
             e => normalizeUserId(e.submittedBy) === userId,
@@ -6101,6 +6154,46 @@ const crewclawRoutingPlugin = {
         }
       }
 
+      // ── 访客隐私泄漏检测（Lucas 专属，输出侧过滤）──────────────────────────
+      // 上下文对访客全面开放（输入侧不限制），但输出侧做代码级隐私拦截。
+      // 检测 Lucas 对访客的响应中是否包含家庭隐私信息，检测到则：
+      //   1. 写入 sessionPendingCorrections（下一轮注入纠正）
+      //   2. 标记本轮响应（阻止写入 ChromaDB，防止隐私固化到记忆库）
+      let _visitorPrivacyLeakDetected = false;
+      if (ctx.agentId === FRONTEND_AGENT_ID && isVisitorSession && !isTestSession && lastAssistant) {
+        // 从配置文件加载隐私过滤 pattern（实例层管理，框架层执行）
+        let _privacyPatterns: { pattern: string; label: string }[] = [];
+        try {
+          const _vrPath = join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config", "visitor-restrictions.json");
+          if (existsSync(_vrPath)) {
+            const _vrCfg = JSON.parse(readFileSync(_vrPath, "utf8")) as { privacyPatterns?: { pattern: string; label: string }[] };
+            _privacyPatterns = _vrCfg.privacyPatterns ?? [];
+          }
+        } catch { /* 配置加载失败，降级为空 */ }
+        const _leakHit = _privacyPatterns.find(p => new RegExp(p.pattern).test(lastAssistant));
+        if (_leakHit) {
+          _visitorPrivacyLeakDetected = true;
+          // 写入纠正（下一轮注入，独立于工具调用幻觉）
+          sessionVisitorPrivacyCorrections.set(
+            ctx.sessionKey ?? "",
+            `访客隐私泄漏：${_leakHit.label}（${_leakHit.pattern}）`,
+          );
+          console.log(`[visitor-privacy] leak detected: label="${_leakHit.label}" preview="${lastAssistant.slice(0, 80)}"`);
+          // 记录审计日志
+          try {
+            const _privacyLogPath = join(PROJECT_ROOT, "data", "visitor-privacy-audit.jsonl");
+            appendJsonl(_privacyLogPath, {
+              t: nowCST(),
+              sessionKey: ctx.sessionKey,
+              userId,
+              pattern: _leakHit.pattern,
+              label: _leakHit.label,
+              preview: lastAssistant.slice(0, 200),
+            });
+          } catch { /* 静默 */ }
+        }
+      }
+
       // ── 自动结晶信号：Lucas 多工具组合 → skill-candidates（基础设施层，不依赖模型判断）──
       // 触发条件：Lucas 在一次请求中调用了 ≥2 个不同工具（排除纯查询工具 recall_memory）
       // 去重策略：同一 comboKey 在 24h 内只记录一次，防止高频请求撑爆文件
@@ -6222,8 +6315,8 @@ const crewclawRoutingPlugin = {
         const convPrompt = actualPrompt;
         // 工具调用幻觉响应：跳过 ChromaDB 写入，防止幻觉内容污染记忆库
         // 幻觉若进入 ChromaDB，后续召回时会强化错误，形成持久化幻觉循环
-        if (_toolCallHallucinationDetected) {
-          // skip: tool_call_hallucination detected, not writing to conversations
+        if (_toolCallHallucinationDetected || _visitorPrivacyLeakDetected) {
+          // skip: tool_call_hallucination or visitor privacy leak detected, not writing to conversations
         } else
         void writeMemory(convPrompt, lastAssistant, {
           fromId:        convFromId,

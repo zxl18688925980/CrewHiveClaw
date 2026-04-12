@@ -1,5 +1,5 @@
 {
-  "_comment": "HomeAI 实例层配置：访客会话工具禁令。基础设施层强制拦截（before_tool_call），不依赖模型合规。新增/调整限制在此文件修改，不改框架代码。",
+  "_comment": "实例层配置：访客会话限制。框架层从 blockedTools 拦截工具调用，从 privacyPatterns 做输出级隐私过滤。新增/调整限制在此文件修改，不改框架代码。",
   "blockedTools": [
     "send_message",
     "send_voice",
@@ -14,5 +14,14 @@
     "cancel_task",
     "report_bug",
     "gen_visitor_invite"
+  ],
+  "privacyPatterns": [
+    { "pattern": "创业(想法|计划|打算|项目)", "label": "创业规划" },
+    { "pattern": "职业(转型|规划|变动)", "label": "职业规划" },
+    { "pattern": "变现(计划|想法|方案)", "label": "变现计划" },
+    { "pattern": "内部(评价|意见|看法|讨论)", "label": "内部评价" },
+    { "pattern": "Andy|Lisa|流水线|蒸馏|知识图谱|Kuzu|ChromaDB", "label": "系统架构" },
+    { "pattern": "企业微信(账号|内部|群组)", "label": "内部通讯" },
+    { "pattern": "不要(告诉|说|透露)", "label": "保密事项" }
   ]
 }

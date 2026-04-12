@@ -136,53 +136,55 @@ export const contextSources: Record<string, ContextSource[]> = {
     },
 
     // 近期对话历史（按 userId 过滤）
+    // v650 调整为 append-system：遵循 Lucas 上下文优先级
+    // 自我认知 > 受众认知 > 最近对话 > 回忆/背景
+    // prepend 留给受众认知（user-profile），回忆类内容放 appendSystem（在消息之后）
     {
       source: "chromadb", id: "conversations",
       collection: "conversations", queryMode: "by-user",
-      topK: 5, label: "近期对话", inject: "prepend",
+      topK: 5, label: "近期对话", inject: "append-system",
     },
 
-    // Lucas 自己的决策记忆（过渡态：Lucas pattern 节点写入 Kuzu 后，由 agent-patterns 接管）
+    // Lucas 自己的决策记忆
     {
       source: "chromadb", id: "decision-memory",
       collection: "decisions", queryMode: "semantic", agentFilter: "lucas",
-      topK: 3, label: "决策记忆", inject: "prepend",
+      topK: 3, label: "决策记忆", inject: "append-system",
     },
 
     // 对家人的未完成承诺
     {
       source: "chromadb", id: "pending-commitments",
       collection: "decisions", queryMode: "pending-commitments",
-      topK: 5, label: "未完成承诺", inject: "prepend",
+      topK: 5, label: "未完成承诺", inject: "append-system",
     },
 
     // 进行中需求
     {
       source: "chromadb", id: "pending-requirements",
       collection: "requirements", queryMode: "pending-requirements",
-      topK: 5, label: "进行中需求", inject: "prepend",
+      topK: 5, label: "进行中需求", inject: "append-system",
     },
 
-    // 团队近期动态：Lucas 感知 Andy/Lisa 最近在做什么（开发进展、Spec 设计、实现结果）
-    // 让 Lucas 和 Andy 之间信息对称——Lucas 知道幕后团队的工作状态，协作时不会重复提需求
+    // 团队近期动态
     {
       source: "chromadb", id: "agent-interactions",
       collection: "agent_interactions", queryMode: "agent-interactions", agentFilter: "lucas",
-      topK: 3, label: "团队近期动态", inject: "prepend",
+      topK: 3, label: "团队近期动态", inject: "append-system",
     },
 
-    // 家庭行为规律（过渡态：Lucas behavior pattern 节点写入 Kuzu 后，由 agent-patterns 接管）
+    // 家庭行为规律
     {
       source: "chromadb", id: "behavior-patterns",
       collection: "behavior_patterns", queryMode: "semantic",
-      topK: 3, label: "行为规律", inject: "prepend",
+      topK: 3, label: "行为规律", inject: "append-system",
     },
 
-    // 家庭知识（过渡态：家庭知识侧 Kuzu schema 设计后接管）
+    // 家庭知识
     {
       source: "chromadb", id: "family-knowledge",
       collection: "family_knowledge", queryMode: "semantic",
-      topK: 3, label: "家庭知识", inject: "prepend",
+      topK: 3, label: "家庭知识", inject: "append-system",
     },
 
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）
@@ -239,7 +241,7 @@ export const contextSources: Record<string, ContextSource[]> = {
                RETURN e.name, f.context, f.valid_until
                ORDER BY f.valid_until ASC LIMIT $topK`,
       params: ["userId"],
-      topK: 5, label: "待跟进事项", inject: "prepend",
+      topK: 5, label: "待跟进事项", inject: "append-system",
       ready: true,
     },
 
@@ -253,7 +255,7 @@ export const contextSources: Record<string, ContextSource[]> = {
                RETURN t.name, f.context
                ORDER BY f.valid_from DESC LIMIT $topK`,
       params: ["userId"],
-      topK: 5, label: "当前活跃话题", inject: "prepend",
+      topK: 5, label: "当前活跃话题", inject: "append-system",
       ready: true,
     },
 
@@ -287,6 +289,20 @@ export const contextSources: Record<string, ContextSource[]> = {
                LIMIT $topK`,
       params: ["userId"],
       topK: 8, label: "话题共鸣", inject: "append-system",
+      ready: true,
+    },
+
+    // Kuzu：因果关系事实（causal_relation，MAGMA 因果维度独立注入）
+    // queryMemories 内已有因果注入（prepend），此处为独立 appendSystem 注入，
+    // 确保即使 queryMemories 未命中，因果关系仍然可用
+    {
+      source: "kuzu", id: "causal-facts",
+      cypher: `MATCH (p:Entity {id: $userId})-[f:Fact {relation: 'causal_relation'}]->(t:Entity)
+               WHERE f.valid_until IS NULL
+               RETURN t.name, f.context, f.confidence
+               ORDER BY f.confidence DESC LIMIT $topK`,
+      params: ["userId"],
+      topK: 8, label: "因果关系", inject: "append-system",
       ready: true,
     },
   ],
@@ -458,6 +474,14 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "code-history",
       collection: "code_history", queryMode: "code-history",
       topK: 5, label: "实现历史", inject: "prepend",
+    },
+
+    // 代码库洞察（集体进化：Lisa opencode 结束后写入，Andy 写 spec 时参考）
+    {
+      source: "chromadb", id: "codebase-patterns",
+      collection: "codebase_patterns", queryMode: "codebase-patterns",
+      topK: 3, label: "代码库洞察", inject: "prepend",
+      ready: true,
     },
 
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）
