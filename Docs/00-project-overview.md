@@ -1272,8 +1272,8 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `evaluate_l0`          | 基础设施健康：进程存活状态 + 软硬件性能指标（磁盘空间/内存占用/模型推理延迟/ChromaDB·Kuzu 响应时间）+ 定时任务执行健康 + 数据层健康（Kuzu Fact 总数/ChromaDB 对话量/家人档案新鲜度） |
 | `evaluate_l1`          | 行为质量评估（两大核心维度）：①记忆质量——上下文组装完整性 + 关键信息 recall 准确率（待评测方案落地后量化）②输出质量——幻觉率/格式合规/空回复 + 人格化程度（是否把握住做人的感觉）；附带 Andy/Lisa 活跃度 |
 | `evaluate_l2`          | 系统自进化评估（三个原始诉求）：①开发流水线成效——Andy 方案质量、Lisa 实现成功率/一次通过率、端到端交付家人满意度 ②自进化机制运转——蒸馏管道是否在产出、结晶是否在发生、同类错误是否在减少（看轨迹而非快照）③喂养成效——投喂的外部参考/工程笔记/纠正信号是否被提炼进系统知识，L0~L2 得分趋势是否持续上升 |
-| `evaluate_l3`          | 组织协作进化状态：Kuzu 协作边（co_discusses / requests_from / supports / role_in_context）+ active_thread、shadow_interactions 演进环记录数、访客影子状态、成员增强效果（**带着组织的人一起飞**） |
-| `evaluate_l4`          | 深度学习进度：dpo-candidates 积累量/趋势、本地模型就绪度、对外依赖降低程度（本地模型替代云端比例、规则文件消减进度——**对外依赖越来越少**） |
+| `evaluate_l3`          | 组织协作进化状态：Kuzu 协作边（co_discusses / requests_from / supports / role_in_context）+ active_thread、shadow_interactions 演进环记录数、访客影子状态（组织运作是否越来越优化） |
+| `evaluate_l4`          | 深度学习进度：dpo-candidates 积累量/趋势、本地模型就绪度、规则文件消减进度（系统内化能力是否越来越强） |
 | `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`），业主发「系统评估」即触发 |
 | `update_heartbeat`     | 追加监控观察（`append_observation`）/ 标记日报已发（`mark_daily_sent`，清空待汇总观察）|
 | `log_improvement_task` | 记录监控发现的系统改进点到 `data/main-pending-tasks.json`；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
