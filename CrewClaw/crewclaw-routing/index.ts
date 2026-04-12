@@ -6195,17 +6195,17 @@ const crewclawRoutingPlugin = {
       }
 
       // ── 自动结晶信号：Lucas 多工具组合 → skill-candidates（基础设施层，不依赖模型判断）──
-      // 触发条件：Lucas 在一次请求中调用了 ≥2 个不同工具（排除纯查询工具 recall_memory）
-      // 去重策略：同一 comboKey 在 24h 内只记录一次，防止高频请求撑爆文件
+      // 触发条件：Lucas 在一次请求中调用了 ≥3 个不同行动工具（排除查询类和常见工作流组合）
+      // 去重策略：同一 comboKey 在 7 天内只记录一次，防止高频请求撑爆文件
       if (ctx.agentId === FRONTEND_AGENT_ID && !isTestSession) {
-        const LOOKUP_ONLY_TOOLS = new Set(["recall_memory", "query_member_profile"]);
+        const LOOKUP_ONLY_TOOLS = new Set(["recall_memory", "query_member_profile", "list_active_tasks"]);
         const actionTools = Object.keys(toolUseCounts).filter(t => !LOOKUP_ONLY_TOOLS.has(t));
-        if (actionTools.length >= 2) {
+        if (actionTools.length >= 3) {
           const comboKey = [...actionTools].sort().join("+");
           const skillCandidatesFile = join(PROJECT_ROOT, "data/learning/skill-candidates.jsonl");
-          // 24h 去重：读最近记录，同 comboKey 24h 内不重复写
+          // 7 天去重：同 comboKey 7 天内不重复写
           const existing = readJsonlEntries(skillCandidatesFile);
-          const cutoff = Date.now() - 24 * 3_600_000;
+          const cutoff = Date.now() - 7 * 24 * 3_600_000;
           const recentDup = existing.some((e: Record<string, unknown>) =>
             e.source === "auto_detect" &&
             e.pattern_name === `工具组合：${comboKey}` &&

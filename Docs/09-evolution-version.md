@@ -2093,3 +2093,21 @@ L0~L4 全部落地：
 - 告警等级从回复内容自动判定
 
 **Andy ARCH.md 同步更新**：Lx 新定义 + Kuzu relation 枚举（8→14+种）+ 模型配置（GLM-5→GLM-5.1）
+
+### v651 · 2026-04-12 · Andy HEARTBEAT 预计算补全 + 系统思考者转型 + skill-candidates 积压清理
+
+**Andy HEARTBEAT 预计算补全**：
+- wecom/index.js 新增预计算：behavior_patterns（ChromaDB, agent=andy, limit=20）、knowledge_injection（decisions, type=knowledge_injection, limit=10）、学习状态（andy-learning-state.json）
+- HEARTBEAT.md 检查 5（行为规则自检）和检查 7（知识注入消化）改为读取预计算数据，不再依赖 exec 查 ChromaDB
+- 绕过 OpenClaw exec allowlist 限制，Andy HEARTBEAT 不再因 exec 权限失败
+
+**Andy 系统思考者转型**：
+- 新增 HEARTBEAT 检查 8「主动学习——设计来时路消化」：每 7 天读一篇 Obsidian `04-系统工程师关键决策记录/`，提炼设计洞察写入 decisions（source=proactive_learning）
+- SOUL.md 新增信念「理解设计来时路，才能写出有判断力的 spec」
+- AGENTS.md 增强行为新增「理解设计来时路」原则
+- 学习状态预计算注入 HEARTBEAT prompt（已读文件列表 + 距上次天数）
+
+**skill-candidates 积压清理**：
+- 87 条 auto_detect 噪声全部标记 rejected（75 种不重复组合，最高频仅 4 次，均为正常工作流）
+- auto_detect 门槛提高：≥2 工具 → ≥3 工具，去重窗口 24h → 7 天，新增排除 list_active_tasks
+- 预期积压速率从每天 ~15 条降到接近零

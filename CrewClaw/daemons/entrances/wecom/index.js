@@ -5991,6 +5991,85 @@ os._exit(0)
     let andyHeartbeatContent = '';
     try { andyHeartbeatContent = fs.readFileSync(andyHbPath, 'utf8'); } catch {}
 
+    // 预计算4：behavior_patterns（检查 5 需要的 Andy 行为模式）
+    let precomputedBehaviorPatterns = '无近期 behavior_patterns 数据';
+    try {
+      const bpColResp = await fetch(`${CHROMA_API_BASE}/behavior_patterns`);
+      if (bpColResp.ok) {
+        const { id: bpColId } = await bpColResp.json();
+        const bpResp = await fetch(`${CHROMA_API_BASE}/${bpColId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            where: { agent: { '$eq': 'andy' } },
+            include: ['documents', 'metadatas'],
+            limit: 20,
+          }),
+        });
+        if (bpResp.ok) {
+          const bpData = await bpResp.json();
+          const bpDocs = bpData.documents || [];
+          const bpMetas = bpData.metadatas || [];
+          if (bpDocs.length > 0) {
+            precomputedBehaviorPatterns = bpDocs.map((doc, i) => {
+              const m = bpMetas[i] || {};
+              return `- [${m.pattern_type || 'unknown'}] ${(doc || '').slice(0, 120)}（${(m.timestamp || '').slice(0, 10)}）`;
+            }).join('\n');
+          }
+        }
+      }
+    } catch (e) {
+      precomputedBehaviorPatterns = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
+    // 预计算5：knowledge_injection（检查 7 需要的近期知识注入）
+    let precomputedKnowledgeInjections = '无近期知识注入';
+    try {
+      const decColResp = await fetch(`${CHROMA_API_BASE}/decisions`);
+      if (decColResp.ok) {
+        const { id: decColId } = await decColResp.json();
+        const kiResp = await fetch(`${CHROMA_API_BASE}/${decColId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            where: { '$and': [{ agent: { '$eq': 'andy' } }, { type: { '$eq': 'knowledge_injection' } }] },
+            include: ['documents', 'metadatas'],
+            limit: 10,
+          }),
+        });
+        if (kiResp.ok) {
+          const kiData = await kiResp.json();
+          const kiDocs = kiData.documents || [];
+          const kiMetas = kiData.metadatas || [];
+          if (kiDocs.length > 0) {
+            precomputedKnowledgeInjections = kiDocs.map((doc, i) => {
+              const m = kiMetas[i] || {};
+              return `- [${(m.timestamp || '').slice(0, 10)}] ${m.topic || '无主题'}：${(doc || '').slice(0, 150)}`;
+            }).join('\n');
+          }
+        }
+      }
+    } catch (e) {
+      precomputedKnowledgeInjections = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
+    // 预计算6：主动学习状态（检查 9 需要的学习进度）
+    let precomputedLearningState = '无学习记录（首次学习）';
+    try {
+      const learningStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-learning-state.json');
+      if (fs.existsSync(learningStatePath)) {
+        const ls = JSON.parse(fs.readFileSync(learningStatePath, 'utf8'));
+        const lastStudy = ls.lastStudyAt || '从未';
+        const readFiles = ls.readFiles || [];
+        const daysSince = ls.lastStudyAt
+          ? Math.floor((Date.now() - new Date(ls.lastStudyAt).getTime()) / 86400000)
+          : Infinity;
+        precomputedLearningState = `上次学习：${lastStudy}（${daysSince === Infinity ? '从未学习' : `${daysSince} 天前`}）\n已读文件（${readFiles.length} 篇）：${readFiles.length > 0 ? readFiles.join('、') : '无'}\n${daysSince >= 7 ? '⚡ 距上次学习已超 7 天，建议本轮触发学习' : '距上次学习不足 7 天，可跳过'}`;
+      }
+    } catch (e) {
+      precomputedLearningState = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
     const heartbeatPrompt = `[ANDY HEARTBEAT ${now}]
 
 ${andyHeartbeatContent}
@@ -6010,7 +6089,16 @@ ${precomputedSkillCandidates}
 当前 skill-candidates pending 数量：${precomputedSkillCandidates.startsWith('无') ? 0 : precomputedSkillCandidates.split('\n').filter(l => l.startsWith('-')).length}
 最后 HEARTBEAT 巡检时间：${now}
 
-请按 HEARTBEAT.md 中的检查流程执行巡检，重点关注检查 0 前置（目标状态更新）和检查 1、2 的结晶候选。`;
+【预计算数据 - 检查 4：behavior_patterns（Andy 近期行为模式）】
+${precomputedBehaviorPatterns}
+
+【预计算数据 - 检查 5：knowledge_injection（近期知识注入）】
+${precomputedKnowledgeInjections}
+
+【预计算数据 - 检查 8：主动学习状态】
+${precomputedLearningState}
+
+请按 HEARTBEAT.md 中的检查流程执行巡检，重点关注检查 0 前置（目标状态更新）、检查 1/2 的结晶候选、以及检查 5（行为规则自检）和检查 7（知识注入消化）——这两个检查的数据已预计算注入，直接读取即可，无需 exec 查 ChromaDB。检查 8（主动学习）的状态也已预计算，触发条件满足时用 read_file 读决策记录即可。`;
 
     // 调用 Andy（独立 session，不影响正常流水线）
     logger.info('Andy HEARTBEAT：发送巡检 prompt', { patternCount: precomputedPatterns === '无高置信度候选（confidence >= 0.8）' ? 0 : 'N/A' });
