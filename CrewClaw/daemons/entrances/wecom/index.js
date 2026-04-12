@@ -2098,12 +2098,12 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l0',
-    description: '评估 L0（认知基础设施）：gateway-watchdog 是否在 PM2、上次蒸馏时间估算、Kuzu 知识图谱 Fact 节点总数、ChromaDB 对话记录总量。返回 L0 健康评分和关键指标。',
+    description: '评估 L0（基础设施——稳不稳）：PM2 进程状态、软硬件性能指标（磁盘空间/内存/Gateway延迟/ChromaDB延迟）、Kuzu 知识图谱、ChromaDB 对话总量、家人档案新鲜度、定时任务执行健康。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_l1',
-    description: '评估 L1（Agent 人格化质量）：Lucas 最近对话质量扫描（格式/幻觉/空回复）、Andy/Lisa 最近 agent_interactions 抽查、家人档案注入文件存在性检查、Andy/Lisa 蒸馏产出和 Kuzu 模式积累检查。返回 L1 各维度评分。',
+    description: '评估 L1（行为质量——好不好）：两大维度——①记忆质量（上下文组装完整性 + recall 准确率）②输出质量（幻觉 + 人格化程度）。含 Lucas 质量扫描、Andy/Lisa 活跃度、档案注入完整性、模式积累。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -2119,17 +2119,17 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l2',
-    description: '评估 L2（个体进化循环）：skill-candidates.jsonl 候选信号、dpo-candidates.jsonl 负例、Andy HEARTBEAT 上次巡检时间、opencode 近期成功率和 spec 吻合率、codebase_patterns 积累量、三角色 Skill 总数。',
+    description: '评估 L2（系统自进化——自身能力越来越强）：三个原始诉求——①开发流水线成效（opencode 成功率、spec 质量）②自进化机制运转（蒸馏/结晶/同类错误减少）③喂养成效（投喂内容提炼、L0~L2 得分趋势）。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_l3',
-    description: '评估 L3（组织协作）：Kuzu 协作边数量（co_discusses/requests_from/supports/role_in_context）、active_thread 线索、shadow_interactions 演进环记录、访客影子 Registry 状态（active/dormant/archived）、关系蒸馏日志最近运行时间。',
+    description: '评估 L3（组织协作进化——组织运作越来越优化）：协作边积累、演进环记录、访客影子生命周期、关系蒸馏运行状态、成员增强效果。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_l4',
-    description: '评估 L4（行为内化进度）：按 pattern_type 统计 dpo-candidates.jsonl 积累量（距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势（判断 L2 干预是否有效收敛）、Lucas AGENTS.md 幻觉禁令条数（当前 L2 临时拦截状态）、本地模型就绪状态（Qwen2.5-Coder-32B-4bit 已可用，Gemma 4 为进化终态）。',
+    description: '评估 L4（内化能力是否越来越强）：DPO 信号积累+趋势、本地模型就绪状态、模型能力评估（调用 evaluate_local_model 获取量化评分）。系统内化能力越强，对外依赖越少。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -2834,7 +2834,92 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // 6. Kuzu 协作边数量（L3 数据就绪信号，co_discusses/requests_from/supports/role_in_context）
+    // 6. 软硬件性能指标
+    try {
+      // 6a. 磁盘空间
+      const dfRaw = execSync(`df -h "${HOMEAI_ROOT}"`, { encoding: 'utf8', timeout: 5000 });
+      const dfLine = dfRaw.split('\n').find(l => l.includes('/'));
+      if (dfLine) {
+        const parts = dfLine.trim().split(/\s+/);
+        const usePct = parts[parts.length - 1]; // e.g. 85%
+        const avail = parts[parts.length - 2]; // e.g. 50Gi
+        const pct = parseInt(usePct);
+        if (pct > 95) {
+          results.push(`❌ 磁盘空间：已用 ${usePct}，仅剩 ${avail}（严重不足）`);
+          score = '❌';
+        } else if (pct > 85) {
+          results.push(`⚠️ 磁盘空间：已用 ${usePct}，剩余 ${avail}`);
+          if (score === '✅') score = '⚠️';
+        } else {
+          results.push(`✅ 磁盘空间：已用 ${usePct}，剩余 ${avail}`);
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ 磁盘空间检查失败：${e.message.slice(0, 40)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    try {
+      // 6b. 内存使用（macOS vm_stat）
+      const vmRaw = execSync('vm_stat', { encoding: 'utf8', timeout: 5000 });
+      const freeMatch = vmRaw.match(/Pages free:\s+(\d+)/);
+      const activeMatch = vmRaw.match(/Pages active:\s+(\d+)/);
+      const inactiveMatch = vmRaw.match(/Pages inactive:\s+(\d+)/);
+      if (freeMatch && activeMatch) {
+        const pageSize = 16384; // macOS ARM64
+        const free = parseInt(freeMatch[1]) * pageSize;
+        const active = parseInt(activeMatch[1]) * pageSize;
+        const total = free + active + (inactiveMatch ? parseInt(inactiveMatch[1]) * pageSize : 0);
+        const usedPct = Math.round(active / total * 100);
+        const freeGB = (free / 1073741824).toFixed(1);
+        if (usedPct > 90) {
+          results.push(`⚠️ 内存：活跃 ${usedPct}%，空闲 ${freeGB}GB（偏高）`);
+          if (score === '✅') score = '⚠️';
+        } else {
+          results.push(`✅ 内存：活跃 ${usedPct}%，空闲 ${freeGB}GB`);
+        }
+      }
+    } catch (e) {
+      // vm_stat 非关键，静默跳过
+    }
+
+    try {
+      // 6c. Gateway 响应延迟
+      const gwStart = Date.now();
+      const gwResp = await fetch('http://localhost:18789/health', { signal: AbortSignal.timeout(10000) });
+      const gwMs = Date.now() - gwStart;
+      if (!gwResp.ok) {
+        results.push(`❌ Gateway 延迟：响应 ${gwResp.status}（${gwMs}ms）`);
+        score = '❌';
+      } else if (gwMs > 3000) {
+        results.push(`⚠️ Gateway 延迟：${gwMs}ms（偏慢）`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        results.push(`✅ Gateway 延迟：${gwMs}ms`);
+      }
+    } catch (e) {
+      // Gateway 不可达已在 scan_pipeline_health 检查，此处不重复计分
+    }
+
+    try {
+      // 6d. ChromaDB 响应延迟
+      const chrStart = Date.now();
+      const chrResp = await fetch(`${CHROMA_API_BASE}/heartbeat`, { signal: AbortSignal.timeout(10000) });
+      const chrMs = Date.now() - chrStart;
+      if (!chrResp.ok) {
+        results.push(`⚠️ ChromaDB 延迟：响应 ${chrResp.status}（${chrMs}ms）`);
+        if (score === '✅') score = '⚠️';
+      } else if (chrMs > 2000) {
+        results.push(`⚠️ ChromaDB 延迟：${chrMs}ms（偏慢）`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        results.push(`✅ ChromaDB 延迟：${chrMs}ms`);
+      }
+    } catch (e) {
+      // ChromaDB 不可达已在其他检查覆盖
+    }
+
+    // 7. Kuzu 协作边数量（L3 数据就绪信号，co_discusses/requests_from/supports/role_in_context）
     const collabScript = `
 import sys, json, os
 sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
@@ -3109,7 +3194,9 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    return `**L1 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
+    return `**L1 评估 ${score}**\n` +
+      `【记忆质量】\n` + results.filter(r => r.includes('档案') || r.includes('模式积累')).map(r => `  ${r}`).join('\n') + '\n' +
+      `【输出质量】\n` + results.filter(r => !r.includes('档案') && !r.includes('模式积累')).map(r => `  ${r}`).join('\n');
   }
 
   if (toolName === 'inspect_agent_context') {
@@ -3348,7 +3435,15 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    return `**L2 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
+    // 按三个原始诉求分组输出
+    const pipeline = results.filter(r => r.includes('opencode') || r.includes('Skill'));
+    const mechanism = results.filter(r => r.includes('skill-candidates') || r.includes('dpo') || r.includes('HEARTBEAT') || r.includes('codebase_patterns'));
+    const feeding = results.filter(r => !pipeline.includes(r) && !mechanism.includes(r));
+
+    return `**L2 评估 ${score}**\n` +
+      `【开发流水线成效】\n` + (pipeline.length ? pipeline.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据') + '\n' +
+      `【自进化机制运转】\n` + (mechanism.length ? mechanism.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据') + '\n' +
+      `【喂养成效】\n` + (feeding.length ? feeding.map(r => `  ${r}`).join('\n') : '  ⚪ 待评测方案落地后量化');
   }
 
   if (toolName === 'evaluate_l3') {
@@ -3442,6 +3537,22 @@ os._exit(0)
       }
     } catch (e) {
       results.push(`⚠️ 关系蒸馏日志读取失败：${e.message.slice(0, 60)}`);
+    }
+
+    // 5. 成员增强效果（inject.md 中协作关系节是否存在）
+    try {
+      const familyDir = path.join(process.env.HOME, '.openclaw', 'workspace-lucas', 'family');
+      if (fs.existsSync(familyDir)) {
+        const injects = fs.readdirSync(familyDir).filter(f => f.endsWith('.inject.md'));
+        let withCollab = 0;
+        for (const inj of injects) {
+          const content = fs.readFileSync(path.join(familyDir, inj), 'utf8');
+          if (content.includes('组织协作关系') || content.includes('协作边') || content.includes('co_discusses')) withCollab++;
+        }
+        results.push(`${withCollab > 0 ? '✅' : '⚪'} 成员增强效果：${withCollab}/${injects.length} 个档案含协作关系信息`);
+      }
+    } catch (e) {
+      // 非关键
     }
 
     return `**L3 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
@@ -3573,6 +3684,9 @@ os._exit(0)
       results.push(`⚠️ 本地模型检查异常：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
+
+    // 4. 模型能力评估提示（evaluate_local_model 已有完整实现）
+    results.push('💡 模型能力评估：调用 evaluate_local_model 运行 8 条测试用例 × 4 维度（行为合规/人格一致性/中文质量/指令遵从），获取本地模型量化评分');
 
     return `**L4 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
