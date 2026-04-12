@@ -2174,9 +2174,14 @@ async function callGatewayAgent(
   message: string,
   timeoutMs = 300_000,
   threadId?: string,   // 可选：多轮协作线程 ID，传入后自动注入历史并写回
+  callerAgentId?: string,  // 可选：发起方 Agent ID，用于跨 Agent 通信时避免身份透传
 ): Promise<string> {
   const historyMessages = threadId ? buildAgentThreadMessages(threadId) : [];
   const messages = [...historyMessages, { role: "user", content: message }];
+
+  // 跨 Agent 通信时，用 Agent ID 作为 user，避免目标 Agent 误认为在与人类用户对话
+  // 例如 Lucas→Andy 时，Andy 看到 user=lucas 而非 ZengXiaoLong，不会称「爸爸」
+  const user = callerAgentId ? `agent:${callerAgentId}` : undefined;
 
   const resp = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
     method: "POST",
@@ -2189,6 +2194,7 @@ async function callGatewayAgent(
       model: `openclaw/${agentId}`,
       messages,
       stream: false,
+      ...(user ? { user } : {}),
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -2236,12 +2242,13 @@ async function callGatewayAgentWithRetry(
   message: string,
   timeoutMs = 300_000,
   threadId?: string,
+  callerAgentId?: string,
   maxRetries = 3,
 ): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await callGatewayAgent(agentId, message, timeoutMs, threadId);
+      return await callGatewayAgent(agentId, message, timeoutMs, threadId, callerAgentId);
     } catch (e) {
       lastError = e;
       const retryable = isRetryableError(e);
@@ -2309,7 +2316,7 @@ async function spawnParallelLisa(
 
     try {
       // 并行子任务不重试：retry 在并发上下文里会叠出更多 Lisa 会话；失败直接记录，由 Andy 决策下一步
-      const result = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, lisaPrompt, 600_000, threadId);
+      const result = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, lisaPrompt, 600_000, threadId, DESIGNER_AGENT_ID);
       writeFileSync(
         join(pipelineDir, `${taskId}.json`),
         JSON.stringify({ taskId, title, status: "completed", result, timestamp: nowCST() }, null, 2),
@@ -2593,7 +2600,7 @@ async function runAndyPipeline(params: {
       // 若 Andy 被重试 3 次，最坏情况产生 3 个并发 Andy 会话 + 3 个 Lisa 会话 + 3 个 opencode 进程。
       // 改为直接 callGatewayAgent：Andy 真正需要的时间（read+research+spec+trigger_lisa=instant）约 5~15 min，
       // 1800s 绰绰有余；超时或报错只发生一次，不会创建重复会话。
-      const andyResponse = await callGatewayAgent(DESIGNER_AGENT_ID, andyMessage, 1_800_000);
+      const andyResponse = await callGatewayAgent(DESIGNER_AGENT_ID, andyMessage, 1_800_000, undefined, FRONTEND_AGENT_ID);
       // 告知 Lucas Andy 已开始处理（知情方，Lucas 决定是否与用户沟通）
       if (params.userId && params.userId !== "unknown") {
         void callGatewayAgent(
@@ -2606,6 +2613,8 @@ async function runAndyPipeline(params: {
             `你现在知道开发进展了，根据用户状态决定是否、何时告知。`,
           ].join("\n"),
           60_000,
+          undefined,
+          DESIGNER_AGENT_ID,
         );
       }
       // 验证 Andy 实际触发了 Lisa：检查协作线程文件是否存在
@@ -2632,7 +2641,7 @@ async function runAndyPipeline(params: {
               `2. 如果你也不确定，需要家人提供更多信息 → 用人话问爸爸一个最关键的问题`,
               `3. 如果你判断是技术问题（不是信息问题）→ 调用 notify_engineer 上报，并口语告知爸爸稍等`,
             ].join("\n");
-            const lucasDecision = await callGatewayAgent(FRONTEND_AGENT_ID, lucasDecisionPrompt, 60_000);
+            const lucasDecision = await callGatewayAgent(FRONTEND_AGENT_ID, lucasDecisionPrompt, 60_000, undefined, FRONTEND_AGENT_ID);
             if (lucasDecision) {
               await pushToChannel(lucasDecision, params.userId, true);
             }
@@ -2668,7 +2677,7 @@ async function runAndyPipeline(params: {
           `请用一两句人话告诉爸爸：什么失败了、大概是什么原因（不说技术细节）、他现在能做什么（比如稍后重发、或者等我排查）。`,
           `口气自然随意，不要用 ❌ 开头。`,
         ].join("\n");
-        const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 30_000);
+        const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 30_000, undefined, FRONTEND_AGENT_ID);
         await pushToChannel(lucasVerdict, params.userId, true);
       } catch {
         await pushToChannel(
@@ -2863,6 +2872,8 @@ async function launchOpenCodeBackground(
         `如果用户在问进展，可以告知"正在实现中，稍等"；如果用户没有追问则不必主动打扰。`,
       ].join("\n"),
       20_000,
+      undefined,
+      FRONTEND_AGENT_ID,
     );
   }
 
@@ -3028,6 +3039,8 @@ async function launchOpenCodeBackground(
             `   Lucas交付：[做完了什么（家人能感知的变化）。注意事项：xxx（如无则省略）。下次这样说：xxx]`,
           ].join("\n"),
           120_000,
+          undefined,
+          FRONTEND_AGENT_ID,
         );
         // 提取 Lucas 交付简报，由 Lucas 决定沟通时机和方式
         const briefMatch = (andyVerdict ?? "").match(/Lucas交付[：:]\s*([\s\S]+?)(?:\n\n|\n[^\s]|$)/);
@@ -3068,6 +3081,8 @@ async function launchOpenCodeBackground(
                 `修复/功能已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知。`,
               ].join("\n"),
               60_000,
+              undefined,
+              FRONTEND_AGENT_ID,
             );
           }
         }
@@ -3086,6 +3101,8 @@ async function launchOpenCodeBackground(
             `用户可能在等待，你可以告知"实现遇到了技术阻塞，团队正在处理，稍等"；Andy 分析完后我会再告诉你具体结论。`,
           ].join("\n"),
           20_000,
+          undefined,
+          FRONTEND_AGENT_ID,
         );
       }
       void (async () => {
@@ -3102,6 +3119,8 @@ async function launchOpenCodeBackground(
             `Lucas知情：[遇到了什么问题、下一步怎么处理、预计什么时候有结果]`,
           ].join("\n"),
           300_000,
+          undefined,
+          FRONTEND_AGENT_ID,
         );
         // 失败时也告知 Lucas，让 Lucas 管理用户预期
         const briefMatch = (andyAssessment ?? "").match(/Lucas知情[：:]\s*([\s\S]+?)(?:\n\n|\n[^\s]|$)/);
@@ -3118,6 +3137,8 @@ async function launchOpenCodeBackground(
               `根据用户的等待状态决定是否主动说明情况。`,
             ].join("\n"),
             60_000,
+            undefined,
+            FRONTEND_AGENT_ID,
           );
         }
       })();
@@ -6535,7 +6556,7 @@ const crewclawRoutingPlugin = {
               "4. 预计影响范围（哪些功能可能受影响）",
             ].join("\n");
 
-            const lisaAnalysis = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, lisaAnalysisPrompt, 300_000);
+            const lisaAnalysis = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, lisaAnalysisPrompt, 300_000, undefined, FRONTEND_AGENT_ID);
 
             // ── 监控通知：Phase 1 完成 ───────────────────────────────────────────
             void notifyEngineer([
@@ -6563,7 +6584,7 @@ const crewclawRoutingPlugin = {
               "   格式固定：「Lucas知情：xxx」",
             ].join("\n");
 
-            const andyDecision = await callGatewayAgent(DESIGNER_AGENT_ID, andyReviewPrompt, 120_000);
+            const andyDecision = await callGatewayAgent(DESIGNER_AGENT_ID, andyReviewPrompt, 120_000, undefined, FRONTEND_AGENT_ID);
 
             // ── 监控通知：Phase 2 完成 ───────────────────────────────────────────
             void notifyEngineer([
@@ -6588,6 +6609,8 @@ const crewclawRoutingPlugin = {
                 "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展（不是必须推送）。",
               ].join("\n"),
               60_000,
+              undefined,
+              FRONTEND_AGENT_ID,
             );
 
             // ── Phase 3：Lisa 按分析方案修复 ─────────────────────────────────
@@ -6605,7 +6628,7 @@ const crewclawRoutingPlugin = {
               "请最小化改动，修复后用验收标准自验证，输出修复报告。",
             ].join("\n");
 
-            const lisaFixResponse = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, lisaFixPrompt, 600_000);
+            const lisaFixResponse = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, lisaFixPrompt, 600_000, undefined, FRONTEND_AGENT_ID);
 
             if (lisaFixResponse) {
               // ── 监控通知：Phase 3 完成 ───────────────────────────────────────
@@ -6655,7 +6678,7 @@ const crewclawRoutingPlugin = {
                   "   格式固定：「Lucas交付：xxx」",
                 ].join("\n");
 
-                const andyVerdict = await callGatewayAgent(DESIGNER_AGENT_ID, andyVerifyPrompt, 120_000);
+                const andyVerdict = await callGatewayAgent(DESIGNER_AGENT_ID, andyVerifyPrompt, 120_000, undefined, FRONTEND_AGENT_ID);
 
                 // 提取 Andy 给 Lucas 的交付简报
                 const deliveryBriefMatch = (andyVerdict ?? "").match(/Lucas交付[：:]\s*([\s\S]+?)(?:\n\n|$)/);
@@ -6681,6 +6704,8 @@ const crewclawRoutingPlugin = {
                     "修复已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知用户。",
                   ].join("\n"),
                   60_000,
+                  undefined,
+                  FRONTEND_AGENT_ID,
                 );
               } catch {
                 // 验收失败降级：直接推 Lisa 修复报告给用户
@@ -6806,7 +6831,7 @@ const crewclawRoutingPlugin = {
         ].filter(Boolean).join("\n");
 
         try {
-          const andyReply = await callGatewayAgent(DESIGNER_AGENT_ID, prompt, 120_000);
+          const andyReply = await callGatewayAgent(DESIGNER_AGENT_ID, prompt, 120_000, undefined, FRONTEND_AGENT_ID);
           if (!andyReply) {
             return {
               content: [{ type: "text", text: "Andy 暂无回复，可能正在处理其他任务，请稍后再试。" }],
@@ -6864,7 +6889,7 @@ const crewclawRoutingPlugin = {
         ].filter(Boolean).join("\n");
 
         try {
-          const lisaReply = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, prompt, 120_000);
+          const lisaReply = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, prompt, 120_000, undefined, FRONTEND_AGENT_ID);
           if (!lisaReply) {
             return {
               content: [{ type: "text", text: "Lisa 暂无回复，可能正在处理其他任务，请稍后再试。" }],
@@ -6966,6 +6991,8 @@ const crewclawRoutingPlugin = {
                       `根据用户当前状态，决定是否告知进展（不是必须推送）。`,
                     ].join("\n"),
                     60_000,
+                    undefined,
+                    DESIGNER_AGENT_ID,
                   );
                 }
                 // 通报系统工程师：Coordinator 并行调度启动
@@ -7011,7 +7038,7 @@ const crewclawRoutingPlugin = {
                       `【角色说明】你是技术验收方，不直接联系用户。验收完成后请输出固定格式（插件层提取后交给 Lucas 决定是否通知用户）：`,
                       `Lucas交付：[用家人听得懂的语言描述：做了什么 / 注意事项（无则省略）/ 下次这类需求可以这样说]`,
                     ].join("\n");
-                    const andyAggregateResult = await callGatewayAgent(DESIGNER_AGENT_ID, andyAggregatePrompt, 600_000);
+                    const andyAggregateResult = await callGatewayAgent(DESIGNER_AGENT_ID, andyAggregatePrompt, 600_000, undefined, FRONTEND_AGENT_ID);
                     // 提取 Lucas交付：简报，告知 Lucas
                     if (requestorId && requestorId !== "unknown") {
                       const deliveryMatch = (andyAggregateResult ?? "").match(/Lucas交付[：:]\s*([\s\S]+?)(?:\n\n|\n[^\s]|$)/);
@@ -7029,6 +7056,8 @@ const crewclawRoutingPlugin = {
                           `修复/功能已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知用户。`,
                         ].join("\n"),
                         60_000,
+                        undefined,
+                        DESIGNER_AGENT_ID,
                       );
                     }
                   } catch (e) {
@@ -7040,7 +7069,7 @@ const crewclawRoutingPlugin = {
                       `异常信息：${errMsg.slice(0, 200)}`,
                       `这是 Andy 并行任务模式的异常，Lucas 无需干预，仅知情。`,
                       `如果用户问起进展，可以告知"遇到了技术问题正在处理"。`,
-                    ].join("\n"), 20_000);
+                    ].join("\n"), 20_000, undefined, DESIGNER_AGENT_ID);
                     if (requestorId && requestorId !== "unknown") {
                       void pushToChannel(`Coordinator 执行异常：${errMsg}`, requestorId, false);
                     }
@@ -7231,6 +7260,8 @@ const crewclawRoutingPlugin = {
               `根据你对用户当前状态的判断，决定是否告知进展（不是必须推送）。`,
             ].join("\n"),
             60_000,
+            undefined,
+            DESIGNER_AGENT_ID,
           );
         }
         // 通报系统工程师：Andy→Lisa 交接
@@ -7266,6 +7297,7 @@ const crewclawRoutingPlugin = {
               ].join("\n\n"),
               600_000,
               threadId,
+              DESIGNER_AGENT_ID,
             );
             // 检测 Lisa 是否绕过了 run_opencode（用文本描述假装 edit/write 工具）
             const lisaBypassedOpencode = lisaResponse && (
@@ -7285,7 +7317,7 @@ const crewclawRoutingPlugin = {
                 `Lisa 绕过了 run_opencode，尝试用不存在的 edit/write 工具"实现"代码。`,
                 `交付已被标记为无效。Lucas 无需干预，仅知情。`,
                 `如果用户问起这个任务，告知"还在处理中"或"遇到了问题需要重新实现"。`,
-              ].join("\n"), 20_000);
+              ].join("\n"), 20_000, undefined, DESIGNER_AGENT_ID);
               responseText = "❌ Lisa 实现失败：Lisa 绕过了 run_opencode，用不存在的 edit 工具假装修改了文件。代码未被实际更改。";
               success = false;
               // Andy 是 spec 的作者，应知道 Lisa bypass 并决定下一步
@@ -7299,7 +7331,7 @@ const crewclawRoutingPlugin = {
                     `1. spec 表述可以更明确以减少歧义 → 调用 trigger_lisa_implementation 提交修订版`,
                     `2. 需要拆小任务 → 重新设计并分批触发`,
                     `3. 判断是 Lisa 的系统性问题 → 调用 notify_engineer`,
-                  ].join("\n"), 180_000, threadId);
+                  ].join("\n"), 180_000, threadId, FRONTEND_AGENT_ID);
                 } catch { /* 静默，不阻塞主流程 */ }
               })();
             } else {
@@ -7393,7 +7425,7 @@ const crewclawRoutingPlugin = {
                   "请简洁回复（不超过 150 字）：做了什么（一句话）、怎么用或在哪里找到（如有）、有没有要注意的（如有）。",
                   "语气像家人说话，不要技术术语，不要加标题或符号。",
                 ].join("\n\n");
-                const lucasAcceptance = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 120_000);
+                const lucasAcceptance = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 120_000, undefined, DESIGNER_AGENT_ID);
                 if (lucasAcceptance) {
                   appendJsonl(join(PROJECT_ROOT, "data/corpus/lucas-corpus.jsonl"), {
                     timestamp: nowCST(),
@@ -7443,7 +7475,7 @@ const crewclawRoutingPlugin = {
                   `2. 需要了解具体阻塞原因 → 调用 consult_lisa`,
                   `3. 需要 Lucas 向用户澄清需求 → 调用 query_requirement_owner`,
                   `4. 判断是技术环境问题 → 调用 notify_engineer`,
-                ].join("\n"), 180_000, threadId);
+                ].join("\n"), 180_000, threadId, FRONTEND_AGENT_ID);
               } catch { /* 静默，不阻塞主流程 */ }
             })();
             // ② Lisa→Andy 失败通知：Andy 同样需要知道 spec 未落地
@@ -7474,6 +7506,8 @@ const crewclawRoutingPlugin = {
                   `请用一两句人话告知用户失败了、大概为什么、他能做什么（稍后重试或等我排查）。口气自然，不要 ❌ 开头。`,
                 ].join("\n"),
                 30_000,
+                undefined,
+                DESIGNER_AGENT_ID,
               );
               if (lucasFailMsg) {
                 responseText = lucasFailMsg;
@@ -7561,7 +7595,7 @@ const crewclawRoutingPlugin = {
         ].filter(Boolean).join("\n");
 
         try {
-          const lucasReply = await callGatewayAgent(FRONTEND_AGENT_ID, lucasMessage, 60_000);
+          const lucasReply = await callGatewayAgent(FRONTEND_AGENT_ID, lucasMessage, 60_000, undefined, DESIGNER_AGENT_ID);
 
           void addDecisionMemory({
             decision_id: `andy_query_${Date.now()}`,
@@ -7814,6 +7848,8 @@ const crewclawRoutingPlugin = {
                 `如果用户在问进展，可以说"正在处理一个技术细节，快好了"，不需要说具体是什么阻塞问题。`,
               ].join("\n"),
               15_000,
+              undefined,
+              IMPLEMENTOR_AGENT_ID,
             );
           }
         }
@@ -7831,7 +7867,7 @@ const crewclawRoutingPlugin = {
 
         try {
           // 300s：DeepSeek-R1 CoT 推理需要时间，60s 几乎必超时
-          const andyReply = await callGatewayAgent(DESIGNER_AGENT_ID, parts, 300_000, threadId);
+          const andyReply = await callGatewayAgent(DESIGNER_AGENT_ID, parts, 300_000, threadId, IMPLEMENTOR_AGENT_ID);
           // 通知工程师：Andy 的决策结果（Lisa 遇阻回路）
           void notifyEngineer(
             `【Andy 决策·Lisa 遇阻回路】${p.requirement_id ? `[${p.requirement_id}]` : ""}\n${(andyReply ?? "无回复").slice(0, 300)}`,
@@ -7845,7 +7881,7 @@ const crewclawRoutingPlugin = {
               `Andy 对 Lisa 遇阻的回复：${(andyReply ?? "无回复").slice(0, 200)}`,
               issueTask?.submittedBy ? `用户 ID：${issueTask.submittedBy}` : "",
               "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展。",
-            ].filter(Boolean).join("\n"), 20_000);
+            ].filter(Boolean).join("\n"), 20_000, undefined, IMPLEMENTOR_AGENT_ID);
           }
           void addDecisionMemory({
             decision_id: `lisa-issue-${Date.now()}`,
@@ -7941,7 +7977,7 @@ const crewclawRoutingPlugin = {
         ].join("\n");
 
         try {
-          const lisaReply = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, message, 600_000, threadId);
+          const lisaReply = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, message, 600_000, threadId, FRONTEND_AGENT_ID);
           return {
             content: [{ type: "text", text: `【Lisa 修订回复 第 ${revCount + 1} 轮】\n${lisaReply.slice(0, 1500)}` }],
             details: { revised: true, revisionRound: revCount + 1, threadId },
@@ -8028,7 +8064,7 @@ const crewclawRoutingPlugin = {
               `【协作线程 ID】${threadId}`,
             ].join("\n\n");
 
-            const lisaResponse = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, lisaPrompt, 600_000, threadId);
+            const lisaResponse = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, lisaPrompt, 600_000, threadId, DESIGNER_AGENT_ID);
 
             appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
               timestamp: nowCST(), source: "coordinator-integration", reqId, content: lisaResponse,
@@ -8039,7 +8075,7 @@ const crewclawRoutingPlugin = {
                 `你是 Lucas，家庭 AI 助手。Lisa 刚完成了一个大型功能的集成：\n${lisaResponse}`,
                 "请用一两句人话告诉家人：做好了什么功能、怎么用。语气自然，不要技术术语。",
               ].join("\n\n");
-              const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 60_000);
+              const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 60_000, undefined, DESIGNER_AGENT_ID);
               void pushToChannel(lucasVerdict ?? lisaResponse, requestorId, true);
             }
           } catch (e) {
@@ -8306,11 +8342,13 @@ const crewclawRoutingPlugin = {
                 `如果用户在问进展，可以告知"开发团队在核对技术细节，快了"；不必追加到每次回复里。`,
               ].join("\n"),
               15_000,
+              undefined,
+              DESIGNER_AGENT_ID,
             );
           }
         }
         try {
-          const lisaReply = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, prompt, 300_000, threadId);
+          const lisaReply = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, prompt, 300_000, threadId, DESIGNER_AGENT_ID);
           void addDecisionMemory({
             decision_id: `andy-consult-${Date.now()}`,
             agent: DESIGNER_AGENT_ID,
@@ -8386,7 +8424,7 @@ const crewclawRoutingPlugin = {
         );
 
         try {
-          const evalReply = await callGatewayAgent("andy-evaluator", evalPrompt, 300_000, threadId);
+          const evalReply = await callGatewayAgent("andy-evaluator", evalPrompt, 300_000, threadId, IMPLEMENTOR_AGENT_ID);
           const passed = evalReply.includes("PASS") && !evalReply.includes("FAIL");
           // 通知工程师：验收结论
           void notifyEngineer(
@@ -8404,7 +8442,7 @@ const crewclawRoutingPlugin = {
               `【评估反馈摘要】`,
               evalReply.slice(0, 500),
             ].filter(Boolean).join("\n");
-            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, 60_000);
+            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, 60_000, undefined, IMPLEMENTOR_AGENT_ID);
           }
           void addDecisionMemory({
             decision_id: `lisa-eval-${Date.now()}`,
@@ -8481,7 +8519,7 @@ const crewclawRoutingPlugin = {
         ].filter(Boolean).join("\n");
 
         try {
-          const evalReply = await callGatewayAgent("lisa-evaluator", evalPrompt, 300_000, threadId);
+          const evalReply = await callGatewayAgent("lisa-evaluator", evalPrompt, 300_000, threadId, DESIGNER_AGENT_ID);
           const passed = evalReply.includes("PASS") && !evalReply.includes("FAIL");
           // Evaluator FAIL → 立即通知 Lucas（需求方），避免需求方空等
           if (!passed) {
@@ -8494,7 +8532,7 @@ const crewclawRoutingPlugin = {
               `【评估反馈摘要】`,
               evalReply.slice(0, 500),
             ].filter(Boolean).join("\n");
-            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, 60_000);
+            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, 60_000, undefined, DESIGNER_AGENT_ID);
           }
           void addDecisionMemory({
             decision_id: `andy-eval-${Date.now()}`,
