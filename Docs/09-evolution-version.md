@@ -2069,3 +2069,27 @@ L0~L4 全部落地：
 **代码变更文件**：
 - `CrewClaw/crewclaw-routing/index.ts`：`DpoPatternsJson` 接口新增字段、`detectToolCallHallucination()` 函数、`sessionPendingCorrections` Map、`before_prompt_build` 纠正注入、`agent_end` 检测调用 + 记忆保护
 - `CrewClaw/crewclaw-routing/config/lucas-dpo-patterns.json`：新增 `tool_call_hallucination` 字段
+
+### v649 · 2026-04-12 · Lx 评估框架对齐 + 数据驱动模型评测 + 告警等级
+
+**系统工程师越界干预**：L0~L4 评估维度重新定义（从旧定义到新口语化定义），evaluate_local_model 从硬编码改为数据驱动机制，Main/Andy 推送加告警等级。
+
+**Lx 评估框架对齐（v646）**：
+- L0 基础设施（稳不稳）：新增软硬件性能评估（磁盘/内存/Gateway 延迟/ChromaDB 延迟）
+- L1 行为质量（好不好）：输出分【记忆质量】+【输出质量】两维度
+- L2 系统自进化（自身能力越来越强）：输出分【开发流水线成效】+【自进化机制运转】+【喂养成效】
+- L3 组织协作进化（组织运作越来越优化）：新增成员增强效果检查
+- L4 深度学习（内化能力越来越强）：新增 evaluate_local_model 模型能力评估
+
+**数据驱动模型评测（v648）**：
+- evaluate_local_model 从硬编码 9 条家庭任务题 → 从实例数据自动生成
+- Kuzu 家人事实 → Main 生成自然语言知识题（0.4 权重）
+- ChromaDB 真实对话 → 直接用 user message 测对话能力（0.6 权重）
+- 零硬编码题目，第二个部署有数据就能跑
+
+**告警等级（v649）**：
+- Main 推送格式：`[Main 监控报告] 告警等级：🔴/🟡/🟢`
+- Andy 推送格式：`[Andy HEARTBEAT 报告] 告警等级：🔴/🟡`
+- 告警等级从回复内容自动判定
+
+**Andy ARCH.md 同步更新**：Lx 新定义 + Kuzu relation 枚举（8→14+种）+ 模型配置（GLM-5→GLM-5.1）
