@@ -7,8 +7,39 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v644
+> **版本**: v645
 > **最后更新**: 2026-04-12
+
+---
+
+## v645 · Main 增强：定时任务执行健康监控 + 基础设施清理（2026-04-12）
+
+**干预类型**：架构变更
+
+**背景**：Main 监控只覆盖「进程活着 + Lucas 说话正常」，25 项自动化任务中 22 项是监控盲区。凌晨蒸馏管道静默失败无人发现；crontab 有 9 条死任务（04-08 重构后路径失效）；index.ts 中 8 处脚本路径指向已删除的 `~/HomeAI/scripts/`。
+
+**变更**：
+
+1. **Main Step 1.5：定时任务执行健康（框架层机制）**
+   - watchdog 每个定时任务执行后写入 `task-execution-log.jsonl`（taskId / lx / status / timestamp）
+   - Main HEARTBEAT 每日检查一次：对比 `scheduled-tasks.json`（实例层配置），发现超时/失败/跳过则告警
+   - 告警分级：3+ 任务异常 → Layer 3 立即推；1-2 个 → Layer 2 日报
+   - **框架 vs 实例**：`logTaskExecution()` + Main 检查逻辑 = 框架层；`scheduled-tasks.json` 内容 = 实例层
+
+2. **基础设施清理**
+   - crontab：12 条 → 3 条，删除 9 条路径失效的死任务
+   - index.ts 路径断链修复：新增 `SCRIPTS_DIR` 常量，8 处 `join(PROJECT_ROOT, "scripts/...")` → `join(SCRIPTS_DIR, "...")`，修复 kuzu-query / distill-memories / render-knowledge / finetune-scheduler 等引用
+
+3. **自动化任务 Lx 分级全景**（25 项，新增配置）
+   - L0 基础设施层 6 项（进程保活/群消息中断/任务卡死/目录清理/访客沉寂/PM2守护）
+   - L1 行为质量层 5 项（DPO 6模式检测/工具调用幻觉/用户纠正/行为规则注入/Lisa幻觉）
+   - L2 系统自进化层 9 项（4条蒸馏管道/Andy HEARTBEAT/Lucas HEARTBEAT/Lisa复盘/结晶信号/质量评分/代码图谱）
+   - L3 组织协作进化层 2 项（team_observation 蒸馏/协作关系蒸馏）
+   - L4 深度学习层 3 项（DPO周级扫描/DPO候选积累/微调队列）
+
+**代码变更文件**：`gateway-watchdog.js`（logTaskExecution + 所有 run* 包装）、`index.ts`（SCRIPTS_DIR + 8 处路径修复）、`scheduled-tasks.json`（新建）、`Main AGENTS.md`（Step 1.5）、crontab（清理）
+
+**设计决策**：选择「基础设施层写日志 + Main 读日志」而非「Main 自己查每条任务」，原因是框架层机制不依赖 Agent 能力，第二个部署只需写自己的 `scheduled-tasks.json`。
 
 ---
 

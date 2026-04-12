@@ -353,6 +353,8 @@ def write_kuzu_facts(conn, user_id: str, facts: list[dict],
 
         # ── 普通 person→topic 边（共享 topic 节点）─────────────────────────
         ctx = context if context else (value[120:200] if len(value) > 120 else "")
+        # causal_relation 支持可变置信度（高置信0.85/中置信0.7），其他关系固定0.85
+        fact_confidence = float(fact.get("confidence", 0.85)) if relation == "causal_relation" else 0.85
 
         # P2: 语义去重 - 检查是否已有语义相近的 topic，复用现有 ID/名称防止命名漂移碎片化
         canonical_id, canonical_name = None, None
@@ -395,12 +397,12 @@ def write_kuzu_facts(conn, user_id: str, facts: list[dict],
                 conn.execute(
                     "MATCH (p:Entity {id: $pid}), (o:Entity {id: $oid}) "
                     "CREATE (p)-[:Fact {relation: $rel, context: $ctx, "
-                    "valid_from: $from, confidence: 0.85, "
+                    "valid_from: $from, confidence: $conf, "
                     "privacy_level: $pl, "
                     "source_type: 'distill', source_id: $sid}]->(o)",
                     {"pid": user_id, "oid": topic_id,
                      "rel": relation, "ctx": ctx, "from": now_iso,
-                     "pl": privacy_level, "sid": sid},
+                     "conf": fact_confidence, "pl": privacy_level, "sid": sid},
                 )
                 print(f"  [upsert-create] {relation} → {topic_id[:30]}")
 
@@ -624,7 +626,7 @@ ALLOWED_RELATIONS = {
     "causal_relation",       # 因果关系：此人某行为/关注点背后的驱动原因，或某事件的导火索
                              # value = 效果端简述（≤20字，如「探索抖音副业」「关注AI记忆技术」）
                              # context = 原因说明（「因为X，所以/导致Y」格式，≤60字）
-                             # 只在对话中有明确因果线索（因为/所以/因此/导致/由于/促使）时提取，不推断
+                             # 允许合理推断：有线索词为高置信(0.85)，从上下文合理推断为中置信(0.7)
 }
 
 DISTILL_PROMPT_JSON = """\
@@ -678,11 +680,16 @@ relation_type 只能是以下之一：
   context = 补充说明（时间、各自分工、结果或意义，≤60字）。
   **优先级：这是最重要的 Topic 类型之一**——与家人共同做过的事是关系的核心印记，必须捕捉。
   只提取对话中明确出现的协作行为，不推断。每件事单独一条。
-- causal_relation：提取此人某行为/关注点背后的**明确驱动原因**，或某事件的导火索。
-  标准：对话中必须出现因果线索词（因为/所以/因此/导致/由于/促使/让我/让他），且原因和结果都有明确表述；纯猜测或隐含推断不算。
+- causal_relation：提取此人某行为/关注点背后的驱动原因，或事件间的因果联系。
+  分两个置信度：
+  - 高置信（明确表述）：对话中出现因果线索词（因为/所以/因此/导致/由于/促使/让我/让他），原因和结果都有明确表述
+  - 中置信（合理推断）：对话中没有线索词，但从上下文可以合理推断出因果关系
+    例：「在看抖音，想看看能不能变现」→ 因为想探索变现渠道所以关注抖音
+    例：「最近在学剪映」→ 因为要提升抖音内容质量所以学习剪辑工具
+  不提取纯猜测或与对话内容无关的推断。
   value = 效果端简述（≤20字，描述「发生了什么/关注什么」，如「探索抖音副业」）；
   context = 「因为X，所以/导致Y」格式（≤60字，X是原因，Y是效果）。
-  只提取对话中有明确因果表述的内容，不推断。每条一个因果对。
+  confidence：高置信写 0.85，中置信写 0.7。每条一个因果对。
 
 **topic 命名一致性**：提取事实时，value 字段使用**简洁规范的中文短语**（如「黟黟学习」而非「黟黟的学业情况」），
 相同概念在不同对话中应保持**完全一致的写法**，这样系统才能识别为同一话题。

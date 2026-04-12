@@ -44,6 +44,27 @@ const COLLAB_DISTILL_LOG     = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'di
 const CODE_GRAPH_SCRIPT      = path.join(SCRIPTS_DIR, 'build-code-graph.py');
 const CODE_GRAPH_LOG         = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'build-code-graph.log');
 
+// ── 框架层：定时任务执行记录（框架机制，实例通过 scheduled-tasks.json 配置）──
+const TASK_EXEC_LOG = path.join(process.env.HOMEAI_ROOT || path.join(process.env.HOME, 'HomeAI'), 'data', 'learning', 'task-execution-log.jsonl');
+function logTaskExecution(taskId, lx, category, status, output, error = null) {
+  const entry = {
+    taskId,
+    lx,
+    category,
+    status,          // 'success' | 'failure' | 'timeout' | 'skipped'
+    startedAt: arguments[6] || new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    ...(output ? { output: String(output).slice(0, 500) } : {}),
+    ...(error ? { error: String(error).slice(0, 500) } : {}),
+  };
+  try {
+    fs.appendFileSync(TASK_EXEC_LOG, JSON.stringify(entry) + '\n', 'utf8');
+  } catch (e) {
+    // 日志写入失败不应阻塞主流程
+    log(`task-exec-log 写入失败: ${e.message}`);
+  }
+}
+
 let token = '';
 try {
   const cfg = JSON.parse(fs.readFileSync(
@@ -718,6 +739,7 @@ function runDecisionsCheck() {
 
 async function runAndyHeartbeat() {
   log('Andy HEARTBEAT 开始...');
+  const hbStartedAt = new Date().toISOString();
 
   // HEARTBEAT 前快照：用于事后对比 Andy 是否写入了 decisions 条目
   const preCountsSnap = runDecisionsCheck();
@@ -725,6 +747,7 @@ async function runAndyHeartbeat() {
   const result = await probeAndyHeartbeat();
   if (result.ok) {
     log(`Andy HEARTBEAT 完成：${result.summary}`);
+    logTaskExecution('andy-heartbeat', 'L2', 'Agent巡检', 'success', result.summary, null, hbStartedAt);
 
     // 基础设施层写时间戳，不依赖模型合规
     try {
@@ -770,6 +793,7 @@ async function runAndyHeartbeat() {
     }
   } else {
     log(`Andy HEARTBEAT 失败：${result.error || result.status}`);
+    logTaskExecution('andy-heartbeat', 'L2', 'Agent巡检', 'failure', result.summary || '', result.error || `status ${result.status}`, hbStartedAt);
   }
 }
 
@@ -822,11 +846,13 @@ async function runLucasHeartbeat() {
   const followupCtx = buildLucasFollowupContext();
   if (!followupCtx) {
     log('Lucas HEARTBEAT：无待跟进任务，跳过');
+    logTaskExecution('lucas-heartbeat', 'L1', 'Agent巡检', 'skipped', '无待跟进任务');
     lastLucasHeartbeatDay = today;
     return;
   }
 
   log('Lucas HEARTBEAT 开始（开发任务跟进）...');
+  const hbStartedAt = new Date().toISOString();
   const messageContent = `HEARTBEAT\n\n${followupCtx}`;
   const body = JSON.stringify({
     model: 'openclaw/lucas',
@@ -854,7 +880,8 @@ async function runLucasHeartbeat() {
           const json = JSON.parse(data);
           const content = json?.choices?.[0]?.message?.content || '';
           log(`Lucas HEARTBEAT 完成：${content.substring(0, 80)}...`);
-        } catch { log('Lucas HEARTBEAT 响应解析失败'); }
+          logTaskExecution('lucas-heartbeat', 'L1', 'Agent巡检', 'success', content.substring(0, 200), null, hbStartedAt);
+        } catch { log('Lucas HEARTBEAT 响应解析失败'); logTaskExecution('lucas-heartbeat', 'L1', 'Agent巡检', 'failure', '', '响应解析失败', hbStartedAt); }
         resolve();
       });
     });
@@ -880,9 +907,11 @@ function shouldRunDistill() {
 function runDistill() {
   if (!fs.existsSync(DISTILL_SCRIPT)) {
     log('蒸馏脚本不存在，跳过');
+    logTaskExecution('distill-memories', 'L2', '蒸馏管道', 'skipped', `脚本不存在: ${DISTILL_SCRIPT}`);
     return;
   }
   log('开始运行记忆蒸馏...');
+  const distillStartedAt = new Date().toISOString();
   const env = { ...process.env };
   const child = spawn(PYTHON3, [DISTILL_SCRIPT], {
     env,
@@ -898,6 +927,7 @@ function runDistill() {
   // Andy HEARTBEAT 也在蒸馏完成后、Agent 蒸馏之前触发（避免 Kuzu 锁冲突）。
   child.on('close', (code) => {
     log(`记忆蒸馏完成（code ${code}）`);
+    logTaskExecution('distill-memories', 'L2', '蒸馏管道', code === 0 ? 'success' : 'failure', `exit code ${code}`, code !== 0 ? `exit ${code}` : null, distillStartedAt);
 
     // 先触发 Andy HEARTBEAT（蒸馏新数据可用，Kuzu 锁已释放）
     if (pendingHeartbeatToday && lastHeartbeatDay !== new Date().toDateString()) {
@@ -911,12 +941,14 @@ function runDistill() {
     if (fs.existsSync(DISTILL_AGENTS_SCRIPT)) {
       log('5 分钟后启动 Agent 记忆蒸馏...');
       setTimeout(() => {
+        const agentStartedAt = new Date().toISOString();
         const agentChild = spawn(PYTHON3, [DISTILL_AGENTS_SCRIPT], {
           env,
           detached: true,
           stdio: ['ignore', fs.openSync(DISTILL_AGENTS_LOG, 'a'), fs.openSync(DISTILL_AGENTS_LOG, 'a')],
         });
         agentChild.unref();
+        logTaskExecution('distill-agent-memories', 'L2', '蒸馏管道', 'success', `已启动 PID ${agentChild.pid}`, null, agentStartedAt);
         log(`Agent 记忆蒸馏已启动（PID ${agentChild.pid}），日志：${DISTILL_AGENTS_LOG}`);
       }, 5 * 60 * 1000);
     }
@@ -939,15 +971,18 @@ function shouldRunTeamObs() {
 function runTeamObsDistill() {
   if (!fs.existsSync(TEAM_OBS_SCRIPT)) {
     log('team_observation 蒸馏脚本不存在，跳过');
+    logTaskExecution('distill-team-observations', 'L3', '蒸馏管道', 'skipped', `脚本不存在`);
     return;
   }
   log('开始运行 team_observation 蒸馏（Andy 视角家人洞察）...');
+  const startedAt = new Date().toISOString();
   const child = spawn(PYTHON3, [TEAM_OBS_SCRIPT], {
     env: { ...process.env },
     detached: true,
     stdio: ['ignore', fs.openSync(TEAM_OBS_LOG, 'a'), fs.openSync(TEAM_OBS_LOG, 'a')],
   });
   child.unref();
+  logTaskExecution('distill-team-observations', 'L3', '蒸馏管道', 'success', `已启动 PID ${child.pid}`, null, startedAt);
   log(`team_observation 蒸馏已启动（PID ${child.pid}），日志：${TEAM_OBS_LOG}`);
 }
 
@@ -960,9 +995,11 @@ function shouldRunCodeGraph() {
 function runCodeGraphRebuild() {
   if (!fs.existsSync(CODE_GRAPH_SCRIPT)) {
     log('代码图谱脚本不存在，跳过');
+    logTaskExecution('rebuild-code-graph', 'L2', '代码认知', 'skipped', '脚本不存在');
     return;
   }
   log('开始代码图谱增量重建（--incremental --paths）...');
+  const startedAt = new Date().toISOString();
   const child = spawn(PYTHON3, [
     CODE_GRAPH_SCRIPT,
     '--incremental',
@@ -973,6 +1010,7 @@ function runCodeGraphRebuild() {
     stdio: ['ignore', fs.openSync(CODE_GRAPH_LOG, 'a'), fs.openSync(CODE_GRAPH_LOG, 'a')],
   });
   child.unref();
+  logTaskExecution('rebuild-code-graph', 'L2', '代码认知', 'success', `已启动 PID ${child.pid}`, null, startedAt);
   log(`代码图谱重建已启动（PID ${child.pid}），日志：${CODE_GRAPH_LOG}`);
 }
 
@@ -996,6 +1034,7 @@ function shouldRunL4Scan() {
 
 async function runL4DpoScan() {
   const week = getISOWeek();
+  const startedAt = new Date().toISOString();
   log(`[L4] 周级 DPO 扫描启动（${week}），调用 generate_dpo_good_responses...`);
   try {
     const body = JSON.stringify({ tool: 'generate_dpo_good_responses', input: { threshold: 10 } });
@@ -1018,6 +1057,7 @@ async function runL4DpoScan() {
     if (result.ok && result.result) {
       const summary = String(result.result).slice(0, 300);
       log(`[L4] DPO 扫描完成：${summary}`);
+      logTaskExecution('l4-dpo-scan', 'L4', '深度学习', 'success', summary, null, startedAt);
       // 只在有实际生成时才推送通知（有 good_response 生成才有审批需要）
       if (!summary.includes('无需生成') && !summary.includes('没有 pattern')) {
         sendEngineerAlert(`📊 L4 周报（${week}）\n\n${summary}\n\n请用「approve_dpo_batch pattern_type=<类型>」批准进入微调队列。`, 'heartbeat');
@@ -1026,9 +1066,11 @@ async function runL4DpoScan() {
       }
     } else {
       log(`[L4] DPO 扫描调用失败：${JSON.stringify(result).slice(0, 100)}`);
+      logTaskExecution('l4-dpo-scan', 'L4', '深度学习', 'failure', JSON.stringify(result).slice(0, 200), null, startedAt);
     }
   } catch (e) {
     log(`[L4] DPO 扫描异常：${e.message}`);
+    logTaskExecution('l4-dpo-scan', 'L4', '深度学习', 'failure', '', e.message, startedAt);
   }
 }
 
@@ -1044,6 +1086,8 @@ function shouldRunPersonalizationDistill() {
 }
 
 function runPersonalizationDistill() {
+  const scriptNames = ['distill-design-learnings', 'distill-impl-learnings', 'distill-learning-objectives', 'distill-knowledge-discussions'];
+  let launched = 0;
   for (const [script, logFile, label] of [
     [DESIGN_LEARN_SCRIPT, DESIGN_LEARN_LOG, 'Andy 设计判断提炼（历史决策 → 规律）'],
     [IMPL_LEARN_SCRIPT,   IMPL_LEARN_LOG,   'Lisa 代码库认知提炼（opencode 记录 → 陷阱规律）'],
@@ -1052,16 +1096,21 @@ function runPersonalizationDistill() {
   ]) {
     if (!fs.existsSync(script)) {
       log(`${label} 脚本不存在，跳过`);
+      logTaskExecution(scriptNames[launched], 'L2', '蒸馏管道', 'skipped', `脚本不存在: ${script}`);
+      launched++;
       continue;
     }
     log(`开始运行 ${label}...`);
+    const startedAt = new Date().toISOString();
     const child = spawn(PYTHON3, [script], {
       env: { ...process.env },
       detached: true,
       stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')],
     });
     child.unref();
+    logTaskExecution(scriptNames[launched], 'L2', '蒸馏管道', 'success', `已启动 PID ${child.pid}`, null, startedAt);
     log(`${label} 已启动（PID ${child.pid}），日志：${logFile}`);
+    launched++;
   }
 }
 
@@ -1077,15 +1126,18 @@ function shouldRunCollabDistill() {
 function runCollabDistill() {
   if (!fs.existsSync(COLLAB_DISTILL_SCRIPT)) {
     log('协作关系蒸馏脚本不存在，跳过');
+    logTaskExecution('distill-collab', 'L3', '蒸馏管道', 'skipped', '脚本不存在');
     return;
   }
   log('开始运行协作关系蒸馏（distill-relationship-dynamics.py）...');
+  const startedAt = new Date().toISOString();
   const child = spawn(PYTHON3, [COLLAB_DISTILL_SCRIPT], {
     env: { ...process.env },
     detached: true,
     stdio: ['ignore', fs.openSync(COLLAB_DISTILL_LOG, 'a'), fs.openSync(COLLAB_DISTILL_LOG, 'a')],
   });
   child.unref();
+  logTaskExecution('distill-collab', 'L3', '蒸馏管道', 'success', `已启动 PID ${child.pid}`, null, startedAt);
   log(`协作关系蒸馏已启动（PID ${child.pid}），日志：${COLLAB_DISTILL_LOG}`);
 }
 

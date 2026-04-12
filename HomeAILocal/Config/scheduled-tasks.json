@@ -1,0 +1,13 @@
+[
+  {"taskId": "distill-personalization",  "lx": "L2", "category": "蒸馏管道", "schedule": "daily", "expectedHour": 1,  "maxAgeHours": 28, "description": "Andy/Lisa 自我进化蒸馏（设计判断+代码库认知+成员期待+外部知识）"},
+  {"taskId": "distill-memories",         "lx": "L2", "category": "蒸馏管道", "schedule": "daily", "expectedHour": 2,  "maxAgeHours": 28, "description": "家人记忆蒸馏（对话→Kuzu知识图谱）"},
+  {"taskId": "andy-heartbeat",           "lx": "L2", "category": "Agent巡检", "schedule": "daily", "expectedHour": 2,  "maxAgeHours": 28, "description": "Andy HEARTBEAT（8个检查：目标生成/结晶/需求覆盖/链路健康/行为自检/知识消化/主动搜索）"},
+  {"taskId": "distill-agent-memories",   "lx": "L2", "category": "蒸馏管道", "schedule": "daily", "expectedHour": 3,  "maxAgeHours": 28, "description": "Agent记忆蒸馏（Track C）"},
+  {"taskId": "distill-team-observations","lx": "L3", "category": "蒸馏管道", "schedule": "daily", "expectedHour": 3,  "maxAgeHours": 28, "description": "Andy视角家人洞察蒸馏→Lucas家人档案"},
+  {"taskId": "distill-collab",           "lx": "L3", "category": "蒸馏管道", "schedule": "daily", "expectedHour": 4,  "maxAgeHours": 28, "description": "家人协作关系蒸馏→Kuzu协作边"},
+  {"taskId": "rebuild-code-graph",       "lx": "L2", "category": "代码认知", "schedule": "daily", "expectedHour": 5,  "maxAgeHours": 28, "description": "代码图谱增量重建（CrewClaw+Scripts）"},
+  {"taskId": "l4-dpo-scan",             "lx": "L4", "category": "深度学习", "schedule": "weekly", "expectedDay": 1,    "maxAgeHours": 196,"description": "DPO周级扫描（generate_dpo_good_responses）"},
+  {"taskId": "lucas-heartbeat",          "lx": "L1", "category": "Agent巡检", "schedule": "daily", "expectedHour": 20, "maxAgeHours": 28, "description": "Lucas HEARTBEAT（开发任务跟进）"},
+  {"taskId": "pipeline-cleanup",         "lx": "L0", "category": "基础设施", "schedule": "daily", "expectedHour": 4,  "maxAgeHours": 28, "description": "Pipeline目录TTL清理（15天过期）"},
+  {"taskId": "visitor-silence",          "lx": "L0", "category": "基础设施", "schedule": "daily", "expectedHour": 3,  "maxAgeHours": 28, "description": "访客沉寂检测（30天→dormant/90天→归档）"}
+]

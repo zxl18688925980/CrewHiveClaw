@@ -3,10 +3,10 @@
  *
  * Layer 2 (before_model_resolve)
  *   complexityScore < localThreshold → 本地 LOCAL_MODEL_NAME (Ollama)
- *   否则 → 云端（Lucas→DeepSeek，Andy→MiniMax，Lisa→GLM-5）
+ *   否则 → 云端（Lucas→DeepSeek，Andy→DeepSeek R1，Lisa→MiniMax）
  *   localThreshold 初始 0.0（全走云端），evolveRouting() 数据驱动小步提升
- *   Andy            → ANDY_PROVIDER/ANDY_MODEL 控制（默认 MiniMax）
- *   Lisa            → LISA_PROVIDER/LISA_MODEL 控制（默认 ZAI/GLM-5）
+ *   Andy            → ANDY_PROVIDER/ANDY_MODEL 控制（默认 deepseek/deepseek-reasoner）
+ *   Lisa            → LISA_PROVIDER/LISA_MODEL 控制（默认 minimax/MiniMax-M2.7）
  *
  * Layer 3 (before_prompt_build)
  *   Lucas 响应前从 ChromaDB 查询相关记忆片段，注入为上下文
@@ -23,7 +23,7 @@
  *             推送两次：规划完（推 1）+ Lucas 验收后（推 2）；降级链：Andy验收→Lisa原始报告
  *   trigger_lisa_implementation：Andy 专属，完成 spec 设计后交给 Lisa 实现（含集成点静态验证）
  *   report_bug：Lucas 专属，Bug 修复直通路径（跳过 Andy，直触 Lisa）；需提供 file + symptom + acceptance
- *   run_opencode：Lisa 专属工具，调用 opencode CLI 执行代码实现（opencode 通过 ~/.config/opencode/opencode.json 使用 zai/glm-5）
+ *   run_opencode：Lisa 专属工具，调用 opencode CLI 执行代码实现（opencode 通过 ~/.config/opencode/opencode.json 使用 Lisa 当前模型）
  *   report_implementation_issue：Lisa 专属，实现遇阻时向 Andy 反馈（V模型右侧回路）
  *   record_outcome_feedback：Lucas 专属，用户反馈好用/出问题时更新 Andy+Lisa 决策记忆 outcome
  *   list_active_tasks：Lucas 专属，查询当前排队/进行中任务列表
@@ -56,6 +56,7 @@ const CHANNEL_BASE_URL       = process.env.CHANNEL_BASE_URL        || process.en
 const OPENCODE_BIN     = process.env.OPENCODE_BIN             || "opencode";
 // const PLANDEX_BIN   = process.env.PLANDEX_BIN              || "plandex";  // plandex 已废除
 const PROJECT_ROOT     = process.env.HOMEAI_ROOT              || `${process.env.HOME}/HomeAI`;
+const SCRIPTS_DIR      = join(PROJECT_ROOT, "CrewHiveClaw", "HomeAILocal", "Scripts");
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY         || "";
 // 组织所有者 userId（实例通过 OWNER_ID 环境变量设置）
 const OWNER_ID         = process.env.OWNER_ID                 || "ZengXiaoLong";
@@ -154,23 +155,23 @@ function agentThreadRounds(threadId: string): number {
 }
 
 // Lucas 云端模型路由
-// LUCAS_CLOUD_PROVIDER: anthropic | deepseek | zai | ollama
-const LUCAS_PROVIDER   = process.env.LUCAS_CLOUD_PROVIDER     || "anthropic";
+// LUCAS_CLOUD_PROVIDER: deepseek | anthropic | zai | ollama
+const LUCAS_PROVIDER   = process.env.LUCAS_CLOUD_PROVIDER     || "deepseek";
 
 // Andy 模型路由（与 Lucas before_model_resolve 同等原则）
-// ANDY_PROVIDER: minimax | deepseek | zai | ollama
-// ANDY_MODEL: 模型 ID（MiniMax-M2.7 / deepseek-chat / glm-5 / local-assistant）
-const ANDY_PROVIDER    = process.env.ANDY_PROVIDER            || "minimax";
-const ANDY_MODEL       = process.env.ANDY_MODEL               || "MiniMax-M2.7";
+// ANDY_PROVIDER: deepseek | minimax | zai | ollama
+// ANDY_MODEL: 模型 ID（deepseek-reasoner / deepseek-chat / MiniMax-M2.7 / glm-5 / local-assistant）
+const ANDY_PROVIDER    = process.env.ANDY_PROVIDER            || "deepseek";
+const ANDY_MODEL       = process.env.ANDY_MODEL               || "deepseek-reasoner";
 
 // Lisa 模型路由（OpenCode 模型选择跟着 Lisa 走）
-// LISA_PROVIDER: zai | deepseek | ollama
+// LISA_PROVIDER: minimax | deepseek | zai | ollama
 // LISA_MODEL: 模型 ID
-const LISA_PROVIDER    = process.env.LISA_PROVIDER            || "zai";
-const LISA_MODEL       = process.env.LISA_MODEL               || "glm-5";
+const LISA_PROVIDER    = process.env.LISA_PROVIDER            || "minimax";
+const LISA_MODEL       = process.env.LISA_MODEL               || "MiniMax-M2.7";
 
-// OpenCode 子进程的模型（opencode CLI 通过 ~/.config/opencode/opencode.json 自定义 zai provider）
-// 模型名格式：zai/glm-5（与 OpenClaw 中的 provider/model 格式相同）
+// OpenCode 子进程的模型（opencode CLI 通过 ~/.config/opencode/opencode.json 自定义 provider）
+// 模型名格式：minimax/MiniMax-M2.7（与 OpenClaw 中的 provider/model 格式相同）
 // 若未设置，fallback 到 LISA_PROVIDER/LISA_MODEL
 const OPENCODE_MODEL   = process.env.OPENCODE_MODEL           || `${LISA_PROVIDER}/${LISA_MODEL}`;
 
@@ -260,7 +261,7 @@ const AGENT_EVOLUTION_CONFIGS: AgentEvolutionConfig[] = [
     localProvider: "mlx",
     localModel: "gemma-4-lucas",
     cloudProvider: LUCAS_PROVIDER,
-    cloudModel: process.env.LUCAS_CLOUD_MODEL || "claude-sonnet-4-6",
+    cloudModel: process.env.LUCAS_CLOUD_MODEL || "deepseek-chat",
     localThresholdInit: 0.0,       // 起点：全走云端，积累数据后再进化
     localRatioTarget: 0.7,         // 目标：70% 走本地（日常对话密集）
     capabilityEventsFile: join(PROJECT_ROOT, `data/learning/${FRONTEND_AGENT_ID}-capability-events.jsonl`),
@@ -823,8 +824,109 @@ function isDevOrComplexIntent(prompt: string): boolean {
 
 const CHROMA_URL = process.env.CHROMA_URL || "http://localhost:8001";
 const CHROMA_BASE = `${CHROMA_URL}/api/v2/tenants/default_tenant/databases/default_database/collections`;
-const MEMORY_CONTEXT_SIZE = 4;
+const MEMORY_CONTEXT_SIZE = 8;  // v645: 记忆召回预算 4→8，四维检索全覆盖 + 图增强
 const DECISION_MEMORY_CONTEXT_SIZE = 5;
+
+// ── Kuzu 实体名 Map（P0 图增强检索）───────────────────────────────────
+// 启动时从 Kuzu 加载所有 Entity 节点的 name→entityId 映射，
+// queryMemories 时用 prompt 关键词扫描命中实体，再图遍历增强检索词。
+// 别名表：家人在日常对话中使用的短称呼 → 对应 Kuzu entityId
+const ENTITY_ALIAS_MAP: Record<string, string> = {
+  "爸爸": "zengxiaolong", "曾小龙": "zengxiaolong",
+  "妈妈": "XiaMoQiuFengLiang", "张璐": "XiaMoQiuFengLiang",
+  "小姨": "ZiFeiYu", "肖山": "ZiFeiYu",
+  "姐姐": "ZengYueYuTong", "黟黟": "ZengYueYuTong", "玥玥": "ZengYueYuTong",
+};
+// Kuzu Entity name → entityId 缓存（启动时填充，含 person 和 topic）
+let kuzuEntityNameMap: Map<string, string> = new Map();
+let kuzuEntityMapLoaded = false;
+
+/** 启动时从 Kuzu 加载所有 Entity 的 name→id 映射 */
+function loadKuzuEntityMap(): void {
+  if (kuzuEntityMapLoaded) return;
+  try {
+    const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
+    const scriptPath = join(SCRIPTS_DIR, "kuzu-query.py");
+    const cypher = "MATCH (e:Entity) RETURN e.name, e.id, e.type";
+    const result = spawnSync(
+      KUZU_PYTHON3,
+      [scriptPath, cypher, "{}"],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    if (result.status === 0 && result.stdout?.trim()) {
+      const rows = JSON.parse(result.stdout.trim()) as unknown[][];
+      for (const row of rows) {
+        const name = String(row[0] ?? "");
+        const id = String(row[1] ?? "");
+        const type = String(row[2] ?? "");
+        if (name && id) {
+          kuzuEntityNameMap.set(name, id);
+          // topic name 可能含长描述，取前 8 字做短匹配
+          if (type === "topic" && name.length > 8) {
+            kuzuEntityNameMap.set(name.slice(0, 8), id);
+          }
+        }
+      }
+    }
+    kuzuEntityMapLoaded = true;
+    console.log(`[P0] Kuzu entity map loaded: ${kuzuEntityNameMap.size} names`);
+  } catch (e) {
+    console.error("[P0] loadKuzuEntityMap failed:", (e as Error).message);
+  }
+}
+
+/** 从 prompt 中提取命中的 Kuzu entityId 列表 */
+function extractEntityHits(prompt: string): string[] {
+  const hits = new Set<string>();
+  // 1. 别名匹配（短称呼优先，长称呼兜底）
+  for (const [alias, entityId] of Object.entries(ENTITY_ALIAS_MAP)) {
+    if (prompt.includes(alias)) hits.add(entityId);
+  }
+  // 2. Kuzu Entity name 匹配（只取 person 和 topic 类型，按 name 长度降序匹配）
+  if (kuzuEntityMapLoaded) {
+    const names = Array.from(kuzuEntityNameMap.keys()).sort((a, b) => b.length - a.length);
+    for (const name of names) {
+      if (name.length >= 3 && prompt.includes(name)) {
+        hits.add(kuzuEntityNameMap.get(name)!);
+      }
+    }
+  }
+  return Array.from(hits);
+}
+
+/** 从命中的 Entity 出发图遍历，收集关联话题名 + 关联人名（1跳） */
+function graphExpandEntities(entityIds: string[]): { topicNames: string[]; personNames: string[] } {
+  const topicNames = new Set<string>();
+  const personNames = new Set<string>();
+  if (entityIds.length === 0) return { topicNames: [], personNames: [] };
+  try {
+    const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
+    const scriptPath = join(SCRIPTS_DIR, "kuzu-query.py");
+    // 1跳遍历：命中 Entity → Fact 边 → 关联 Entity（topic 和 person）
+    const ids = entityIds.map(id => `'${id.replace(/'/g, "''")}'`).join(",");
+    const cypher = `MATCH (e:Entity)-[f:Fact]-(other:Entity)
+                    WHERE e.id IN [${ids}] AND f.valid_until IS NULL
+                      AND other.type IN ['topic', 'person']
+                    RETURN DISTINCT other.name, other.type LIMIT 30`;
+    const result = spawnSync(
+      KUZU_PYTHON3,
+      [scriptPath, cypher, "{}"],
+      { encoding: "utf8", timeout: 3000 },
+    );
+    if (result.status === 0 && result.stdout?.trim()) {
+      const rows = JSON.parse(result.stdout.trim()) as unknown[][];
+      for (const row of rows) {
+        const name = String(row[0] ?? "");
+        const type = String(row[1] ?? "");
+        if (name) {
+          if (type === "topic") topicNames.add(name);
+          else if (type === "person") personNames.add(name);
+        }
+      }
+    }
+  } catch { /* 图遍历失败不影响主流程 */ }
+  return { topicNames: Array.from(topicNames), personNames: Array.from(personNames) };
+}
 
 type DecisionRecord = {
   decision_id: string;
@@ -979,7 +1081,7 @@ function getRelatedPersonIds(userId: string): string[] {
                     WHERE other.type = 'person' AND other.id <> $userId AND rel.valid_until IS NULL
                     RETURN DISTINCT other.id LIMIT 10`;
     const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
-    const scriptPath   = join(PROJECT_ROOT, "scripts/kuzu-query.py");
+    const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
     const result = spawnSync(
       KUZU_PYTHON3,
       [scriptPath, cypher, JSON.stringify({ userId })],
@@ -1006,7 +1108,7 @@ function getTopicRelatedPersonIds(userId: string): string[] {
                     WHERE other.id <> $userId AND f2.valid_until IS NULL
                     RETURN DISTINCT other.id LIMIT 10`;
     const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
-    const scriptPath   = join(PROJECT_ROOT, "scripts/kuzu-query.py");
+    const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
     const result = spawnSync(
       KUZU_PYTHON3,
       [scriptPath, cypher, JSON.stringify({ userId })],
@@ -1026,9 +1128,9 @@ function queryCausalFacts(userId: string): { value: string; context: string }[] 
   try {
     const cypher = `MATCH (p:Entity {id: $userId})-[f:Fact {relation: 'causal_relation'}]->(t:Entity)
                     WHERE f.valid_until IS NULL
-                    RETURN t.name, f.context LIMIT 8`;
+                    RETURN t.name, f.context LIMIT 12`;  // v645: 因果维度预算 8→12
     const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
-    const scriptPath   = join(PROJECT_ROOT, "scripts/kuzu-query.py");
+    const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
     const result = spawnSync(
       KUZU_PYTHON3,
       [scriptPath, cypher, JSON.stringify({ userId })],
@@ -1060,7 +1162,7 @@ interface TopicMatch {
 async function queryRelevantTopics(embedding: number[], userId: string | null = null): Promise<TopicMatch[]> {
   try {
     const where = userId ? { userId: { $eq: userId } } as Record<string, unknown> : undefined;
-    const raw = await chromaQuery("topics", embedding, 5, where);
+    const raw = await chromaQuery("topics", embedding, 8, where);  // v645: 语义维度预算 5→8
     return raw
       .map(r => {
         const meta = r.metadata as Record<string, string>;
@@ -1154,10 +1256,35 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
       }
     }
 
-    // ── Step 3: 对话片段检索（topic 关键词增强 query）────────────────────
-    // topic 关键词拼入 query：让 embedding 更贴近历史对话实际内容，减少措辞漂移导致的漏召回。
-    const searchEmbedding = topicKeywords
-      ? await embedText(`${prompt} ${topicKeywords}`.slice(0, 400))
+    // ── Step 3: 对话片段检索（图增强 + topic 关键词增强 query）────────────
+    // P0 图增强：从 prompt 提取实体 → Kuzu 图遍历 → 收集关联话题/人物名 → 拼入检索词
+    // 与 ChromaDB topic-first 互补：topic-first 靠向量相似度，图增强靠结构化关系
+    // 安全边界：访客 session 跳过图增强——避免家庭图结构（人物名/话题名）通过检索路径泄漏
+    const isVisitorSession = userId.startsWith("visitor:");
+    let graphKeywords = "";
+    if (!isGroup && kuzuEntityMapLoaded && !isVisitorSession) {
+      const entityHits = extractEntityHits(prompt);
+      if (entityHits.length > 0) {
+        const { topicNames, personNames } = graphExpandEntities(entityHits);
+        // 图遍历结果拼入检索词（取 topic name 中的关键词，去掉 topic_ 前缀等噪音）
+        const cleanTopics = topicNames
+          .map(n => n.replace(/^topic_/, "").replace(/_/g, " ").trim())
+          .filter(n => n.length >= 2 && n.length <= 30)
+          .slice(0, 10);  // 最多 10 个话题关键词
+        const cleanPersons = personNames
+          .map(n => n.replace(/^(爸爸|妈妈|小姨|姐姐)/, "").trim())
+          .filter(n => n.length >= 2)
+          .slice(0, 5);   // 最多 5 个人名关键词
+        graphKeywords = [...cleanTopics, ...cleanPersons].join(" ");
+        if (graphKeywords) {
+          console.log(`[P0] graph-enhanced: entities=[${entityHits.join(",")}] keywords="${graphKeywords.slice(0, 80)}"`);
+        }
+      }
+    }
+    // 组合检索词：原始 prompt + ChromaDB topic 关键词 + 图增强关键词
+    const allKeywords = [topicKeywords, graphKeywords].filter(Boolean).join(" ");
+    const searchEmbedding = allKeywords
+      ? await embedText(`${prompt} ${allKeywords}`.slice(0, 400))
       : baseEmbedding;
 
     const humanFilter = { fromType: { $eq: "human" } };
@@ -1187,7 +1314,11 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
         ? { $and: [humanFilter, { userId: { $eq: visitorUserIdFilter.toLowerCase() } }] }
         : humanFilter;
     const raw     = await chromaQuery("conversations", searchEmbedding, MEMORY_CONTEXT_SIZE * 2, isGroup ? undefined : where);
-    const results = timeWeightedRerank(raw, MEMORY_CONTEXT_SIZE);
+    // entity boost reranking: 如果查询命中了实体，给包含相同实体 tag 的记录排序提升
+    const queryEntityIds = entityHits.length > 0 ? new Set(entityHits) : null;
+    const results = queryEntityIds
+      ? timeWeightedRerankWithEntityBoost(raw, MEMORY_CONTEXT_SIZE, queryEntityIds)
+      : timeWeightedRerank(raw, MEMORY_CONTEXT_SIZE);
 
     // ── 组合输出（时间记录 → 档案 → topic 事实 → 因果关系 → 对话片段）────
     const parts: string[] = [];
@@ -1286,6 +1417,7 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
       timestamp:      nowCST(),
       prompt:         prompt.slice(0, 500),
       response:       response.slice(0, 500),
+      entityTags:     extractEntityHits(`${prompt} ${response}`).join(","),
     }, embedding);
   } catch (e) {
     appendJsonl(join(PROJECT_ROOT, "data/learning/memory-write-errors.jsonl"), {
@@ -1455,7 +1587,32 @@ function timeWeightedRerank<T extends { metadata: Record<string, unknown> }>(
     .map(({ r }) => r);
 }
 
-// ── 时间维度召回（MAGMA 时间维度，补齐检索侧）───────────────────────
+/** timeWeightedRerank + entity boost：匹配查询实体的记录获得排序提升 */
+function timeWeightedRerankWithEntityBoost<T extends { metadata: Record<string, unknown> }>(
+  results: T[],
+  topN: number,
+  queryEntityIds: Set<string>,
+): T[] {
+  if (results.length === 0) return [];
+  const now = Date.now();
+  return results
+    .map((r, i) => {
+      const ts = (r.metadata.timestamp as string | undefined) ?? "";
+      const ageMs = ts ? now - new Date(ts).getTime() : now;
+      const ageMonths = ageMs / (1000 * 60 * 60 * 24 * 30);
+      const timeWeight = ageMonths < 3 ? 1.0 : ageMonths < 12 ? 0.7 : 0.3;
+      const positionWeight = 1 / (i + 1);
+      // entity boost: 记录的 entityTags 包含查询命中的任一实体 → ×1.5
+      const entityTags = (r.metadata.entityTags as string | undefined) ?? "";
+      const hasEntityMatch = entityTags.length > 0 &&
+        entityTags.split(",").some(tag => queryEntityIds.has(tag));
+      const entityBoost = hasEntityMatch ? 1.5 : 1.0;
+      return { r, score: positionWeight * timeWeight * entityBoost };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+    .map(({ r }) => r);
+}
 // MAGMA 四维度中「时间维度」的检索路径：当 query 含时间词时，按 timestamp 直接拉取记录，
 // 不走语义搜索——解决「今天早上聊了什么」此类时序查询语义相似度低、命中失败的问题。
 
@@ -1690,7 +1847,7 @@ function buildShadowCapabilityView(): string {
     return _capViewCache.content;
   }
   try {
-    const tmpScript = join(PROJECT_ROOT, "scripts/_shadow_cap_view.py");
+    const tmpScript = join(SCRIPTS_DIR, "_shadow_cap_view.py");
     const scriptContent = [
       "import kuzu, os, json, sys",
       "db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))",
@@ -1852,7 +2009,7 @@ async function queryCodeStructure(symbol: string): Promise<string> {
   try {
     const safeSymbol = symbol.replace(/['"\\`]/g, "").slice(0, 120);
     if (!safeSymbol) return "";
-    const tmpScript = join(PROJECT_ROOT, "scripts/_code_graph_query.py");
+    const tmpScript = join(SCRIPTS_DIR, "_code_graph_query.py");
     const scriptContent = [
       "import kuzu, os, json, sys",
       `sym = ${JSON.stringify(safeSymbol)}`,
@@ -3682,7 +3839,7 @@ function enqueueForFinetune(params: {
   // queue ≥ 100 条时触发 MLX 增量微调（异步，不阻塞）
   const queueSize = readJsonlEntries(FINETUNE_QUEUE_FILE).length;
   if (queueSize >= FINETUNE_QUEUE_TRIGGER) {
-    const schedulerPath = join(PROJECT_ROOT, "scripts/finetune-scheduler.js");
+    const schedulerPath = join(SCRIPTS_DIR, "finetune-scheduler.js");
     if (existsSync(schedulerPath)) {
       spawn("node", [schedulerPath], {
         detached: true,
@@ -4453,6 +4610,8 @@ const crewclawRoutingPlugin = {
       evolveLifecycles();
       // 全部基础 Agent 的实例层 skills 目录初始化（从框架层复制，已有文件不覆盖）
       for (const aid of BASE_AGENTS) initAgentSkillsDir(aid);
+      // P0 图增强：加载 Kuzu 实体名 Map 到内存
+      loadKuzuEntityMap();
     });
 
     // 子 Agent 休眠检测：每 24h 运行一次（第一次在 evolveLifecycles 已运行）
@@ -4671,7 +4830,7 @@ const crewclawRoutingPlugin = {
                   .replace(/\bdate\(\)/g, `date('${todayStr}')`);
                 const { topK: _t, ...kuzuParams } = _boundParams;
                 const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
-                const scriptPath   = join(PROJECT_ROOT, "scripts/kuzu-query.py");
+                const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
                 const result = spawnSync(
                   KUZU_PYTHON3,
                   [scriptPath, cypher, JSON.stringify(kuzuParams)],
@@ -5010,9 +5169,9 @@ const crewclawRoutingPlugin = {
       if (agentId === FRONTEND_AGENT_ID) {
         // 记录当前会话 userId（visitor session 也记录完整 token），供 recall_memory 工具在无 session 上下文时使用
         lastFrontendUserId = userId.toLowerCase();
-        // 滑动窗口：保留最近 40 条 + 第 0 条（system prompt）
-        // 40 = 15 轮历史（30条）+ 当前消息（1条）+ prependContext 注入（若干条）留余量
-        const LUCAS_MSG_WINDOW = 40;
+        // 滑动窗口：保留最近 50 条 + 第 0 条（system prompt）
+        // 50 = 15 轮历史（30条）+ 当前消息（1条）+ 四维记忆注入（~15条）留余量
+        const LUCAS_MSG_WINDOW = 50;
         const msgs = event.messages as unknown[];
         if (msgs.length > LUCAS_MSG_WINDOW + 1) {
           msgs.splice(1, msgs.length - LUCAS_MSG_WINDOW - 1);
@@ -6141,7 +6300,7 @@ const crewclawRoutingPlugin = {
           const lastTs = lastDistillTrigger.get(userId) ?? 0;
           if (now - lastTs >= DISTILL_COOLDOWN_MS) {
             lastDistillTrigger.set(userId, now);
-            const distillScript = join(PROJECT_ROOT, "scripts/distill-memories.py");
+            const distillScript = join(SCRIPTS_DIR, "distill-memories.py");
             const proc = spawn(KUZU_PYTHON3_BIN, [distillScript, "--user", userId], {
               detached: true,
               stdio:    "ignore",
@@ -6155,7 +6314,7 @@ const crewclawRoutingPlugin = {
           const lastAtTs = lastActiveThreadDistillTrigger.get(userId) ?? 0;
           if (now - lastAtTs >= ACTIVE_THREAD_DISTILL_COOLDOWN_MS) {
             lastActiveThreadDistillTrigger.set(userId, now);
-            const atScript = join(PROJECT_ROOT, "scripts/distill-active-threads.py");
+            const atScript = join(SCRIPTS_DIR, "distill-active-threads.py");
             const atProc = spawn(KUZU_PYTHON3_BIN, [atScript, "--user", userId], {
               detached: true,
               stdio:    "ignore",
@@ -9834,9 +9993,27 @@ const crewclawRoutingPlugin = {
           const topics = await queryRelevantTopics(baseEmbedding);
           const topicKeywords = topics.map(t => t.topicName).join(" ");
 
-          // ── Step 3: topic 关键词增强检索 query ──────────────────────────
-          const searchEmbedding = topicKeywords
-            ? await embedText(`${query} ${topicKeywords}`.slice(0, 400))
+          // ── Step 3: 图增强 + topic 关键词增强检索 query ────────────────
+          // P0: recall_memory 也走图增强，与 queryMemories 一致
+          let graphKeywords = "";
+          if (kuzuEntityMapLoaded) {
+            const entityHits = extractEntityHits(query);
+            if (entityHits.length > 0) {
+              const { topicNames, personNames } = graphExpandEntities(entityHits);
+              const cleanTopics = topicNames
+                .map(n => n.replace(/^topic_/, "").replace(/_/g, " ").trim())
+                .filter(n => n.length >= 2 && n.length <= 30)
+                .slice(0, 10);
+              const cleanPersons = personNames
+                .map(n => n.replace(/^(爸爸|妈妈|小姨|姐姐)/, "").trim())
+                .filter(n => n.length >= 2)
+                .slice(0, 5);
+              graphKeywords = [...cleanTopics, ...cleanPersons].join(" ");
+            }
+          }
+          const allKeywords = [topicKeywords, graphKeywords].filter(Boolean).join(" ");
+          const searchEmbedding = allKeywords
+            ? await embedText(`${query} ${allKeywords}`.slice(0, 400))
             : baseEmbedding;
 
           // ── Step 4: 图扩展（加入关联家人的对话）────────────────────────
@@ -9859,7 +10036,10 @@ const crewclawRoutingPlugin = {
               : undefined;
 
           const raw = await chromaQuery("conversations", searchEmbedding, 10, where);
-          const results = timeWeightedRerank(raw, 6);
+          const recallEntityIds = entityHits.length > 0 ? new Set(entityHits) : null;
+          const results = recallEntityIds
+            ? timeWeightedRerankWithEntityBoost(raw, 6, recallEntityIds)
+            : timeWeightedRerank(raw, 6);
 
           // ── 时间维度旁路：含时间词时直接按 timestamp 拉取 ───────────────
           let timeRecords: Array<{ document: string; metadata: Record<string, unknown> }> = [];
@@ -9912,8 +10092,8 @@ const crewclawRoutingPlugin = {
               if (now - lastBs >= BLIND_SPOT_DISTILL_COOLDOWN_MS) {
                 lastBlindSpotDistillTrigger.set(recallUserId, now);
                 // fire-and-forget：蒸馏 + 渲染，下次对话 inject.md 会带上这段历史
-                const distillScript = join(PROJECT_ROOT, "scripts/distill-memories.py");
-                const renderScript  = join(PROJECT_ROOT, "scripts/render-knowledge.py");
+                const distillScript = join(SCRIPTS_DIR, "distill-memories.py");
+                const renderScript  = join(SCRIPTS_DIR, "render-knowledge.py");
                 const dp = spawn(KUZU_PYTHON3_BIN, [distillScript, "--user", recallUserId, "--force"], { detached: true, stdio: "ignore" });
                 dp.unref();
                 dp.once("close", () => {
