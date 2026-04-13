@@ -906,3 +906,29 @@ async function executeMainTool(toolName, toolInput) {
 
 **状态**：活跃（R1 模型行为，无法从模型侧修复，基础设施层兜底）
 **确认日期**：2026-04-14
+
+### 插件代码中 PROJECT_ROOT 路径拼接遗漏导致功能静默失效
+
+**场景**：新增的配置文件读取路径拼错了（少了中间目录层），但外层 catch 静默吞掉错误，表面上不报错但功能实际没生效。
+
+**本次案例**：
+
+v667 新增 `config/context-budget.json` 读取，代码写成：
+```typescript
+const budgetPath = join(PROJECT_ROOT, "crewclaw-routing", "config", "context-budget.json");
+```
+但 `PROJECT_ROOT = ~/HomeAI`，实际文件在 `~/HomeAI/CrewHiveClaw/CrewClaw/crewclaw-routing/config/`——少了 `CrewHiveClaw/CrewClaw` 两层。其他配置文件（如 dpo-patterns.json）用的是正确路径 `join(PROJECT_ROOT, "CrewHiveClaw/CrewClaw/crewclaw-routing/config/...")`。
+
+**现象**：编译通过、Gateway 启动无报错、功能看起来正常但没有 `[budget]` 日志输出。catch 块静默忽略文件不存在错误。
+
+**根因**：插件中大量 `try { ... } catch (_e) { /* 静默 */ }` 模式——对非关键路径合理，但掩盖了新功能的配置问题。
+
+**防范**：
+- 新增配置文件读取时，catch 块至少 `console.log` 一次失败信息（可用 `console.log('[budget] config load failed:', _e)`）
+- 路径拼接参照已有同类代码（如 dpo-patterns.json 的路径），不要凭记忆写
+- 编译通过 ≠ 功能正确；新功能首次部署后必须检查日志确认生效
+
+**修复**：`join(PROJECT_ROOT, "CrewHiveClaw", "CrewClaw", "crewclaw-routing", "config", "context-budget.json")`
+
+**状态**：已修复
+**确认日期**：2026-04-14
