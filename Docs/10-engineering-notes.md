@@ -865,3 +865,44 @@ async function executeMainTool(toolName, toolInput) {
 
 **状态**：已修复（2026-04-10，提升到 `executeMainTool` 顶部）
 **确认日期**：2026-04-10
+
+---
+
+## 2026-04-14
+
+### jiti Babel parser 缺少 try 导致 catch 报 Unexpected token
+
+**场景**：`crewclaw-routing/index.ts` 经 `check-plugin.sh`（tsc + tsx）编译通过，但 OpenClaw Gateway 通过 jiti 2.6.1 Babel parser 加载时报 `ParseError: Unexpected token`。
+
+**现象**：Gateway 日志显示 `crewclaw-routing failed to load`，但 `check-plugin.sh` exit 0。插件完全无法加载，所有工具消失。
+
+**根因**：`before_prompt_build` 中有多个独立的 try/catch 代码块。前一个 catch 在 L5930 关闭了其对应的 try，但后续的 Lucas 知识投喂代码块（L5932-5955）没有自己的 `try {` 开头。代码直到 L5956 才遇到 `} catch (_e) {`，此时没有匹配的 try，jiti Babel parser 报错。tsc/tsx 的 parser 对此容忍，jiti 不容忍。
+
+**隐蔽性**：
+- `check-plugin.sh` 用 tsx 编译，对裸 catch（无匹配 try）不报错
+- jiti 懒加载——parse error 在首次真实请求时才暴露，不是启动时
+- 之前已踩过一次类似问题（v657），那次是 `await import()` 在非 async 上下文
+
+**规避方式**：
+- 新增代码块时，确保每个 `catch` 都有对应的 `try`
+- 修改 catch 位置时，检查是否把对应的 try 一起移走了
+- 大文件（6000+ 行）尤其容易产生此类结构性错误，改完跑 check-plugin.sh 后也要观察 Gateway 日志
+
+**状态**：已修复（2026-04-14，补上缺失的 `try {`）
+**确认日期**：2026-04-14
+
+### DeepSeek R1 长程推理工具调用遗漏
+
+**场景**：Andy（DeepSeek R1）在 `runAndyPipeline` 中完成方案分析并输出完整 Implementation Spec JSON。
+
+**现象**：R1 的 CoT 推理过程完整（需求分析→技术选型→架构设计→spec JSON 输出），但最后一步「调用 `trigger_lisa_implementation` 工具」被跳过。task-registry 3/3 任务因此全部 failed。
+
+**根因**：推测是 R1 长程推理衰减——CoT 过长时，模型对末尾工具调用的注意力不足。非确定性复现，偶尔能调到。
+
+**规避方式**：
+- 流水线末端增加自动重触发：检测 Andy 输出含 spec JSON（`integration_points` 关键字）但协作线程文件不存在 → 自动提取 spec 并构造精简 retry prompt → 二次调 Andy
+- retry prompt 只要求一件事：调用 trigger_lisa_implementation（减少注意力分散）
+- 重触发失败才转 Lucas 决策路径
+
+**状态**：活跃（R1 模型行为，无法从模型侧修复，基础设施层兜底）
+**确认日期**：2026-04-14
