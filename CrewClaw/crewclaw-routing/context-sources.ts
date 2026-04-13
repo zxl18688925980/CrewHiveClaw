@@ -71,6 +71,7 @@ export interface ChromaSource {
   topK:         number;
   label:        string;   // 注入时的前缀标签，例如「近期对话」
   inject:       InjectMode;
+  tier?:        0 | 1 | 2 | 3;  // 上下文预算分层（默认 2），0=不可裁剪 1=高优 2=正常 3=低优
 }
 
 // ── Kuzu 来源 ─────────────────────────────────────────────────────────────
@@ -84,6 +85,7 @@ export interface KuzuSource {
   label:   string;
   inject:  InjectMode;
   ready:   boolean;                    // false = Kuzu 数据尚未就绪，跳过（不报错）
+  tier?:   0 | 1 | 2 | 3;             // 上下文预算分层（默认 2）
 }
 
 // ── 文件来源（过渡态）────────────────────────────────────────────────────
@@ -101,6 +103,7 @@ export interface FileSource {
   filePath?: string;   // queryMode=static-file 时必填，支持 ~ 展开
   label:     string;
   inject:    InjectMode;
+  tier?:     0 | 1 | 2 | 3;  // 上下文预算分层（默认 2）
 }
 
 export type ContextSource = ChromaSource | KuzuSource | FileSource;
@@ -117,6 +120,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "file", id: "family-profile",
       queryMode: "user-profile",
       label: "家人档案", inject: "append-system",
+      tier: 1,
     },
 
     // 家人动态摘要：机械提取的实时状态（承诺、话题、接话点），不走检索，每轮注入
@@ -124,6 +128,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "file", id: "family-now",
       queryMode: "user-now",
       label: "当前状态快照", inject: "append-system",
+      tier: 0,
     },
 
     // 项目背景：HomeAI 是什么、Andy/Lisa 幕后团队、流水线、里程碑（前世今生）
@@ -132,6 +137,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lucas/BACKGROUND.md",
       label: "项目背景", inject: "append-system",
+      tier: 1,
     },
 
     // Lucas 自我认知摘要：OpenClaw 原生已在 prompt 开头注入 MEMORY.md，无需重复
@@ -146,6 +152,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "conversations",
       collection: "conversations", queryMode: "by-user",
       topK: 5, label: "近期对话", inject: "append-system",
+      tier: 2,
     },
 
     // Lucas 自己的决策记忆
@@ -153,6 +160,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "decision-memory",
       collection: "decisions", queryMode: "semantic", agentFilter: "lucas",
       topK: 3, label: "决策记忆", inject: "append-system",
+      tier: 2,
     },
 
     // 对家人的未完成承诺
@@ -160,6 +168,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "pending-commitments",
       collection: "decisions", queryMode: "pending-commitments",
       topK: 5, label: "未完成承诺", inject: "append-system",
+      tier: 3,
     },
 
     // 进行中需求
@@ -167,6 +176,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "pending-requirements",
       collection: "requirements", queryMode: "pending-requirements",
       topK: 5, label: "进行中需求", inject: "append-system",
+      tier: 3,
     },
 
     // 团队近期动态
@@ -174,6 +184,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "agent-interactions",
       collection: "agent_interactions", queryMode: "agent-interactions", agentFilter: "lucas",
       topK: 3, label: "团队近期动态", inject: "append-system",
+      tier: 3,
     },
 
     // 家庭行为规律
@@ -181,6 +192,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "behavior-patterns",
       collection: "behavior_patterns", queryMode: "semantic",
       topK: 3, label: "行为规律", inject: "append-system",
+      tier: 2,
     },
 
     // 家庭知识
@@ -188,6 +200,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "family-knowledge",
       collection: "family_knowledge", queryMode: "semantic",
       topK: 3, label: "家庭知识", inject: "append-system",
+      tier: 2,
     },
 
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）
@@ -202,6 +215,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["agentId"],
       topK: 21, label: "当前能力清单", inject: "append-system",
       ready: true,
+      tier: 2,
     },
 
     // Kuzu：角色行为模式（ready=true；distill-agent-memories.py 首次成功运行于 2026-03-31）
@@ -215,6 +229,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["agentId"],
       topK: 10, label: "行为模式积累", inject: "append-system",
       ready: true,
+      tier: 2,
     },
 
     // Web 应用工具（关键词命中时注入精准 URL）
@@ -222,6 +237,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "file", id: "app-capabilities",
       queryMode: "app-capabilities",
       label: "可调用工具", inject: "prepend",
+      tier: 1,
     },
 
     // Kuzu：家人实时状态（路径已完整：distill-memories.py → Kuzu → render-knowledge.py → inject.md）
@@ -234,6 +250,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["userId"],
       topK: 10, label: "家人当前状态", inject: "append-system",
       ready: true,
+      tier: 1,
     },
 
     // Kuzu：近期待跟进事项（has_pending_event，按 valid_until 升序，最近到期的排前面）
@@ -246,6 +263,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["userId"],
       topK: 5, label: "待跟进事项", inject: "append-system",
       ready: true,
+      tier: 3,
     },
 
     // Kuzu：当前活跃话题线索（distill-active-threads.py 写入，每次对话后触发 6h 冷却）
@@ -260,6 +278,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["userId"],
       topK: 5, label: "当前活跃话题", inject: "append-system",
       ready: true,
+      tier: 2,
     },
 
     // Kuzu：关系网络近况（P2-A path B）— 遍历家庭关系边，找相关家人的当前状态/近期关注/重要事件
@@ -275,6 +294,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["userId"],
       topK: 12, label: "家人近况", inject: "append-system",
       ready: true,
+      tier: 1,
     },
 
     // Kuzu：话题共鸣（P2-A path A）— 找到与当前说话人关注相同话题的其他人（家庭成员 + 周边人）
@@ -293,6 +313,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["userId"],
       topK: 8, label: "话题共鸣", inject: "append-system",
       ready: true,
+      tier: 3,
     },
 
     // Kuzu：因果关系事实（causal_relation，MAGMA 因果维度独立注入）
@@ -307,6 +328,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["userId"],
       topK: 8, label: "因果关系", inject: "append-system",
       ready: true,
+      tier: 3,
     },
   ],
 
@@ -318,6 +340,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-andy/BACKGROUND.md",
       label: "项目背景", inject: "append-system",
+      tier: 1,
     },
 
     // 工作规则：工具调用铁律 + 输出标准 + 家庭 Web 约束（OpenClaw 原生只注入全局模板，这里补注 Andy 专属规则）
@@ -326,6 +349,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-andy/AGENTS.md",
       label: "工作规则", inject: "append-system",
+      tier: 0,
     },
 
     // 系统架构知识：三层架构 + 关键路径 + 数据层 + 约束（常驻 system prompt）
@@ -334,6 +358,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-andy/ARCH.md",
       label: "系统架构", inject: "append-system",
+      tier: 0,
     },
 
     // 设计积累：已验证的设计原则 + 踩过的坑 + 判断规则（蒸馏自 decisions 集合）
@@ -342,6 +367,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-andy/MEMORY.md",
       label: "设计积累", inject: "append-system",
+      tier: 1,
     },
 
     // 设计决策规则：「遇到 X 做 Y 不做 Z」判断规则（架构/Spec/降级设计，来自真实踩坑）
@@ -350,6 +376,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-andy/DESIGN-PRINCIPLES.md",
       label: "设计决策规则", inject: "append-system",
+      tier: 0,
     },
 
     // 历史设计决策（过渡态：Andy 的 decision 节点写入 Kuzu 后，由 agent-patterns 接管）
@@ -357,6 +384,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "design-decisions",
       collection: "decisions", queryMode: "semantic", agentFilter: "andy",
       topK: 5, label: "历史决策", inject: "prepend",
+      tier: 2,
     },
 
     // 与 Lucas/Lisa 的协作记录（过渡态：agent 协作侧 Kuzu schema 设计后接管）
@@ -364,6 +392,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "agent-interactions",
       collection: "agent_interactions", queryMode: "agent-interactions", agentFilter: "andy",
       topK: 3, label: "协作历史", inject: "prepend",
+      tier: 3,
     },
 
     // 进行中需求（Andy 判断是否已有能力覆盖用）
@@ -371,6 +400,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "pending-requirements",
       collection: "requirements", queryMode: "pending-requirements",
       topK: 5, label: "进行中需求", inject: "prepend",
+      tier: 2,
     },
 
     // 历史实现记录（过渡态：写入 Kuzu code_history 节点后接管）
@@ -378,6 +408,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "code-history",
       collection: "code_history", queryMode: "code-history",
       topK: 3, label: "实现历史", inject: "prepend",
+      tier: 2,
     },
 
     // 代码库洞察（集体进化：Lisa opencode 结束后写入，Andy 写 spec 时参考）
@@ -387,6 +418,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "codebase_patterns", queryMode: "codebase-patterns",
       topK: 3, label: "代码库洞察", inject: "prepend",
       ready: true,
+      tier: 2,
     },
 
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）
@@ -400,6 +432,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["agentId"],
       topK: 21, label: "当前能力清单", inject: "append-system",
       ready: true,
+      tier: 2,
     },
 
     // Kuzu：角色行为模式（ready=true；distill-agent-memories.py 首次成功运行于 2026-03-31）
@@ -413,6 +446,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["agentId"],
       topK: 10, label: "设计模式积累", inject: "append-system",
       ready: true,
+      tier: 2,
     },
   ],
 
@@ -424,6 +458,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lisa/BACKGROUND.md",
       label: "项目背景", inject: "append-system",
+      tier: 1,
     },
 
     // 工作规则：交付标准 + 自验证策略 + 家庭 Web 规范（OpenClaw 原生只注入全局模板，这里补注 Lisa 专属规则）
@@ -432,6 +467,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lisa/AGENTS.md",
       label: "工作规则", inject: "append-system",
+      tier: 0,
     },
 
     // 代码库上下文：关键文件路径 + 编码模式 + 交付约定（常驻 system prompt）
@@ -440,6 +476,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lisa/CODEBASE.md",
       label: "代码库上下文", inject: "append-system",
+      tier: 0,
     },
 
     // 实现积累：已验证的实现模式 + 技术踩坑 + 工程品味判断（蒸馏自 decisions/code_history 集合）
@@ -448,6 +485,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lisa/MEMORY.md",
       label: "实现积累", inject: "append-system",
+      tier: 1,
     },
 
     // 平台约束专用通道：只召回 type=constraint 条目，独立于决策记忆，不竞争 topK 名额
@@ -456,6 +494,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "constraint-recall",
       collection: "decisions", queryMode: "constraint-recall", agentFilter: "lisa",
       topK: 5, label: "平台约束", inject: "prepend",
+      tier: 0,
     },
 
     // Lisa 自己的决策记忆（过渡态：Lisa pattern 节点写入 Kuzu 后，由 agent-patterns 接管）
@@ -463,6 +502,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "decision-memory",
       collection: "decisions", queryMode: "semantic", agentFilter: "lisa",
       topK: 3, label: "决策记忆", inject: "prepend",
+      tier: 2,
     },
 
     // 与 Andy/Lucas 的协作记录（过渡态：agent 协作侧 Kuzu schema 设计后接管）
@@ -470,6 +510,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "agent-interactions",
       collection: "agent_interactions", queryMode: "agent-interactions", agentFilter: "lisa",
       topK: 3, label: "协作历史", inject: "prepend",
+      tier: 3,
     },
 
     // 历史实现记录（过渡态：写入 Kuzu code_history 节点后接管）
@@ -477,6 +518,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "chromadb", id: "code-history",
       collection: "code_history", queryMode: "code-history",
       topK: 5, label: "实现历史", inject: "prepend",
+      tier: 2,
     },
 
     // 代码库洞察（集体进化：Lisa opencode 结束后写入，Andy 写 spec 时参考）
@@ -485,6 +527,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "codebase_patterns", queryMode: "codebase-patterns",
       topK: 3, label: "代码库洞察", inject: "prepend",
       ready: true,
+      tier: 2,
     },
 
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）
@@ -497,6 +540,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["agentId"],
       topK: 21, label: "已有能力清单", inject: "append-system",
       ready: true,
+      tier: 2,
     },
 
     // Kuzu：角色行为模式（ready=true；distill-agent-memories.py 首次成功运行于 2026-03-31）
@@ -509,6 +553,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       params: ["agentId"],
       topK: 10, label: "实现模式积累", inject: "append-system",
       ready: true,
+      tier: 2,
     },
   ],
 };

@@ -2677,6 +2677,58 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 
 ---
 
+## v667 · L1 记忆优化——文件即真相 + 检索质量提升（2026-04-14）
+
+**干预类型**：L1 行为质量优化（记忆系统）
+
+**背景**：全量评估发现 conversations 检索质量差（「抖音带货」top-10 全不相关），根因是写入侧（整段对话一个向量，语义稀释）。同时 Lucas 核心认知（承诺、接话点）依赖 ChromaDB 检索而非结构性注入。从 Claude Code 的上下文管理中提炼「文件即真相」原则——关键信息是注入的，不是检索的。
+
+**变更清单**：
+
+1. **Phase 1a · 动态家人摘要（.now.md）**
+   - 新增 `~/.openclaw/workspace-lucas/family/{userId}.now.md`（每家人一份）
+   - `readNowFile()` 读取 + `updateNowFile()` 机械提取（话题/承诺/接话点/待跟进）
+   - agent_end 后 fire-and-forget 写入，有界 50 行，7 天过期
+   - context-sources.ts 新增 `family-now` FileSource（queryMode: "user-now"）
+   - context-handler.ts 新增 `"user-now"` resolve case
+
+2. **Phase 1b · 纠正持久化**
+   - `trackDpoFrequency()` 写 `dpo-pattern-frequency.jsonl`，session 去重
+   - `checkAndPersistCorrection()` 计数 ≥3 个不同 session → 写 Lucas AGENTS.md `<!-- AUTO-PERSISTED CORRECTIONS -->` 区间
+   - 最多 10 条自动规则，超出替换最旧的
+
+3. **Phase 2a · 对话分块写入**
+   - `writeMemory()` 重写：<600 字整条写入；>600 字按 prompt 独立块 + response 按句切分 ≤500 字
+   - 每块独立 embedding，metadata 含 `parentConvId` + `chunkIndex`
+   - `timeWeightedRerank()` 和 `timeWeightedRerankWithEntityBoost()` 新增 parentConvId 去重
+
+4. **Phase 2b · Kuzu 预筛**
+   - queryMemories Step 3a：entityHits 非空时，先 `$contains` 匹配 entityTags 做窄范围查询
+   - 不足时 fallback 全量补充，去重合并
+   - 日志标记 `[P2]`
+
+5. **Phase 3 · 上下文预算分层**
+   - context-sources.ts 三种 Source 接口新增 `tier?: 0|1|2|3`（默认 2）
+   - Lucas 17 个 source 逐个标注 tier（0=不可裁剪 1=高优 2=正常 3=低优）
+   - Andy/Lisa 同步标注
+   - context-handler.ts 新增 `applyContextBudget()`：从 Tier 3 开始裁剪，dryRun=true 只记日志
+   - `config/context-budget.json`：maxContextChars=40000, dryRun=true
+
+**设计决策**：
+- 分块对蒸馏是正面的：`distill-memories.py` 截断到 300 字，分块后信息密度更高
+- 预算分层初期 dryRun：先积累 1-2 周各 tier 实际占用数据，再决定裁剪阈值
+- 纠正持久化是框架层机制，AGENTS.md 内容是实例层
+
+**涉及文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（writeMemory 重写、queryMemories 预筛、readNowFile/updateNowFile、DPO 追踪、预算加载）
+- `CrewClaw/crewclaw-routing/context-sources.ts`（+user-now、+tier 标注）
+- `CrewClaw/crewclaw-routing/context-handler.ts`（+user-now resolve、+applyContextBudget）
+- `CrewClaw/crewclaw-routing/config/context-budget.json`（新增）
+- `~/.openclaw/workspace-lucas/AGENTS.md`（+AUTO-PERSISTED 标记）
+- `CLAUDE.md`（v667 动态区更新）
+
+---
+
 ## v666 · Andy spec 落地自动重触发机制 + jiti 兼容性修复（2026-04-14）
 
 **干预类型**：L1 流水线可靠性修复 + 基础设施 bug 修复

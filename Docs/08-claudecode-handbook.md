@@ -1,6 +1,6 @@
 # Claude Code 协作手册
 
-> **版本**: v665
+> **版本**: v667
 > **最后更新**: 2026-04-14
 > **维护者**: 系统工程师（Claude Code 主动追加，人做方向判断）
 > **定位**: HomeAI 系统建设过程中积累的系统工程师最优实践。持续增长文档，随每次有价值的协作经验追加。
@@ -1161,3 +1161,15 @@ pm2 save
 **注意**：`pm2 save` 是必须的——没有 save 的话，下次机器重启进程又不在了。
 
 **蒸馏管道停滞诊断**：watchdog 不运行 = 蒸馏脚本不触发。日志路径已在 4/8 重构时从 `~/HomeAI/Logs/` 迁移到 `~/HomeAI/CrewHiveClaw/HomeAILocal/logs/`，旧路径的日志不代表当前状态。
+
+### L1 记忆优化验证方法（v667）
+
+**上下文预算 dryRun 日志**：每次 before_prompt_build 输出 `[budget] agent={id} total={N} | T0=... T1=... T2=... T3=...`，数字是字符数（括号内是条目数）。当前 `config/context-budget.json` 的 `dryRun=true`，只记日志不裁剪。
+
+**.now.md 实时状态文件**：路径 `~/.openclaw/workspace-lucas/family/{userId}.now.md`，每轮 agent_end 后机械提取更新。有界 50 行，7 天过期。验证：发一条消息给启灵 → 检查对应 .now.md 是否更新 → 下一轮确认注入。
+
+**对话分块写入验证**：发一条长消息后，查 ChromaDB conversations 是否出现多条 `chunkIndex` 不同的记录（同一 `parentConvId`）。检索时 `timeWeightedRerank` 和 `timeWeightedRerankWithEntityBoost` 会自动按 parentConvId 去重。
+
+**Kuzu 预筛日志**：queryMemories 中 `[P2] entity pre-filter: X entity + Y supplement = Z total`。X>0 说明预筛命中，X=0 说明走了全量 fallback。
+
+**纠正持久化验证**：`~/HomeAI/Data/learning/dpo-pattern-frequency.jsonl` 追踪频率，同一 DPO 模式在 ≥3 个不同 session 出现后自动写入 `~/.openclaw/workspace-lucas/AGENTS.md` 的 `<!-- AUTO-PERSISTED CORRECTIONS -->` 区间。

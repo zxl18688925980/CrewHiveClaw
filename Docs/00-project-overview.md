@@ -330,7 +330,7 @@ L4 = 深度学习·内化能力越来越强：DPO+SFT + 数据驱动模型评估
 - 自进化飞轮：Andy HEARTBEAT 定时执行正常（v663 修复生效），skill-candidates 89 条积累，andy-goals 1 条（基础设施补录，Andy 尚未自主写入进化目标），andy-learning-state 不存在（主动学习行为未产出）
 - 知识图谱规模：Entity 397 / Fact 376 / CodeNode 170,854 / CODE_CALLS 7,279,685
 - 记忆规模：conversations 2,104 / decisions 504 / family_knowledge 1,604
-- **已知短板**：conversations 检索质量差（「抖音带货」top-10 全不相关），疑因文档过长导致嵌入向量稀释 + nomic-embed-text 中文语义能力有限——待数据积累后判断是嵌入模型问题还是文档格式问题
+- **已知短板（v667 已优化）**：conversations 检索质量差（「抖音带货」top-10 全不相关），根因是写入侧——整段对话一个向量导致语义稀释。v667 三管齐下：① 对话分块（≤500 字/块，独立 embedding）② Kuzu entity pre-filter（先用 entity metadata 缩范围）③ .now.md 实时状态注入（核心信息不走检索）。待新数据积累后评估效果，如果分块后仍差则根因是 nomic-embed-text 中文语义能力有限，需换嵌入模型
 
 **L2 与 L3 的核心差别：L3 带着人**。L2 是系统自己跟自己玩——蒸馏、结晶、设计判断，全部是系统内部循环，人不在里面。L3 才是带着人一起进化：通过影子 Agent 理解每个成员在这个组织里的行为模式，在真实沟通前帮人想清楚，让协作洞察回流影响下一次判断。L2 的进化让系统更强，L3 的进化让组织运作更优——这是两件不同的事，设计时不能混同，评估时也不能混同。
 
@@ -671,7 +671,7 @@ Capability → [IMPLEMENTS] → Tool
   - **写入层**（`writeMemory`）：每次写入 ChromaDB 时，`extractEntityHits()` 从消息内容中提取命中的 Kuzu 实体名（复用 P0 的 `ENTITY_ALIAS_MAP` + `kuzuEntityNameMap`），以逗号分隔字符串写入 metadata 的 `entityTags` 字段（如 `entityTags: "zhanglu,xiaoshan,抖音"`）。无匹配实体时字段为空字符串。已有记录可通过 `backfill-entity-tags.py` 一次性回填（幂等）。
   - **检索层**（`queryMemories` / `recall_memory`）：检索时同样从 query 提取实体 ID，调用 `timeWeightedRerankWithEntityBoost()`——与普通 `timeWeightedRerank` 相同的时间/位置权重计算，但额外检查每条记录的 `entityTags` 是否包含 query 命中的任一实体，命中则乘以 1.5x boost。无 entityTags 的旧记录不受影响（boost = 1.0）。
 
-设计选择：采用 **post-filtering reranking** 而非 pre-filtering，原因：① ChromaDB v2 metadata 不支持数组类型，`$contains` 子串匹配可能误匹配（如 "Lucas" 匹配到 "LucasMusic"）② pre-filtering 缩小候选池可能漏掉语义相关但没 tag 的旧记录 ③ reranking 是增量式改进，新旧记录共存不冲突。
+设计选择：采用 **post-filtering reranking + pre-filtering 混合** 策略。v667 前：纯 post-filtering（原因：① ChromaDB v2 metadata 不支持数组类型，`$contains` 子串匹配可能误匹配 ② pre-filtering 缩小候选池可能漏掉语义相关但没 tag 的旧记录 ③ reranking 增量式改进，新旧记录共存不冲突）。v667 新增 **Kuzu entity pre-filter**（queryMemories Step 3a）：entityHits 非空时，先对 `entityTags` 做 `$contains` 匹配缩小候选池，不足时 fallback 全量补充 + post-filtering rerank。两阶段互补：pre-filter 提高精准记录命中率，post-filter 保证旧记录不丢失。
 
 **source 类型**（`context-sources.ts` 注册表可用）：
 
@@ -2174,6 +2174,8 @@ conversations 不只是聊天记录，是系统所有信息流转的原始事件
 
 内容字段：`prompt`（前500字，快照）/ `response`（前500字，快照）/ `document`（ChromaDB 全文，embedding 基于此）/ `timestamp`（ISO 时间，时序查询）。向后兼容字段（过渡期）：`userId`（= fromId）/ `source`（group/private）。
 
+**v667 对话分块写入**：长对话（prompt+response >600 字）按话题拆分为 ≤500 字小块，每块独立 ChromaDB 条目。分块专用字段：`convId`（对话唯一 ID，格式 `conv-{ts}-{rand}`）/ `chunkIndex`（分块序号，0=首块）/ `parentConvId`（同对话的分块共享，用于 topK 去重——同一 parent 只保留得分最高的一块）。短对话（≤600 字）不分块，与旧数据兼容。
+
 语义字段（`thread_id`、`topic`、`sentiment` 等）不在 conversations，是从事件流经 extraction pipeline 提炼后写入 Kuzu 的，写入时只记可观测客观事实，语义解读交给提炼层。
 
 #### 访问控制
@@ -2215,6 +2217,7 @@ Lucas 每次回复前，记忆从三个层次注入，粒度从粗到细：
 | 层          | 载体                                           | 职责                         | 更新方式                               | 注入时机                                            |
 | ---------- | -------------------------------------------- | -------------------------- | ---------------------------------- | ----------------------------------------------- |
 | **常驻知识层**  | `SOUL.md` / `AGENTS.md` / `.inject.md`（成员档案） | 身份铁律 + 成员结构化认知；每轮注入，不随时间衰减 | SOUL/AGENTS 人工维护；inject.md 蒸馏后自动渲染 | OpenClaw 原生 system prompt + appendSystemContext |
+| **实时状态层**  | `.now.md`（v667 新增，每家人一份） | 机械提取的实时摘要（话题/承诺/接话点/待跟进），每轮注入不走检索 | `agent_end` → `updateNowFile()` fire-and-forget 写入，有界 50 行，7 天过期 | `before_prompt_build` appendSystemContext |
 | **近期对话层**  | `~/.homeai/chat-history/{key}.json`（chatHistory 文件） | 同渠道近期 N 轮对话连续性；私聊和群聊均覆盖 | wecom 入口 `appendChatHistory` 每轮写入 | `callGatewayAgent` 调用前 prepend 进 messages array |
 | **语义召回层**  | ChromaDB（多集合并发查询）                            | 跨 session 相关历史；按语义相似度动态召回  | `agent_end` hook 自动写入              | `before_prompt_build` prependContext            |
 
@@ -2223,9 +2226,22 @@ Lucas 每次回复前，记忆从三个层次注入，粒度从粗到细：
 ```
 近期对话历史（chatHistory messages array，入口层 prepend）
   > ChromaDB 语义召回（before_prompt_build prependContext）
-    > 成员档案 .inject.md（before_prompt_build appendSystemContext）
+    > .now.md 实时状态快照 + 成员档案 .inject.md（before_prompt_build appendSystemContext）
       > SOUL.md / AGENTS.md（OpenClaw 原生 system prompt）
 ```
+
+#### 上下文预算分层（v667）
+
+所有注入内容按 4-tier 分级，溢出时从低 tier 开始裁剪：
+
+| Tier | 含义 | Lucas 典型内容 | 裁剪策略 |
+|------|------|---------------|---------|
+| **T0** | 不可裁剪 | .now.md 实时状态、AGENTS.md 工作规则（Andy/Lisa）、ARCH.md 架构知识、平台约束（Lisa） | 永不裁剪 |
+| **T1** | 高优 | 家人档案 .inject.md、项目背景、可调用工具 URL、家人实时状态（Kuzu）、关系网络近况 | 仅次于 T0 |
+| **T2** | 正常 | 近期对话、决策记忆、行为模式、家庭知识、能力清单、活跃话题 | 正常保留 |
+| **T3** | 低优 | 未完成承诺、进行中需求、团队动态、话题共鸣、因果关系、待跟进事项 | 溢出时最先裁剪 |
+
+当前 `dryRun=true`，只记录各 tier 实际占用（日志格式：`[budget] agent=lucas total=13436 | T0=303(1) T1=4888(3) T2=7490(4) T3=755(2)`），积累 1-2 周数据后开启实际裁剪。
 
 ### 消息滑动窗口
 

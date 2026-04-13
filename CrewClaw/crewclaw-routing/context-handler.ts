@@ -47,9 +47,20 @@ export interface ContextResolvers {
 
 // ── 查询结果 ──────────────────────────────────────────────────────────────
 
+export interface ContextEntry {
+  text: string;
+  tier: 0 | 1 | 2 | 3;
+  sourceId: string;
+  label: string;
+}
+
 export interface DynamicContextResult {
-  prepend:      string[];  // 按序拼接后 prependContext
-  appendSystem: string[];  // 按序拼接后 appendSystemContext
+  prepend:      string[];        // 按序拼接后 prependContext
+  appendSystem: string[];        // 按序拼接后 appendSystemContext
+  meta: {                        // 上下文预算用元数据
+    prepend:      ContextEntry[];
+    appendSystem: ContextEntry[];
+  };
 }
 
 // ── 单个 Source 执行 ──────────────────────────────────────────────────────
@@ -159,18 +170,107 @@ export async function buildDynamicContext(
 
   const prepend:      string[] = [];
   const appendSystem: string[] = [];
+  const prependMeta:      ContextEntry[] = [];
+  const appendSystemMeta: ContextEntry[] = [];
 
   sources.forEach((src, i) => {
     const result = results[i];
     const text = result.status === "fulfilled" ? result.value : "";
     if (!text) return;
 
+    const entry: ContextEntry = {
+      text,
+      tier: (src as { tier?: 0 | 1 | 2 | 3 }).tier ?? 2,
+      sourceId: (src as { id: string }).id,
+      label: (src as { label: string }).label,
+    };
+
     if (src.inject === "prepend") {
       prepend.push(text);
+      prependMeta.push(entry);
     } else {
       appendSystem.push(text);
+      appendSystemMeta.push(entry);
     }
   });
 
-  return { prepend, appendSystem };
+  return {
+    prepend, appendSystem,
+    meta: { prepend: prependMeta, appendSystem: appendSystemMeta },
+  };
+}
+
+// ── 上下文预算管理 ────────────────────────────────────────────────────────
+
+export interface BudgetConfig {
+  maxContextChars: number;
+  dryRun:          boolean;  // true = 只记日志不裁剪
+  tiers: Record<string, {
+    sources?: string[];  // 可选：指定哪些 source 属于此 tier（留空则靠 source 自身 tier 字段）
+    maxChars:  number | null;  // null = 不限制
+  }>;
+}
+
+/**
+ * 按预算裁剪注入内容：从 Tier 3 开始裁剪，保持 Tier 0 不动
+ * dryRun=true 时只写日志不实际裁剪，用于积累数据
+ */
+export function applyContextBudget(
+  result: DynamicContextResult,
+  config: BudgetConfig,
+  agentId: string,
+): DynamicContextResult {
+  const allEntries = [
+    ...result.meta.prepend.map((e, i) => ({ ...e, mode: "prepend" as const, idx: i })),
+    ...result.meta.appendSystem.map((e, i) => ({ ...e, mode: "appendSystem" as const, idx: i })),
+  ];
+
+  const totalChars = allEntries.reduce((sum, e) => sum + e.text.length, 0);
+
+  // 按 tier 统计
+  const tierStats = [0, 1, 2, 3].map(t => {
+    const entries = allEntries.filter(e => e.tier === t);
+    return { tier: t, count: entries.length, chars: entries.reduce((s, e) => s + e.text.length, 0) };
+  });
+
+  // 日志输出（无论 dryRun 与否）
+  console.log(
+    `[budget] agent=${agentId} total=${totalChars} | ` +
+    tierStats.map(ts => `T${ts.tier}=${ts.chars}(${ts.count})`).join(" ")
+  );
+
+  // 未超预算 或 dryRun → 不裁剪
+  if (config.dryRun || totalChars <= config.maxContextChars) {
+    return result;
+  }
+
+  // 实际裁剪：从 Tier 3 开始，到 Tier 2
+  let remaining = totalChars;
+  const trimmedPrepend = [...result.prepend];
+  const trimmedAppend = [...result.appendSystem];
+
+  for (const trimTier of [3, 2]) {
+    if (remaining <= config.maxContextChars) break;
+    const tierConfig = config.tiers[String(trimTier)];
+    if (!tierConfig) continue;
+
+    // 从 appendSystem 末尾开始裁（保持 prepend 不动，prepend 通常是高优）
+    for (let i = result.meta.appendSystem.length - 1; i >= 0; i--) {
+      if (remaining <= config.maxContextChars) break;
+      const entry = result.meta.appendSystem[i];
+      if (entry.tier !== trimTier) continue;
+      const removed = trimmedAppend[i];
+      if (removed) {
+        remaining -= removed.length;
+        trimmedAppend[i] = "";
+        console.log(`[budget] trimmed T${trimTier} "${entry.sourceId}" (${removed.length} chars)`);
+      }
+    }
+  }
+
+  return {
+    prepend: trimmedPrepend.filter(Boolean),
+    appendSystem: trimmedAppend.filter(Boolean),
+    meta: result.meta,
+  };
 }

@@ -38,7 +38,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { AgentRegistry } from "./agent-registry.js";
-import { buildDynamicContext, type ContextResolvers } from "./context-handler.js";
+import { buildDynamicContext, applyContextBudget, type ContextResolvers, type BudgetConfig } from "./context-handler.js";
 import type { SessionParams } from "./context-sources.js";
 
 // ── 配置 ──────────────────────────────────────────────────────────────────
@@ -1375,9 +1375,43 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
       : isVisitorQuery
         ? { $and: [humanFilter, { userId: { $eq: visitorUserIdFilter.toLowerCase() } }] }
         : humanFilter;
-    const raw     = await chromaQuery("conversations", searchEmbedding, MEMORY_CONTEXT_SIZE * 2, isGroup ? undefined : where);
-    // entity boost reranking: 如果查询命中了实体，给包含相同实体 tag 的记录排序提升
+    // ── Step 3a: Kuzu 预筛（entity-based pre-filter）─────────────────────
+    // 如果 entityHits 非空，先在有 entity tag 匹配的记录中搜索，不足时 fallback 全量补充
+    // 利用 ChromaDB metadata where 过滤 entityTags 字段（逗号分隔字符串，$contains 匹配）
+    const fetchSize = MEMORY_CONTEXT_SIZE * 2;
+    let raw: Array<{ document: string; metadata: Record<string, unknown> }>;
     const queryEntityIds = entityHits.length > 0 ? new Set(entityHits) : null;
+
+    if (queryEntityIds && !isGroup && !isVisitorSession) {
+      // 预筛：构建 entity OR 条件，每个 entityHit 做 $contains 匹配
+      const entityOrConditions = Array.from(queryEntityIds).map(eid => ({ entityTags: { $contains: eid } }));
+      const entityFilter: Record<string, unknown> = { $and: [where, { $or: entityOrConditions }] };
+      try {
+        const entityRaw = await chromaQuery("conversations", searchEmbedding, fetchSize, entityFilter);
+        if (entityRaw.length >= MEMORY_CONTEXT_SIZE) {
+          // 预筛结果充足，直接用
+          raw = entityRaw;
+          console.log(`[P2] entity pre-filter: ${entityRaw.length} results from ${queryEntityIds.size} entities (sufficient)`);
+        } else {
+          // 预筛不足，全量补充，去重合并
+          const supplementSize = fetchSize - entityRaw.length;
+          const supplement = await chromaQuery("conversations", searchEmbedding, supplementSize, isGroup ? undefined : where);
+          const entityIds = new Set(entityRaw.map(r => (r.metadata as { convId?: string }).convId));
+          const extra = supplement.filter(r => !entityIds.has((r.metadata as { convId?: string }).convId));
+          raw = [...entityRaw, ...extra];
+          console.log(`[P2] entity pre-filter: ${entityRaw.length} entity + ${extra.length} supplement = ${raw.length} total`);
+        }
+      } catch (_e) {
+        // 预筛失败（如 ChromaDB where 语法不兼容），fallback 全量
+        raw = await chromaQuery("conversations", searchEmbedding, fetchSize, isGroup ? undefined : where);
+        console.log(`[P2] entity pre-filter failed, fallback to full query`);
+      }
+    } else {
+      // 无实体命中 / 群聊 / 访客：全量搜索
+      raw = await chromaQuery("conversations", searchEmbedding, fetchSize, isGroup ? undefined : where);
+    }
+
+    // entity boost reranking: 如果查询命中了实体，给包含相同实体 tag 的记录排序提升
     if (queryEntityIds) {
       const boostedCount = raw.filter(r => {
         const tags = (r.metadata?.entityTags as string | undefined) ?? "";
@@ -1675,19 +1709,30 @@ function timeWeightedRerank<T extends { metadata: Record<string, unknown> }>(
 ): T[] {
   if (results.length === 0) return [];
   const now = Date.now();
-  return results
+  const scored = results
     .map((r, i) => {
       const ts = (r.metadata.timestamp as string | undefined) ?? "";
       const ageMs = ts ? now - new Date(ts).getTime() : now;
       const ageMonths = ageMs / (1000 * 60 * 60 * 24 * 30);
       const timeWeight = ageMonths < 3 ? 1.0 : ageMonths < 12 ? 0.7 : 0.3;
-      // 位置权重：余弦排名第 1 条得 1.0，往后递减（模拟相似度梯度）
       const positionWeight = 1 / (i + 1);
       return { r, score: positionWeight * timeWeight };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topN)
-    .map(({ r }) => r);
+    .sort((a, b) => b.score - a.score);
+
+  // parentConvId 去重：同一对话的多个分块只保留得分最高的一个
+  const seenParents = new Set<string>();
+  const deduped: Array<{ r: T; score: number }> = [];
+  for (const item of scored) {
+    const parentId = item.r.metadata.parentConvId as string | undefined;
+    if (parentId) {
+      if (seenParents.has(parentId)) continue;
+      seenParents.add(parentId);
+    }
+    deduped.push(item);
+    if (deduped.length >= topN) break;
+  }
+  return deduped.map(({ r }) => r);
 }
 
 /** timeWeightedRerank + entity boost：匹配查询实体的记录获得排序提升 */
@@ -1698,7 +1743,7 @@ function timeWeightedRerankWithEntityBoost<T extends { metadata: Record<string, 
 ): T[] {
   if (results.length === 0) return [];
   const now = Date.now();
-  return results
+  const scored = results
     .map((r, i) => {
       const ts = (r.metadata.timestamp as string | undefined) ?? "";
       const ageMs = ts ? now - new Date(ts).getTime() : now;
@@ -1712,9 +1757,21 @@ function timeWeightedRerankWithEntityBoost<T extends { metadata: Record<string, 
       const entityBoost = hasEntityMatch ? 1.5 : 1.0;
       return { r, score: positionWeight * timeWeight * entityBoost };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topN)
-    .map(({ r }) => r);
+    .sort((a, b) => b.score - a.score);
+
+  // parentConvId 去重
+  const seenParents2 = new Set<string>();
+  const deduped2: Array<{ r: T; score: number }> = [];
+  for (const item of scored) {
+    const parentId = item.r.metadata.parentConvId as string | undefined;
+    if (parentId) {
+      if (seenParents2.has(parentId)) continue;
+      seenParents2.add(parentId);
+    }
+    deduped2.push(item);
+    if (deduped2.length >= topN) break;
+  }
+  return deduped2.map(({ r }) => r);
 }
 // MAGMA 四维度中「时间维度」的检索路径：当 query 含时间词时，按 timestamp 直接拉取记录，
 // 不走语义搜索——解决「今天早上聊了什么」此类时序查询语义相似度低、命中失败的问题。
@@ -5616,7 +5673,19 @@ const crewclawRoutingPlugin = {
         isGroup:    agentId === FRONTEND_AGENT_ID ? isGroup : false,
         sessionKey: ctx.sessionKey ?? "",
       };
-      const { prepend, appendSystem } = await buildDynamicContext(sessionParams, buildContextResolvers());
+      const ctxResult = await buildDynamicContext(sessionParams, buildContextResolvers());
+
+      // ── 上下文预算管理（Phase 3：dryRun 积累数据）─────────────────────────
+      // 读取预算配置，dryRun=true 时只记日志不裁剪，积累 1-2 周数据后开启实际裁剪
+      let prepend = ctxResult.prepend;
+      let appendSystem = ctxResult.appendSystem;
+      try {
+        const budgetPath = join(PROJECT_ROOT, "CrewHiveClaw", "CrewClaw", "crewclaw-routing", "config", "context-budget.json");
+        const budgetConfig = JSON.parse(readFileSync(budgetPath, "utf8")) as BudgetConfig;
+        const budgeted = applyContextBudget(ctxResult, budgetConfig, agentId);
+        prepend = budgeted.prepend;
+        appendSystem = budgeted.appendSystem;
+      } catch (_e) { /* 配置文件缺失或解析失败，保持原样 */ }
 
       // ── 主动注入：prompt 提到家庭成员时，注入该人的 Kuzu 蒸馏事实 ──────────
       // 与 relationship-network 静态注入互补：relationship-network 按 userId 查所有关系人，
