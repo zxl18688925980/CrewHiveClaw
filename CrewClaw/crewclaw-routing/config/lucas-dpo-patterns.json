@@ -11,7 +11,9 @@
   ],
   "false_commitment": [
     "已交给Andy", "已提交给Andy", "已触发流水线", "已提交开发", "Andy 会", "Andy会",
-    "已提交了", "已经提交", "已经报告", "已完成提交"
+    "已提交了", "已经提交", "已经报告", "已完成提交",
+    "已完成设计", "已经设计好", "已共享给", "Lisa 马上开始", "Lisa马上开始",
+    "已提交给Lisa修复"
   ],
   "commitment_tools": ["trigger_development_pipeline"],
   "notification_commitment": [
