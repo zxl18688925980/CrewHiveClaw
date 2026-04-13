@@ -650,6 +650,141 @@ function buildHeartbeatContext() {
     sections.push('【预计算数据 - 检查 8：主动知识搜索】\n（预计算失败，Andy 跳过此项）');
   }
 
+  // 检查 4：behavior_patterns（已通过插件 appendSystemContext 注入，此处只做标记）
+  sections.push('【预计算数据 - 检查 4：behavior_patterns（Andy 近期行为模式）】\n已通过上下文注入提供，直接在当前上下文中查找 behavior_patterns 相关内容即可，无需 exec 查 ChromaDB。');
+
+  // 检查 7：近期知识注入（已通过插件 appendSystemContext 注入，此处只做标记）
+  sections.push('【预计算数据 - 检查 7：近期知识注入】\n已通过上下文注入提供（标题为「Lucas 知识投喂」），直接在当前上下文中查找即可，无需 exec 查 ChromaDB。');
+
+  // 检查 10：spec 回溯数据（查询 codebase_patterns 中 spec 相关条目）
+  try {
+    const specRetroScript = path.join(__dirname, '../scripts/_heartbeat_spec_retro.py');
+    fs.writeFileSync(specRetroScript, [
+      'import chromadb, json, sys',
+      "c = chromadb.HttpClient(host='localhost', port=8001)",
+      "try:",
+      "  col = c.get_collection('codebase_patterns')",
+      "  r = col.get(where={'$and': [{'type': {'$eq': 'spec_result'}}]}, limit=20, include=['metadatas','documents'])",
+      "  entries = [{'id': rid, 'doc': doc[:200], 'meta': meta} for rid, doc, meta in zip(r.get('ids',[]), r.get('documents',[]), r.get('metadatas',[]))]",
+      "  print(json.dumps({'count': len(entries), 'entries': entries[-10:]}, ensure_ascii=False))",
+      "except Exception as e:",
+      "  print(json.dumps({'count': 0, 'error': str(e)}))",
+      'sys.stdout.flush()',
+    ].join('\n'), 'utf8');
+    const specOut = execSync(`${PYTHON3} ${specRetroScript}`, { encoding: 'utf8', timeout: 10_000 }).trim();
+    const specData = JSON.parse(specOut);
+    const retroStateFile = path.join(HOMEAI_ROOT, 'data/learning/andy-spec-retro-state.json');
+    let lastRetroAt = null;
+    if (fs.existsSync(retroStateFile)) {
+      try { lastRetroAt = JSON.parse(fs.readFileSync(retroStateFile, 'utf8')).lastRetroAt; } catch (_) {}
+    }
+    const daysSinceRetro = lastRetroAt ? Math.floor((Date.now() - new Date(lastRetroAt).getTime()) / 86_400_000) : 999;
+    if (daysSinceRetro < 7) {
+      sections.push(`【预计算数据 - 检查 10：spec 回溯数据】\n本周已回溯（${daysSinceRetro} 天前），跳过。`);
+    } else if (specData.count === 0) {
+      sections.push('【预计算数据 - 检查 10：spec 回溯数据】\n无 spec 数据，跳过。');
+    } else {
+      sections.push(`【预计算数据 - 检查 10：spec 回溯数据】\n共 ${specData.count} 条 spec 结果，以下为最近 10 条：\n${JSON.stringify(specData.entries, null, 2)}`);
+    }
+  } catch (e) {
+    sections.push(`【预计算数据 - 检查 10：spec 回溯数据】\n（预计算失败: ${e.message}，Andy 跳过此项）`);
+  }
+
+  // 检查 11：技术雷达状态
+  try {
+    const selfSearchFile = path.join(HOMEAI_ROOT, 'data/learning/andy-self-search-state.json');
+    let lastSearch = null;
+    if (fs.existsSync(selfSearchFile)) {
+      try { lastSearch = JSON.parse(fs.readFileSync(selfSearchFile, 'utf8')).lastSearchAt; } catch (_) {}
+    }
+    const daysSinceSearch = lastSearch ? Math.floor((Date.now() - new Date(lastSearch).getTime()) / 86_400_000) : 999;
+    if (daysSinceSearch < 14) {
+      sections.push(`【预计算数据 - 检查 11：技术雷达状态】\n冷却中（${daysSinceSearch} 天前搜索过，需 14 天冷却），跳过。`);
+    } else {
+      sections.push(`【预计算数据 - 检查 11：技术雷达状态】\n已过冷却期（${daysSinceSearch} 天），可以搜索。`);
+    }
+  } catch (e) {
+    sections.push(`【预计算数据 - 检查 11：技术雷达状态】\n（预计算失败: ${e.message}，Andy 跳过此项）`);
+  }
+
+  // 检查 12：代码图谱变化摘要（检查最近一次图谱重建的输出）
+  try {
+    const graphChangeFile = path.join(HOMEAI_ROOT, 'data/learning/code-graph-changes.json');
+    if (fs.existsSync(graphChangeFile)) {
+      const changes = JSON.parse(fs.readFileSync(graphChangeFile, 'utf8'));
+      if (changes && changes.summary) {
+        sections.push(`【预计算数据 - 检查 12：代码图谱变化摘要】\n${JSON.stringify(changes, null, 2)}`);
+      } else {
+        sections.push('【预计算数据 - 检查 12：代码图谱变化摘要】\n无变化。');
+      }
+    } else {
+      sections.push('【预计算数据 - 检查 12：代码图谱变化摘要】\n未运行（无变化记录文件）。');
+    }
+  } catch (e) {
+    sections.push(`【预计算数据 - 检查 12：代码图谱变化摘要】\n（预计算失败: ${e.message}，Andy 跳过此项）`);
+  }
+
+  // 检查 13：架构提案信号（查询 decisions 中 spec_reflection / capability_gap / architecture_drift 条目）
+  try {
+    const signalScript = path.join(__dirname, '../scripts/_heartbeat_arch_signals.py');
+    fs.writeFileSync(signalScript, [
+      'import chromadb, json, sys',
+      "c = chromadb.HttpClient(host='localhost', port=8001)",
+      "col = c.get_collection('decisions')",
+      "signal_types = ['spec_reflection', 'capability_gap_proposal', 'architecture_drift', 'spec_retrospective']",
+      "signals = []",
+      "for t in signal_types:",
+      "  try:",
+      "    r = col.get(where={'$and': [{'type': {'$eq': t}}, {'agent': {'$eq': 'andy'}}]}, limit=10, include=['metadatas','documents'])",
+      "    for rid, doc, meta in zip(r.get('ids',[]), r.get('documents',[]), r.get('metadatas',[])):",
+      "      signals.append({'type': t, 'id': rid, 'doc': doc[:200], 'ts': meta.get('timestamp','')})",
+      "  except:",
+      "    pass",
+      "print(json.dumps({'total': len(signals), 'signals': signals[-10:]}, ensure_ascii=False))",
+      'sys.stdout.flush()',
+    ].join('\n'), 'utf8');
+    const sigOut = execSync(`${PYTHON3} ${signalScript}`, { encoding: 'utf8', timeout: 10_000 }).trim();
+    const sigData = JSON.parse(sigOut);
+    if (sigData.total < 3) {
+      sections.push(`【预计算数据 - 检查 13：架构提案信号】\n信号不足（${sigData.total} 条，需 ≥3 条同方向），跳过。`);
+    } else {
+      sections.push(`【预计算数据 - 检查 13：架构提案信号】\n共 ${sigData.total} 条信号：\n${JSON.stringify(sigData.signals, null, 2)}`);
+    }
+  } catch (e) {
+    sections.push(`【预计算数据 - 检查 13：架构提案信号】\n（预计算失败: ${e.message}，Andy 跳过此项）`);
+  }
+
+  // 检查 14：技术债信号（高频修改文件 + 高调用度函数）
+  try {
+    // 从 opencode-results 中提取高频修改文件
+    const debtSignals = { highFreqFiles: [], note: '' };
+    const opencodeResultsFile = path.join(HOMEAI_ROOT, 'data/learning/opencode-results.jsonl');
+    if (fs.existsSync(opencodeResultsFile)) {
+      const lines = fs.readFileSync(opencodeResultsFile, 'utf8').trim().split('\n').filter(Boolean);
+      const fileCounts = {};
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          for (const f of (entry.changedFiles || [])) {
+            fileCounts[f] = (fileCounts[f] || 0) + 1;
+          }
+        } catch (_) {}
+      }
+      const highFreq = Object.entries(fileCounts)
+        .filter(([, count]) => count >= 3)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+      debtSignals.highFreqFiles = highFreq.map(([f, c]) => ({ file: f, changes: c }));
+    }
+    if (debtSignals.highFreqFiles.length === 0) {
+      sections.push('【预计算数据 - 检查 14：技术债信号】\n无异常。');
+    } else {
+      sections.push(`【预计算数据 - 检查 14：技术债信号】\n${JSON.stringify(debtSignals, null, 2)}`);
+    }
+  } catch (e) {
+    sections.push(`【预计算数据 - 检查 14：技术债信号】\n（预计算失败: ${e.message}，Andy 跳过此项）`);
+  }
+
   return sections.join('\n\n');
 }
 

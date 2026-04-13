@@ -5923,30 +5923,46 @@ const crewclawRoutingPlugin = {
       }
 
       // exec：检测命令里的写操作特征
+      // Andy L2 自进化允许列表：HomeAI/Data/learning/ 和 ChromaDB 操作放行，项目代码仍然封锁
       if (event.toolName === "exec") {
         const cmd = String(
           (event.params as Record<string, unknown>)?.command ??
           (event.params as Record<string, unknown>)?.cmd ??
           ""
         );
-        const WRITE_PATTERNS: RegExp[] = [
-          /(?<![<>\d])>(?!=)/,           // > 重定向（排除 >>、=> 和 2>/dev/null 类数字fd重定向）
-          />>/,                          // >> 追加
-          /\btee\b/,                     // tee 写文件
-          /\bsed\s+(-[a-zA-Z]*i|-i)/,   // sed -i 原地编辑
-          /\bawk\s+(-[a-zA-Z]*i|-i)/,   // awk -i 原地编辑
-          /writeFileSync\b/,             // Node.js 同步写
-          /writeFile\b/,                 // Node.js 异步写
-          /fs\.write\b/,                 // fs.write
-          /\.write\s*\(/,                // stream.write
-          /open\s*\(.*['"](w|a|r\+|w\+|wb|ab)['"]/,  // Python 写模式
+        // L2 自进化放行：Andy 可以写学习状态文件和 ChromaDB decisions
+        const L2_ALLOW_PATTERNS: RegExp[] = [
+          /andy-goals\.jsonl/,
+          /andy-learning-state\.json/,
+          /andy-spec-retro-state\.json/,
+          /andy-self-search-state\.json/,
+          /andy-trend-state\.json/,
+          /design-learnings-state\.json/,
+          /chromadb\.HttpClient/,       // ChromaDB Python 客户端操作
+          /col\.add\(/,                 // ChromaDB collection.add()
+          /col\.update\(/,              // ChromaDB collection.update()
         ];
-        const matched = WRITE_PATTERNS.find(p => p.test(cmd));
-        if (matched) {
-          return {
-            block: true,
-            blockReason: `Andy 不允许通过 exec 写文件（检测到写操作）。请通过 trigger_lisa_implementation 把实现任务交给 Lisa。\n命令片段：${cmd.slice(0, 120)}`,
-          };
+        const isL2Allowed = L2_ALLOW_PATTERNS.some(p => p.test(cmd));
+        if (!isL2Allowed) {
+          const WRITE_PATTERNS: RegExp[] = [
+            /(?<![<>\d])>(?!=)/,           // > 重定向（排除 >>、=> 和 2>/dev/null 类数字fd重定向）
+            />>/,                          // >> 追加
+            /\btee\b/,                     // tee 写文件
+            /\bsed\s+(-[a-zA-Z]*i|-i)/,   // sed -i 原地编辑
+            /\bawk\s+(-[a-zA-Z]*i|-i)/,   // awk -i 原地编辑
+            /writeFileSync\b/,             // Node.js 同步写
+            /writeFile\b/,                 // Node.js 异步写
+            /fs\.write\b/,                 // fs.write
+            /\.write\s*\(/,                // stream.write
+            /open\s*\(.*['"](w|a|r\+|w\+|wb|ab)['"]/,  // Python 写模式
+          ];
+          const matched = WRITE_PATTERNS.find(p => p.test(cmd));
+          if (matched) {
+            return {
+              block: true,
+              blockReason: `Andy 不允许通过 exec 写文件（检测到写操作）。请通过 trigger_lisa_implementation 把实现任务交给 Lisa。\n命令片段：${cmd.slice(0, 120)}`,
+            };
+          }
         }
       }
     });
@@ -7125,7 +7141,7 @@ const crewclawRoutingPlugin = {
 
     // ━━ 工具注册：search_web（Lucas 专属，联网搜索）━━━━━━━━━━━━━━━━━━━
 
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "联网搜索",
       name: "search_web",
       description: [
@@ -7138,6 +7154,9 @@ const crewclawRoutingPlugin = {
         purpose: Type.Optional(Type.String({ description: "搜索目的/背景（可选），帮助生成更准确的摘要" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ search_web 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const p = params as { query: string; purpose?: string };
         if (!DEEPSEEK_API_KEY) {
           return { content: [{ type: "text", text: "❌ 搜索服务未配置（缺少 DEEPSEEK_API_KEY）" }], details: {} };
@@ -9019,6 +9038,9 @@ const crewclawRoutingPlugin = {
         ),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ follow_up_requirement 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { requirement_summary, outcome, user_feedback, requirement_id } = params as {
           requirement_summary: string;
           outcome: string;
@@ -9057,7 +9079,7 @@ const crewclawRoutingPlugin = {
     // Lucas 检测到连续失败 ≥ 3 次或资金安全关键词时调用。
     // 也可在对话中识别到需要业主人工介入的情况时主动调用。
 
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "向业主发告警",
       name: "alert_owner",
       description: [
@@ -9070,6 +9092,9 @@ const crewclawRoutingPlugin = {
         severity: Type.Optional(Type.String({ description: '"high"（紧急）| "medium"（一般）' })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ alert_owner 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { reason, severity } = params as { reason: string; severity?: string };
         const icon = severity === "high" ? "🚨" : "⚠️";
         try {
@@ -9253,7 +9278,7 @@ const crewclawRoutingPlugin = {
     // 当同类情况重复出现 ≥ 3 次时调用，把模式信号写入 skill-candidates.jsonl。
     // Andy 在 HEARTBEAT 巡检中读取此文件，判断是否值得结晶为正式 Skill/Tool。
 
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "记录技能候选信号",
       name: "flag_for_skill",
       description: [
@@ -9268,6 +9293,9 @@ const crewclawRoutingPlugin = {
         suggested_form: Type.Optional(Type.String({ description: "建议的结晶形式：skill / tool / webapp，不确定时省略" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ flag_for_skill 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { pattern_name, description, suggested_form } = params as {
           pattern_name: string; description: string; suggested_form?: string;
         };
@@ -9306,7 +9334,7 @@ const crewclawRoutingPlugin = {
     //   - 内容里有"学习这个"、"希望你懂"、"记住这个"等信号
     // 不触发：即时的帮忙请求、家常闲聊、对特定任务的反馈
 
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "向 Andy 路由知识",
       name: "share_with_andy",
       description: [
@@ -9323,6 +9351,9 @@ const crewclawRoutingPlugin = {
         implications: Type.Optional(Type.String({ description: "对系统的可能影响（Lucas 自己的判断，Andy 参考）" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ share_with_andy 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { topic, content, source, implications } = params as {
           topic: string; content: string; source: string; implications?: string;
         };
@@ -9356,7 +9387,7 @@ const crewclawRoutingPlugin = {
     // 写入 pending-knowledge-tags.json，等待系统工程师审核。
     // 与 flag_for_skill 对称：flag_for_skill 是技能进化信号，propose_knowledge_tag 是权限治理信号。
 
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "提议知识标签",
       name: "propose_knowledge_tag",
       description: [
@@ -9371,6 +9402,9 @@ const crewclawRoutingPlugin = {
         reason:          Type.String({ description: "为何建议这个标签：访客说了什么、为何觉得合理" }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ propose_knowledge_tag 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { visitor_user_id, tag, reason } = params as {
           visitor_user_id: string; tag: string; reason: string;
         };
@@ -9542,7 +9576,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── query_member_profile：查询成员影子 Profile ────────────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "查询家人影子 Profile",
       name: "query_member_profile",
       description: [
@@ -9554,6 +9588,9 @@ const crewclawRoutingPlugin = {
         member_id: Type.String({ description: "家人昵称或影子 Agent ID（如 yiyi 或 shadow-yiyi）" }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ query_member_profile 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const p = params as { member_id: string };
         const shadowAgentId = p.member_id.startsWith("shadow-") ? p.member_id : `shadow-${p.member_id}`;
         const registry = new AgentRegistry(join(PROJECT_ROOT, "data/agents/registry.json"));
@@ -9629,7 +9666,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── record_outcome_feedback：Lucas 专属，收到用户反馈时更新决策记忆 ───
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "记录交付反馈",
       name: "record_outcome_feedback",
       description: [
@@ -9649,6 +9686,9 @@ const crewclawRoutingPlugin = {
         ),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ record_outcome_feedback 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { outcome, outcome_note, decision_id } = params as {
           outcome: string;
           outcome_note: string;
@@ -9732,7 +9772,7 @@ const crewclawRoutingPlugin = {
       },
     }));
     // ── list_active_tasks：Lucas 查询当前进行中任务 ─────────────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "查看进行中的开发任务",
       name: "list_active_tasks",
       description: [
@@ -9742,6 +9782,9 @@ const crewclawRoutingPlugin = {
       ].join("\n"),
       parameters: Type.Object({}),
       execute: async (_toolCallId, _params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ list_active_tasks 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const entries = readTaskRegistry();
         const active = entries.filter(e => e.status === "queued" || e.status === "running");
         const recent = entries.filter(e => e.status === "completed" || e.status === "cancelled").slice(-3);
@@ -9767,7 +9810,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── cancel_task：Lucas 叫停/暂停开发任务 ──────────────────────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "叫停开发任务",
       name: "cancel_task",
       description: [
@@ -9782,6 +9825,9 @@ const crewclawRoutingPlugin = {
         keyword: Type.Optional(Type.String({ description: "需求描述关键词，用于模糊匹配，找不到精确 ID 时使用" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ cancel_task 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const p = params as { task_id?: string; keyword?: string };
         const entries = readTaskRegistry();
 
@@ -9836,7 +9882,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── ack_task_delivered：Lucas 标记已告知家人任务完成 ──────────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "标记已告知家人任务完成",
       name: "ack_task_delivered",
       description: [
@@ -9851,6 +9897,9 @@ const crewclawRoutingPlugin = {
         keyword: Type.Optional(Type.String({ description: "需求描述关键词，用于模糊匹配" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ ack_task_delivered 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const p = params as { task_id?: string; keyword?: string };
         const entries = readTaskRegistry();
 
@@ -9938,7 +9987,7 @@ const crewclawRoutingPlugin = {
       return null;
     }
 
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "转告家庭成员",
       name: "forward_message",
       description: [
@@ -9953,6 +10002,9 @@ const crewclawRoutingPlugin = {
         visitorCode: Type.String({ description: "访客邀请码（如 DB334C），用于记录转告历史" }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ forward_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { message, visitorCode } = params as { message: string; visitorCode: string };
         const intent = detectForwardIntent(message, visitorCode);
 
@@ -9996,7 +10048,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── send_message：Lucas 主动向家庭成员发消息 ──────────────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "主动发消息给家人",
       name: "send_message",
       description: [
@@ -10018,6 +10070,9 @@ const crewclawRoutingPlugin = {
         }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ send_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { userId, text } = params as { userId: string; text: string };
         try {
           const resp = await fetch(CHANNEL_SEND_URL, {
@@ -10042,7 +10097,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── send_file：Lucas 向家庭成员发送实际文件（私聊或群聊）────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "发送文件给家人",
       name: "send_file",
       description: [
@@ -10064,6 +10119,9 @@ const crewclawRoutingPlugin = {
         })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ send_file 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { target, filePath, text } = params as { target: string; filePath: string; text?: string };
         // "group" 解析为家庭群 chatId，私聊直接用 userId
         const FAMILY_CHAT_ID = "wra6wXbgAAu_7v2qu1wnc8Lu3-Za3diQ";
@@ -10093,7 +10151,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── send_voice：Lucas 主动发语音给家人 ───────────────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "发送语音消息",
       name: "send_voice",
       description: [
@@ -10112,6 +10170,9 @@ const crewclawRoutingPlugin = {
         }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ send_voice 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { target, text } = params as { target: string; text: string };
         try {
           const resp = await fetch(CHANNEL_SEND_VOICE_URL, {
@@ -10228,7 +10289,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── recall_memory：Lucas 主动回忆，检索跨通道长期记忆 ────────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "主动回忆",
       name: "recall_memory",
       description: [
@@ -10260,6 +10321,9 @@ const crewclawRoutingPlugin = {
         scope: Type.Optional(Type.String({ description: "检索范围：all（默认，私聊+群聊）/ private / group" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ recall_memory 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         const { query, scope = "all" } = params as { query: string; scope?: string };
         try {
           // ── Step 1: 基础 embedding ──────────────────────────────────────
@@ -10396,7 +10460,7 @@ const crewclawRoutingPlugin = {
     }));
 
     // ── gen_visitor_invite：为访客生成邀请码（L3 Shadow Agent）────────────────
-    api.registerTool((_toolCtx) => ({
+    api.registerTool((toolCtx) => ({
       label: "生成访客邀请码",
       name: "gen_visitor_invite",
       description: [
@@ -10416,6 +10480,9 @@ const crewclawRoutingPlugin = {
         personId:        Type.Optional(Type.String({ description: "稳定人员 ID（续期时填写，保持影子记忆连续性；首次邀请不填，系统自动生成）" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ gen_visitor_invite 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
         try {
           const wecomUrl = CHANNEL_BASE_URL || "https://wecom.homeai-wecom-zxl.top";
           const secret = process.env.DEMO_INVITE_SECRET || "homeai-internal-2024";
