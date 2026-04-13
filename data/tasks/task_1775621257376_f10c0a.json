@@ -1,0 +1,30 @@
+{
+  "taskId": "task_1775621257376_f10c0a",
+  "status": "notified",
+  "retryCount": 0,
+  "createdAt": "2026-04-08T04:07:37.376Z",
+  "updatedAt": "2026-04-08T04:08:35.778Z",
+  "result": {
+    "filename": "3fb5c1e739ba90ef35b0b3f24ca7c1c8.png",
+    "savePath": "/Users/xinbinanshan/HomeAI/CrewHiveClaw/data/uploads/2026-04-08/images/1775621272706-3fb5c1e739ba90ef35b0b3f24ca7c1c8.png",
+    "relativePath": "data/uploads/2026-04-08/images/1775621272706-3fb5c1e739ba90ef35b0b3f24ca7c1c8.png",
+    "imageDesc": "这是一张关于AI技术的宣传图，主要内容是介绍一种名为PsychAdapter的技术，它能让AI拥有人格特质，使大模型说话更像“真实的人”。\n\n标题部分：\n- 标题：“让AI拥有人格特质”\n- 副标题：“让大模型说话更像‘真实的人’”\n\n主要特点：\n- PsychAdapter：在不改变主模型能力的前提下，按人格特质、心理状态与人群特征调节输出风格，让文本既可控又自然，适合展示、训练与研究多场景应用。\n\n数据统计：\n- 大五人格特质生成准确率：87.3%\n- 心理健康状态识别准确率：96.7%\n- 额外参数量占比：<0.1%\n\n核心创新：\n- 突破传统提示工程，实现连续维度人格控制\n- “不同于依赖离散标签的提示工程，PsychAdapter将连续的心理学评分（如大五人格-3到+3标准差）直接注入Transformer的每一层隐藏状态，实现精细到个体层面的语言风格控制。”\n\n技术优势对比：\n- 连续维度控制\n- 深度架构注入\n- 极低参数增量\n- 传统提示工程\n\n兼容模型：\n- Gemma 2B 参数 +55K适配器\n- LLaMA-3 8B 参数 +393K适配器\n- GPT-2 774M 参数 +553K适配器\n\n评估准确率对比：\n- PsychAdapter（大五人格）：87.3%\n- PsychAdapter（心理健康）：96.7%\n- 提示工程基线（Gemma-2B）：53.0%\n- 随机基线：33.3%\n\n未来展望与影响：\n- 人机交互新范式\n- 心理学研究数字化\n- 伦理考量\n\n引用：\n- “PsychAdapter为心理学研究提供了全新工具，能够生成反映特定人格特质、心理健康状态和人口统计学特征的连贯文本，突破了传统差异语言分析缺乏语境的局限。”\n- 基于VU ET AL.(2026)发表于NPJ ARTIFICIAL INTELLIGENCE\n\n图中还包含了一些图标和流程图，展示了PsychAdapter的工作原理和技术细节。"
+  },
+  "error": null,
+  "type": "image_analysis",
+  "userId": "ZengXiaoLong",
+  "isGroup": false,
+  "histKey": "wecom:user:ZengXiaoLong",
+  "memberTag": "【私聊·爸爸曾小龙】",
+  "memberName": "爸爸曾小龙",
+  "isPdf": false,
+  "input": {
+    "url": "https://ww-aibot-img-1258476243.cos.ap-guangzhou.myqcloud.com/1jYCvIm/7626235227242917434?sign=q-sign-algorithm%3Dsha1%26q-ak%3DAKIDbBpaJvdLBvpnibcYcfyPuaO5f9U1UoGo%26q-sign-time%3D1775621256%3B1775621556%26q-key-time%3D1775621256%3B1775621556%26q-header-list%3D%26q-url-param-list%3D%26q-signature%3D6b3e40a844db957a19f5fb90f8716d3eda9ac511",
+    "aeskey": "sz2E3dp5Q2WdKYeVwNYjl+soSU5iW0Khp2VAJEm+LaE",
+    "filename": "",
+    "mediaType": "image"
+  },
+  "startedAt": "2026-04-08T04:07:37.378Z",
+  "completedAt": "2026-04-08T04:08:20.500Z",
+  "notifiedAt": "2026-04-08T04:08:35.778Z"
+}

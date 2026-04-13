@@ -121,44 +121,58 @@
     },
 
     "L2": {
-      "label": "系统自进化",
+      "label": "Vibe Anything + 自进化飞轮",
       "pass_threshold": 2.5,
+      "_doc": "两个正交维度，乘法关系。维度A=系统能为家人造什么；维度B=系统用得越久越强。",
       "items": {
-        "skill_candidates": {
-          "name": "进化信号积累（skill-candidates）",
-          "weight": 1.0,
+        "task_type_coverage": {
+          "name": "任务类型覆盖度（成功交付过的任务类型数）",
+          "weight": 1.5,
           "direction": "higher_better",
-          "thresholds": [[10, 5], [5, 4], [1, 3], [0, 0]]
+          "_dimension": "A_VibeAnything",
+          "thresholds": [[10, 5], [5, 4], [2, 3], [1, 2], [0, 0]]
         },
-        "dpo_candidates": {
-          "name": "DPO 负例积累（dpo-candidates）",
+        "delivery_success_rate": {
+          "name": "端到端交付成功率（%）",
+          "weight": 1.5,
+          "direction": "higher_better",
+          "_dimension": "A_VibeAnything",
+          "thresholds": [[90, 5], [70, 4], [50, 2], [1, 1], [0, 0]]
+        },
+        "deliverable_diversity": {
+          "name": "交付物多样性（类型数：app/文件/报告/提醒/研究…）",
           "weight": 1.0,
           "direction": "higher_better",
-          "thresholds": [[10, 5], [5, 4], [1, 3], [0, 0]]
+          "_dimension": "A_VibeAnything",
+          "thresholds": [[6, 5], [4, 4], [2, 3], [1, 2], [0, 0]]
+        },
+        "evolution_signals": {
+          "name": "进化信号积累（skill-candidates + dpo-candidates 合计）",
+          "weight": 1.0,
+          "direction": "higher_better",
+          "_dimension": "B_SelfEvolution",
+          "thresholds": [[20, 5], [10, 4], [3, 3], [0, 0]]
+        },
+        "knowledge_internalization": {
+          "name": "知识内化率（蒸馏产出 + 代码库洞察）",
+          "weight": 1.2,
+          "direction": "higher_better",
+          "_dimension": "B_SelfEvolution",
+          "thresholds": [[20, 5], [10, 4], [3, 3], [0, 1]]
+        },
+        "skill_count": {
+          "name": "Skill 积累总量（三角色合计）",
+          "weight": 0.8,
+          "direction": "higher_better",
+          "_dimension": "B_SelfEvolution",
+          "thresholds": [[20, 5], [10, 4], [5, 3], [0, 2]]
         },
         "andy_heartbeat_check": {
           "name": "Andy HEARTBEAT 巡检时效（小时）",
-          "weight": 1.2,
-          "direction": "lower_better",
-          "thresholds": [[26, 5], [30, 4], [48, 3], [168, 1], [9999, 0]]
-        },
-        "opencode_success_rate": {
-          "name": "opencode 成功率（%）",
-          "weight": 1.5,
-          "direction": "higher_better",
-          "thresholds": [[90, 5], [70, 4], [50, 2], [1, 1], [0, 0]]
-        },
-        "codebase_patterns": {
-          "name": "代码库洞察积累",
-          "weight": 0.8,
-          "direction": "higher_better",
-          "thresholds": [[10, 5], [5, 4], [1, 3], [0, 1]]
-        },
-        "skill_count": {
-          "name": "Skill 总量（三角色合计）",
           "weight": 0.5,
-          "direction": "higher_better",
-          "thresholds": [[20, 5], [10, 4], [5, 3], [0, 2]]
+          "direction": "lower_better",
+          "_dimension": "B_SelfEvolution",
+          "thresholds": [[26, 5], [30, 4], [48, 3], [168, 1], [9999, 0]]
         }
       }
     },

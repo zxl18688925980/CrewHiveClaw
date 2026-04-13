@@ -1,0 +1,30 @@
+{
+  "taskId": "task_1775621453208_af0d6e",
+  "status": "notified",
+  "retryCount": 0,
+  "createdAt": "2026-04-08T04:10:53.209Z",
+  "updatedAt": "2026-04-08T04:12:10.833Z",
+  "result": {
+    "filename": "1775621448_2087578672.mp4",
+    "savePath": "/Users/xinbinanshan/HomeAI/CrewHiveClaw/data/uploads/2026-04-08/videos/1775621511845-1775621448_2087578672.mp4",
+    "relativePath": "data/uploads/2026-04-08/videos/1775621511845-1775621448_2087578672.mp4",
+    "transcript": ""
+  },
+  "error": null,
+  "type": "video_transcription",
+  "userId": "ZengXiaoLong",
+  "isGroup": false,
+  "histKey": "wecom:user:ZengXiaoLong",
+  "memberTag": "【私聊·爸爸曾小龙】",
+  "memberName": "爸爸曾小龙",
+  "isPdf": false,
+  "input": {
+    "url": "https://ww-aibot-img-1258476243.cos.ap-guangzhou.myqcloud.com/bq57ROF/7626236052617604768?sign=q-sign-algorithm%3Dsha1%26q-ak%3DAKIDbBpaJvdLBvpnibcYcfyPuaO5f9U1UoGo%26q-sign-time%3D1775621449%3B1775621749%26q-key-time%3D1775621449%3B1775621749%26q-header-list%3D%26q-url-param-list%3D%26q-signature%3D0a690556b4fc24d9ab9177d7c3ed7d0ad98f5e9d",
+    "aeskey": "GVhS0gKsQ5G+ulfbqCdS7i+QQhX3Xkv4sxPRy+HLyu4",
+    "filename": "",
+    "mediaType": "video"
+  },
+  "startedAt": "2026-04-08T04:10:53.210Z",
+  "completedAt": "2026-04-08T04:11:52.762Z",
+  "notifiedAt": "2026-04-08T04:12:10.833Z"
+}

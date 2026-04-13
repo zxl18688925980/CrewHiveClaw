@@ -2725,6 +2725,7 @@ async function runAndyPipeline(params: {
   requirement: string;
   intentType: string;
   userId: string;
+  understandingSummary?: string; // Lucas 对需求的理解摘要（做什么/给谁/成功标准），触发前必填
   lucasContext?: string;      // Lucas 补充的需求背景
   originalSymptom?: string;  // 用户原始表达（bug 症状 / 用户原话），evaluator 独立验证根因用
   visitorCode?: string;      // 访客邀请码
@@ -2813,6 +2814,7 @@ async function runAndyPipeline(params: {
           `【需求 ID: ${requirementId}】`,
           params.requirement,
           `【需求发起人 user_id】${params.userId}`,
+          ...(params.understandingSummary ? [`【Lucas 理解摘要】${params.understandingSummary}（这是 Lucas 对需求的理解，Andy 设计时以此为准，有偏差请先核实再出 spec）`] : []),
           ...(params.lucasContext ? [`【Lucas 补充背景】${params.lucasContext}（这是家人的真实情绪/时间需求/可接受替代方案，设计时优先考虑）`] : []),
           ``,
           `请按顺序完成以下步骤（工具调用不可跳过）：`,
@@ -6628,6 +6630,9 @@ const crewclawRoutingPlugin = {
         requirement: Type.String({
           description: "用户的完整开发需求，保持原始表达，不要缩略",
         }),
+        understanding_summary: Type.String({
+          description: "【必填，不可省略】你对这个需求的理解摘要，至少说清楚：做什么 + 给谁用 + 什么算做好。这是触发前的「想清楚」环节，类似动手前先读懂问题。例：「爸爸想要一个抖音数据看板，分析自己账号的播放量趋势，能看到哪个视频效果最好就算成功」。写不出来说明需求还没澄清，先回去问清楚再触发。",
+        }),
         intent_type: Type.Optional(
           Type.String({
             description: "意图类型：develop_feature / bug_fix / refactor / optimize / update_doc",
@@ -6665,9 +6670,18 @@ const crewclawRoutingPlugin = {
           "unknown";
         const intentType = (params as { intent_type?: string }).intent_type ?? "develop_feature";
         const req = (params as { requirement: string }).requirement;
+        const understandingSummary = (params as { understanding_summary?: string }).understanding_summary ?? "";
         const urgent = (params as { urgent?: boolean }).urgent ?? false;
         const lucasContext = (params as { context?: string }).context;
         const visitorCode = (params as { visitorCode?: string }).visitorCode;
+
+        // 强制理解检查（Read-before-Trigger）：understanding_summary 必须填且足够具体
+        if (!understandingSummary || understandingSummary.trim().length < 10) {
+          return {
+            content: [{ type: "text", text: `⚠️ 触发前需要先想清楚需求。请在 understanding_summary 中写明：做什么 + 给谁用 + 什么算做好（至少 10 个字）。需求还没说清楚，先回去和家人确认一下再触发。` }],
+            details: { error: "missing_understanding_summary" },
+          };
+        }
 
         // 前台 Agent 模型确认的真实 intentType 覆盖 before_prompt_build 的推断值
         sessionIntent.set(toolCtx.sessionKey ?? "", intentType);
@@ -6812,7 +6826,8 @@ const crewclawRoutingPlugin = {
         runAndyPipeline({
           requirement: req,
           intentType,
-          requestorId,
+          userId: requestorId,
+          understandingSummary,
           originalSymptom: req,  // 用户原始表达作为独立字段，evaluator 验证根因时使用
           ...(lucasContext ? { lucasContext } : {}),
           ...(visitorCode ? { visitorCode } : {}),

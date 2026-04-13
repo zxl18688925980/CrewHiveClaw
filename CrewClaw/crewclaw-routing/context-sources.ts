@@ -126,14 +126,9 @@ export const contextSources: Record<string, ContextSource[]> = {
       label: "项目背景", inject: "append-system",
     },
 
-    // Lucas 自我认知摘要：蒸馏产出的判断倾向 + 有效策略 + 反复犯的错
-    // 双重注入：OpenClaw 原生在 prompt 开头注入，这里在末尾再压一遍（末尾权重更高）
-    {
-      source: "file", id: "self-memory",
-      queryMode: "static-file",
-      filePath: "~/.openclaw/workspace-lucas/MEMORY.md",
-      label: "自我认知", inject: "append-system",
-    },
+    // Lucas 自我认知摘要：OpenClaw 原生已在 prompt 开头注入 MEMORY.md，无需重复
+    // 双重注入已移除（v660）：避免 16KB × 2 的 token 浪费（约 16-24K tokens）
+    // 末尾权重更高的效果改为靠 AGENTS.md「思考框架」节的行为约束实现，不靠重复注入
 
     // 近期对话历史（按 userId 过滤）
     // v650 调整为 append-system：遵循 Lucas 上下文优先级
@@ -197,7 +192,7 @@ export const contextSources: Record<string, ContextSource[]> = {
                RETURN c.name, f.context
                ORDER BY f.valid_from DESC LIMIT $topK`,
       params: ["agentId"],
-      topK: 30, label: "当前能力清单", inject: "append-system",
+      topK: 21, label: "当前能力清单", inject: "append-system",
       ready: true,
     },
 
@@ -395,7 +390,7 @@ export const contextSources: Record<string, ContextSource[]> = {
                RETURN c.name, f.context
                ORDER BY f.valid_from DESC LIMIT $topK`,
       params: ["agentId"],
-      topK: 30, label: "当前能力清单", inject: "append-system",
+      topK: 21, label: "当前能力清单", inject: "append-system",
       ready: true,
     },
 
@@ -492,7 +487,7 @@ export const contextSources: Record<string, ContextSource[]> = {
                RETURN c.name, f.context
                ORDER BY f.valid_from DESC LIMIT $topK`,
       params: ["agentId"],
-      topK: 30, label: "已有能力清单", inject: "append-system",
+      topK: 21, label: "已有能力清单", inject: "append-system",
       ready: true,
     },
 

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "skills": {
+    "weather": {
+      "version": "1.0.0",
+      "installedAt": 1775626595581
+    },
+    "video-frames": {
+      "version": "1.0.0",
+      "installedAt": 1775626599984
+    }
+  }
+}

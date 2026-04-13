@@ -7,7 +7,7 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v659
+> **版本**: v661
 > **最后更新**: 2026-04-13
 
 ---
@@ -2378,3 +2378,87 @@ L0~L4 全部落地：
 - `CrewClaw/crewclaw-routing/config/evaluation-rubric.json`（新建）
 - `CrewClaw/daemons/entrances/wecom/index.js`（评分框架 + evaluate_l0~l4 重构 + evaluate_system 增强 + evaluate_trend 新增 + 仪表盘路由）
 - `~/.openclaw/workspace-main/AGENTS.md`（工具列表 + 触发词更新）
+
+---
+
+### v660：L2 内涵刷新——Vibe Anything + 自进化飞轮
+
+**日期**：2026-04-13
+
+**类型**：架构设计升级（Lx 评估体系）
+
+**背景**：L2 原定义「系统自进化」过于偏重工程侧（pipeline 成功率、蒸馏机制运转），忽略了价值本质——Coding 只是手段，家人需要的 Any Thing 才是目的。业主要求 L2 内涵刷新为两个正交维度：Vibe Anything + 自进化飞轮。
+
+**设计**：
+
+L2 = Vibe Anything × 自进化飞轮（乘法关系）
+
+- **维度 A：Vibe Anything**（家人要什么，系统造什么）
+  - `task_type_coverage`：任务类型覆盖度（成功交付过的任务类型数，越高系统越万能）
+  - `delivery_success_rate`：端到端交付成功率（从需求识别到家人满意的完整链路）
+  - `deliverable_diversity`：交付物多样性（app/文件/报告/提醒/研究/洞察…，不限于代码）
+
+- **维度 B：自进化飞轮**（越用越强）
+  - `evolution_signals`：进化信号积累（skill-candidates + dpo-candidates 合并指标）
+  - `knowledge_internalization`：知识内化率（蒸馏产出 + 代码库洞察）
+  - `skill_count`：Skill 积累总量（三角色合计）
+  - `andy_heartbeat_check`：Andy HEARTBEAT 巡检时效
+
+**与旧版变化**：
+- 新增 3 个维度A子维度（任务类型覆盖度、交付成功率、交付物多样性）
+- 合并 skill-candidates + dpo-candidates → 进化信号（一个指标，消除重复）
+- 合并 codebase_patterns + opencode_success_rate → 端到端交付成功率（从"能不能跑"升维到"家人满意不满意"）
+- 输出分组从「流水线成效 / 机制运转 / 喂养成效」改为「Vibe Anything / 自进化飞轮」
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/config/evaluation-rubric.json`（L2 7 个子维度重新定义）
+- `CrewClaw/daemons/entrances/wecom/index.js`（evaluate_l2 全面重写）
+- `Docs/HomeAI Readme.md`（Lx 里程碑描述更新）
+- `Docs/09-evolution-version.md`（本条目）
+- `CLAUDE.md`（动态区 v660 + L2 新定义引用）
+
+---
+
+## v661 · Lucas 思考框架落地（2026-04-13）
+
+**干预类型**：L1 行为质量增强——Lucas 工作流设计（等价于 Claude Code Vibe Coding 的家庭版落地）
+
+**背景**：v660 设计会话完成了 Lucas 思考框架的完整设计讨论，但未落地。核心判断：Lucas 与 CLI（Claude Code）的可靠性差距，根因不是模型，而是工程可靠性——CLI 有 5 个工作流强制减速带，Lucas 一个都没有，是「信息灌进来 → 抓关键词 → 条件反射」。
+
+**设计来源**：Claude Code Vibe Coding 六大机制对标分析（Read-before-Edit / Plan Mode / Think Tool / Lint-Typecheck / Doom Loop），映射到 Lucas 家庭场景等价物。
+
+**变更清单**：
+
+1. **AGENTS.md 思考框架节**（新增）：
+   - 三维判断标准——歧义度（需求清楚吗）/ 错误代价（做错了回得来吗）/ 信息充分性（信息够做决策吗）
+   - 三层分级——不思考（简单明确直接行动）/ 轻度推演（有歧义说出来）/ 深度推演（复杂高代价和家人一起想）
+   - 可见思考原则——推演过程对家人可见，用对话方式展示思考，让家人随时纠偏，不是内部独白
+   - 禁止内部术语规则——「Andy」「Lisa」「流水线」「spec」「trigger」「pipeline」不出现在对家人的回复里
+
+2. **SOUL.md 受众自适应**（更新）：
+   - 「看人说话」原则落地——不是统一隐藏技术细节，是 per-person 适应（爸爸讲逻辑/妈妈说结果/小姨说影响）
+   - 可见思考人格定义——遇复杂问题自然地把思考过程说出来，让家人参与纠偏
+   - 对话原则明确：内部的事（找谁做/怎么做/走什么流程）永远不对家人说
+
+3. **trigger_development_pipeline 强制理解检查**（基础设施层，index.ts）：
+   - 新增 `understanding_summary` 必填参数（不可省略）——Lucas 对需求的理解摘要，强制在触发前想清楚「做什么/给谁/成功标准」
+   - 空或少于 10 字直接拒绝并要求重填——等价于 Claude Code 的 Read-before-Edit 基础设施强制
+   - understanding_summary 注入 Andy 收到的消息头部（`【Lucas 理解摘要】`），减少 spec 方向猜错的概率
+
+4. **上下文注入精简**（context-sources.ts）：
+   - 去除 MEMORY.md 双注入——OpenClaw 原生已加载，context-sources.ts 的 `self-memory` 重复注入删除，节省约 16-24K tokens
+   - active-capabilities topK 30→21——三角色均调整，覆盖实际工具数量即可，不过量注入
+
+**Readme 系列文档同步**：
+- `Docs/00-project-overview.md`：Lucas 角色表补充思考框架能力维度；新增「Lucas 特殊原则」段落
+- `Docs/HomeAI Readme.md`：Lucas 表格和角色描述段落补充可见思考 / Vibe Thinking
+- `Docs/09-evolution-version.md`：本条目
+
+**修改文件**：
+- `~/.openclaw/workspace-lucas/AGENTS.md`（思考框架节 + 禁止内部术语）
+- `~/.openclaw/workspace-lucas/SOUL.md`（受众自适应 + 可见思考）
+- `CrewClaw/crewclaw-routing/index.ts`（understanding_summary 强制参数）
+- `CrewClaw/crewclaw-routing/context-sources.ts`（MEMORY.md 去重 + topK 调整）
+- `Docs/00-project-overview.md`（Lucas 特殊原则 + 角色表）
+- `Docs/HomeAI Readme.md`（Lucas 描述）
+- `Docs/09-evolution-version.md`（本条目）

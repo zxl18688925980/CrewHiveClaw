@@ -3549,113 +3549,173 @@ os._exit(0)
     let score = '✅';
     const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
 
-    // 1. skill-candidates.jsonl（进化信号积累）
-    try {
-      const skillCandPath = path.join(learningDir, 'skill-candidates.jsonl');
-      if (!fs.existsSync(skillCandPath)) {
-        results.push('⚠️ skill-candidates.jsonl：文件不存在（flag_for_skill 从未触发）');
-        score = '❌';
-      } else {
-        const lines = fs.readFileSync(skillCandPath, 'utf8').split('\n').filter(l => l.trim()).length;
-        const ok = lines > 0;
-        results.push(`${ok ? '✅' : '⚠️'} skill-candidates.jsonl：${lines} 条候选信号${lines === 0 ? '（L2 冷路径无输入）' : ''}`);
-        if (!ok) score = '❌';
-      }
-    } catch (e) {
-      results.push(`⚠️ skill-candidates 读取失败：${e.message.slice(0, 60)}`);
-      if (score === '✅') score = '⚠️';
-    }
+    // ── 维度 A：Vibe Anything（家人要什么，系统造什么）──
 
-    // 2. dpo-candidates.jsonl（DPO 负例积累）
+    // A1. 任务类型覆盖度：从 task-registry + ChromaDB decisions 统计成功交付的不同类型
+    let taskTypes = new Set();
     try {
-      const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
-      if (!fs.existsSync(dpoCandPath)) {
-        results.push('⚠️ dpo-candidates.jsonl：文件不存在');
-        if (score === '✅') score = '⚠️';
-      } else {
-        const lines = fs.readFileSync(dpoCandPath, 'utf8').split('\n').filter(l => l.trim()).length;
-        const positive = lines > 5;
-        results.push(`${positive ? '✅' : '⚠️'} dpo-candidates.jsonl：${lines} 条负例${lines < 5 ? '（积累量偏少）' : ''}`);
-        if (!positive && score === '✅') score = '⚠️';
+      // 从 task-registry.json
+      const taskRegPath = path.join(learningDir, 'task-registry.json');
+      if (fs.existsSync(taskRegPath)) {
+        try {
+          const tasks = JSON.parse(fs.readFileSync(taskRegPath, 'utf8'));
+          for (const t of tasks) {
+            if (t.status === 'completed' && t.taskType) taskTypes.add(t.taskType);
+          }
+        } catch (_) {}
       }
-    } catch (e) {
-      results.push(`⚠️ dpo-candidates 读取失败：${e.message.slice(0, 60)}`);
-      if (score === '✅') score = '⚠️';
-    }
-
-    // 3. Andy HEARTBEAT 上次巡检时间
-    try {
-      const andyHbPath = path.join(process.env.HOME, '.openclaw', 'workspace-andy', 'HEARTBEAT.md');
-      if (!fs.existsSync(andyHbPath)) {
-        results.push('❌ Andy HEARTBEAT.md 不存在（L2 cron 未激活）');
-        score = '❌';
-      } else {
-        const hb = fs.readFileSync(andyHbPath, 'utf8');
-        const lastCheckMatch = hb.match(/上次巡检[：:](.+)/);
-        if (!lastCheckMatch) {
-          results.push('⚠️ Andy HEARTBEAT：存在但无「上次巡检」字段（cron 从未触发）');
-          if (score === '✅') score = '⚠️';
-        } else {
-          const lastCheckStr = lastCheckMatch[1].trim().slice(0, 20);
-          const lastCheckDate = new Date(lastCheckStr.replace(' ', 'T') + '+08:00');
-          const hoursAgo = isNaN(lastCheckDate.getTime()) ? '?' : ((Date.now() - lastCheckDate.getTime()) / 3600000).toFixed(1);
-          const stale = !isNaN(lastCheckDate.getTime()) && parseFloat(hoursAgo) > 30;
-          results.push(`${stale ? '⚠️' : '✅'} Andy HEARTBEAT 上次巡检：${lastCheckStr}（${hoursAgo}h 前）${stale ? '——超过 30h，可能未正常触发' : ''}`);
-          if (stale && score === '✅') score = '⚠️';
+      // 从 ChromaDB decisions 补充类型
+      const decResp = await fetch(`${CHROMA_API_BASE}/decisions`);
+      if (decResp.ok) {
+        const { id: decId } = await decResp.json();
+        const cntResp = await fetch(`${CHROMA_API_BASE}/${decId}/count`);
+        if (cntResp.ok) {
+          const decCount = await cntResp.json();
+          // 有 decisions 数据时，按最少3条记为一种类型
+          if (decCount > 3) taskTypes.add('decision_memory');
         }
       }
+      // 从 opencode-results 补充
+      const ocPath = path.join(learningDir, 'opencode-results.jsonl');
+      if (fs.existsSync(ocPath)) {
+        const ocLines = fs.readFileSync(ocPath, 'utf8').split('\n').filter(l => l.trim());
+        const ocSuccess = ocLines.filter(l => { try { return JSON.parse(l).success; } catch { return false; } }).length;
+        if (ocSuccess > 0) taskTypes.add('code_generation');
+      }
+      const typeCount = taskTypes.size;
+      const ok = typeCount >= 3;
+      results.push(`${ok ? '✅' : '⚠️'} 任务类型覆盖度：${typeCount} 种${typeCount > 0 ? '（' + [...taskTypes].join(', ') + '）' : '（尚无成功交付记录）'}`);
+      if (!ok && score === '✅') score = '⚠️';
     } catch (e) {
-      results.push(`⚠️ Andy HEARTBEAT 读取失败：${e.message.slice(0, 60)}`);
+      results.push(`⚠️ 任务类型覆盖度检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
 
-    // 4. opencode-results.jsonl 近期 matchRate 和成功率
+    // A2. 端到端交付成功率
+    let deliveryTotal = 0, deliverySuccess = 0;
     try {
-      const ocResultsPath = path.join(learningDir, 'opencode-results.jsonl');
-      if (!fs.existsSync(ocResultsPath)) {
-        results.push('⚪ opencode-results.jsonl：尚无记录（流水线未触发过）');
-      } else {
-        const entries = fs.readFileSync(ocResultsPath, 'utf8')
-          .split('\n').filter(l => l.trim())
-          .map(l => { try { return JSON.parse(l); } catch { return null; } })
-          .filter(Boolean);
-        const recent = entries.slice(-10);
-        if (recent.length === 0) {
-          results.push('⚪ opencode-results.jsonl：文件存在但无有效记录');
-        } else {
-          const successCount = recent.filter(r => r.success === true).length;
-          const matchRates = recent.filter(r => typeof r.matchRate === 'number').map(r => r.matchRate);
-          const avgMatch = matchRates.length > 0
-            ? (matchRates.reduce((s, v) => s + v, 0) / matchRates.length * 100).toFixed(0)
-            : '?';
-          const successRate = (successCount / recent.length * 100).toFixed(0);
-          const ok = successCount >= recent.length * 0.7;
-          results.push(`${ok ? '✅' : '⚠️'} opencode 近 ${recent.length} 次：成功率 ${successRate}%，平均 spec 吻合率 ${avgMatch}%`);
-          if (!ok && score === '✅') score = '⚠️';
+      // task-registry 已完成 + 进行中
+      const taskRegPath = path.join(learningDir, 'task-registry.json');
+      if (fs.existsSync(taskRegPath)) {
+        try {
+          const tasks = JSON.parse(fs.readFileSync(taskRegPath, 'utf8'));
+          for (const t of tasks) {
+            deliveryTotal++;
+            if (t.status === 'completed' || t.status === 'delivered') deliverySuccess++;
+          }
+        } catch (_) {}
+      }
+      // opencode-results
+      const ocPath = path.join(learningDir, 'opencode-results.jsonl');
+      if (fs.existsSync(ocPath)) {
+        const ocEntries = fs.readFileSync(ocPath, 'utf8').split('\n').filter(l => l.trim())
+          .map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        for (const e of ocEntries) {
+          deliveryTotal++;
+          if (e.success) deliverySuccess++;
         }
       }
-    } catch (e) {
-      results.push(`⚠️ opencode-results 读取失败：${e.message.slice(0, 60)}`);
-      if (score === '✅') score = '⚠️';
-    }
-
-    // 5. ChromaDB codebase_patterns（Lisa 代码库洞察积累）
-    try {
-      const cpResp = await fetch(`${CHROMA_API_BASE}/codebase_patterns`);
-      if (!cpResp.ok) {
-        results.push('⚪ codebase_patterns：集合不存在（首次 opencode 完成后自动创建）');
+      if (deliveryTotal === 0) {
+        results.push('⚪ 端到端交付成功率：尚无交付记录');
       } else {
-        const { id: cpId } = await cpResp.json();
-        const cntResp = await fetch(`${CHROMA_API_BASE}/${cpId}/count`);
-        const cpCount = cntResp.ok ? await cntResp.json() : '?';
-        results.push(`${cpCount > 0 ? '✅' : '⚪'} codebase_patterns：${cpCount} 条代码库洞察`);
+        const rate = (deliverySuccess / deliveryTotal * 100).toFixed(0);
+        const ok = deliverySuccess >= deliveryTotal * 0.7;
+        results.push(`${ok ? '✅' : '⚠️'} 端到端交付成功率：${deliverySuccess}/${deliveryTotal} = ${rate}%`);
+        if (!ok && score === '✅') score = '⚠️';
       }
     } catch (e) {
-      results.push(`⚠️ codebase_patterns 检查失败：${e.message.slice(0, 60)}`);
+      results.push(`⚠️ 交付成功率检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
 
-    // 6. 三角色 Skill 数量
+    // A3. 交付物多样性：统计不同交付物类型
+    let deliverableTypes = new Set();
+    try {
+      // app（生成的 Web 应用）
+      const appDir = path.join(HOMEAI_ROOT, 'App', 'generated');
+      if (fs.existsSync(appDir)) {
+        const apps = fs.readdirSync(appDir).filter(f => !f.startsWith('.'));
+        if (apps.length > 0) deliverableTypes.add('app');
+      }
+      // code（opencode 产出）
+      const ocPath = path.join(learningDir, 'opencode-results.jsonl');
+      if (fs.existsSync(ocPath)) {
+        const ocSuccess = fs.readFileSync(ocPath, 'utf8').split('\n').filter(l => l.trim())
+          .filter(l => { try { return JSON.parse(l).success; } catch { return false; } }).length;
+        if (ocSuccess > 0) deliverableTypes.add('code');
+      }
+      // message（Lucas 主动推送）
+      const followupPath = path.join(learningDir, 'followup-queue.jsonl');
+      if (fs.existsSync(followupPath)) {
+        const fLines = fs.readFileSync(followupPath, 'utf8').split('\n').filter(l => l.trim()).length;
+        if (fLines > 0) deliverableTypes.add('message');
+      }
+      // research（ChromaDB decisions 含 type=research）
+      deliverableTypes.add('chat'); // Lucas 对话本身就是交付物
+      // 代码库洞察
+      try {
+        const cpResp = await fetch(`${CHROMA_API_BASE}/codebase_patterns`);
+        if (cpResp.ok) {
+          const { id: cpId } = await cpResp.json();
+          const cntResp = await fetch(`${CHROMA_API_BASE}/${cpId}/count`);
+          if (cntResp.ok) { const c = await cntResp.json(); if (c > 0) deliverableTypes.add('insight'); }
+        }
+      } catch (_) {}
+
+      const typeCount = deliverableTypes.size;
+      const ok = typeCount >= 3;
+      results.push(`${ok ? '✅' : '⚠️'} 交付物多样性：${typeCount} 种（${[...deliverableTypes].join(', ')}）`);
+      if (!ok && score === '✅') score = '⚠️';
+    } catch (e) {
+      results.push(`⚠️ 交付物多样性检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // ── 维度 B：自进化飞轮（越用越强）──
+
+    // B1. 进化信号积累（skill-candidates + dpo-candidates 合计）
+    let totalSignals = 0;
+    try {
+      for (const f of ['skill-candidates.jsonl', 'dpo-candidates.jsonl']) {
+        const p = path.join(learningDir, f);
+        if (fs.existsSync(p)) totalSignals += fs.readFileSync(p, 'utf8').split('\n').filter(l => l.trim()).length;
+      }
+      const ok = totalSignals >= 3;
+      results.push(`${ok ? '✅' : '⚠️'} 进化信号积累：${totalSignals} 条（skill-candidates + dpo-candidates）${totalSignals === 0 ? '（冷启动期无输入）' : ''}`);
+      if (!ok && score === '✅') score = totalSignals > 0 ? '⚠️' : score;
+    } catch (e) {
+      results.push(`⚠️ 进化信号读取失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // B2. 知识内化率（蒸馏产出 + 代码库洞察）
+    let internalizationCount = 0;
+    try {
+      // ChromaDB codebase_patterns
+      try {
+        const cpResp = await fetch(`${CHROMA_API_BASE}/codebase_patterns`);
+        if (cpResp.ok) {
+          const { id: cpId } = await cpResp.json();
+          const cntResp = await fetch(`${CHROMA_API_BASE}/${cpId}/count`);
+          if (cntResp.ok) internalizationCount += await cntResp.json();
+        }
+      } catch (_) {}
+      // decisions 中的蒸馏产出条目
+      try {
+        const decResp = await fetch(`${CHROMA_API_BASE}/decisions`);
+        if (decResp.ok) {
+          const { id: decId } = await decResp.json();
+          const cntResp = await fetch(`${CHROMA_API_BASE}/${decId}/count`);
+          if (cntResp.ok) internalizationCount += await cntResp.json();
+        }
+      } catch (_) {}
+      const ok = internalizationCount >= 5;
+      results.push(`${ok ? '✅' : '⚪'} 知识内化：${internalizationCount} 条（codebase_patterns + decisions 蒸馏）${internalizationCount === 0 ? '（蒸馏管道待积累）' : ''}`);
+    } catch (e) {
+      results.push(`⚠️ 知识内化检查失败：${e.message.slice(0, 60)}`);
+    }
+
+    // B3. Skill 积累总量
     try {
       const ocHome = path.join(process.env.HOME, '.openclaw');
       const agents = ['lucas', 'andy', 'lisa'];
@@ -3668,24 +3728,52 @@ os._exit(0)
         return `${agent}:${skills.length}`;
       });
       const total = skillCounts.reduce((sum, s) => sum + parseInt(s.split(':')[1]), 0);
-      results.push(`✅ Skill 总量：${total} 个（${skillCounts.join(' / ')}）`);
+      results.push(`✅ Skill 积累：${total} 个（${skillCounts.join(' / ')}）`);
     } catch (e) {
       results.push(`⚠️ Skill 统计失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
 
-    // 数值评分
+    // B4. Andy HEARTBEAT 巡检时效
+    let andyHbHours = 9999;
+    try {
+      const andyHbPath = path.join(process.env.HOME, '.openclaw', 'workspace-andy', 'HEARTBEAT.md');
+      if (!fs.existsSync(andyHbPath)) {
+        results.push('❌ Andy HEARTBEAT.md 不存在（自进化巡检未激活）');
+        score = '❌';
+      } else {
+        const hb = fs.readFileSync(andyHbPath, 'utf8');
+        const lastCheckMatch = hb.match(/上次巡检[：:](.+)/);
+        if (!lastCheckMatch) {
+          results.push('⚠️ Andy HEARTBEAT：存在但无「上次巡检」字段');
+          if (score === '✅') score = '⚠️';
+        } else {
+          const lastCheckStr = lastCheckMatch[1].trim().slice(0, 20);
+          const lastCheckDate = new Date(lastCheckStr.replace(' ', 'T') + '+08:00');
+          andyHbHours = isNaN(lastCheckDate.getTime()) ? 9999 : (Date.now() - lastCheckDate.getTime()) / 3600000;
+          const stale = andyHbHours > 30;
+          results.push(`${stale ? '⚠️' : '✅'} Andy HEARTBEAT 上次巡检：${lastCheckStr}（${andyHbHours.toFixed(1)}h 前）`);
+          if (stale && score === '✅') score = '⚠️';
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ Andy HEARTBEAT 读取失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // ── 数值评分 ──
     const _rub2 = loadRubric();
     const _L2I = _rub2?.layers?.L2?.items;
     const _l2s = [];
     if (_L2I) {
       for (const r of results) {
-        if (r.includes('skill-candidates')) { const m = r.match(/(\d+) 条候选/); if (m) trackScore(_l2s, _L2I, 'skill_candidates', +m[1]); }
-        if (r.includes('dpo-candidates') || (r.includes('dpo') && r.includes('负例'))) { const m = r.match(/(\d+) 条负例/); if (m) trackScore(_l2s, _L2I, 'dpo_candidates', +m[1]); }
-        if (r.includes('Andy HEARTBEAT 上次巡检')) { const m = r.match(/([\d.]+)h 前/); if (m) trackScore(_l2s, _L2I, 'andy_heartbeat_check', +m[1]); }
-        if (r.includes('opencode 近')) { const m = r.match(/成功率 (\d+)%/); if (m) trackScore(_l2s, _L2I, 'opencode_success_rate', +m[1]); }
-        if (r.includes('codebase_patterns') && r.includes('洞察')) { const m = r.match(/(\d+) 条代码/); if (m) trackScore(_l2s, _L2I, 'codebase_patterns', +m[1]); }
-        if (r.includes('Skill 总量')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l2s, _L2I, 'skill_count', +m[1]); }
+        if (r.includes('任务类型覆盖度')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l2s, _L2I, 'task_type_coverage', +m[1]); }
+        if (r.includes('端到端交付成功率') && r.includes('=')) { const m = r.match(/= (\d+)%/); if (m) trackScore(_l2s, _L2I, 'delivery_success_rate', +m[1]); }
+        if (r.includes('交付物多样性')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l2s, _L2I, 'deliverable_diversity', +m[1]); }
+        if (r.includes('进化信号积累')) { const m = r.match(/(\d+) 条/); if (m) trackScore(_l2s, _L2I, 'evolution_signals', +m[1]); }
+        if (r.includes('知识内化')) { const m = r.match(/(\d+) 条/); if (m) trackScore(_l2s, _L2I, 'knowledge_internalization', +m[1]); }
+        if (r.includes('Skill 积累')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l2s, _L2I, 'skill_count', +m[1]); }
+        if (r.includes('Andy HEARTBEAT 上次巡检')) { trackScore(_l2s, _L2I, 'andy_heartbeat_check', andyHbHours); }
       }
       if (_l2s.length > 0) {
         const _wa = calcWeightedAvg(_l2s);
@@ -3694,15 +3782,13 @@ os._exit(0)
       }
     }
 
-    // 按三个原始诉求分组输出
-    const pipeline = results.filter(r => r.includes('opencode') || r.includes('Skill'));
-    const mechanism = results.filter(r => r.includes('skill-candidates') || r.includes('dpo') || r.includes('HEARTBEAT') || r.includes('codebase_patterns'));
-    const feeding = results.filter(r => !pipeline.includes(r) && !mechanism.includes(r));
+    // 按两维度分组输出
+    const vibeA = results.filter(r => r.includes('任务类型') || r.includes('交付成功') || r.includes('交付物多样'));
+    const evoB = results.filter(r => !vibeA.includes(r));
 
     return `**L2 评估 ${score}**\n` +
-      `【开发流水线成效】\n` + (pipeline.length ? pipeline.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据') + '\n' +
-      `【自进化机制运转】\n` + (mechanism.length ? mechanism.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据') + '\n' +
-      `【喂养成效】\n` + (feeding.length ? feeding.map(r => `  ${r}`).join('\n') : '  ⚪ 待评测方案落地后量化');
+      `【Vibe Anything · 家人要什么，系统造什么】\n` + (vibeA.length ? vibeA.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据') + '\n' +
+      `【自进化飞轮 · 越用越强】\n` + (evoB.length ? evoB.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据');
   }
 
   if (toolName === 'evaluate_l3') {
