@@ -1094,6 +1094,7 @@ let lastDistillDay       = -1;  // 防止同一天重复触发
 let pendingHeartbeatToday = false;  // 蒸馏完成后触发 HEARTBEAT（串行避免 Kuzu 锁冲突）
 let lastTeamObsDay       = '';  // team_observation 蒸馏每日触发去重
 let lastPersonalizeDay   = '';  // Andy/Lisa 每日自我进化触发去重
+let lastMainEvalDay      = '';  // Main 评估每日触发去重
 let lastCollabDistillDay = '';  // 协作关系蒸馏每日触发去重
 let lastCodeGraphDay     = '';  // 代码图谱每日增量重建触发去重
 let lastL4ScanWeek       = '';  // L4 DPO 周级扫描去重（格式 yyyy-Www）
@@ -1263,6 +1264,52 @@ async function runL4DpoScan() {
   }
 }
 
+// ── Main 系统评估（每日凌晨 1 点，fire-and-forget）──────────────────────────────
+// 提前跑 evaluate_system，生成 L0~L4 最新评分写入 evaluation-history.jsonl。
+// Andy HEARTBEAT（凌晨 2 点后）消费最新评分做趋势对比。
+// 与蒸馏并行跑，不阻塞任何任务，给足时间完成。
+function runMainPreEval() {
+  log('Main 系统评估触发（fire-and-forget，为 Andy HEARTBEAT 备数据）...');
+  const startedAt = new Date().toISOString();
+  const evalBody = JSON.stringify({
+    model: 'openclaw/main',
+    messages: [{ role: 'user', content: 'evaluate_system' }],
+    user: `watchdog:pre-eval:${Date.now()}`,
+    stream: false,
+  });
+  const evalReq = http.request({
+    hostname: '127.0.0.1', port: 18789,
+    path: '/v1/chat/completions', method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(evalBody),
+      'x-openclaw-agent-id': 'main',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    timeout: 300000, // 5 分钟超时
+  }, (res) => {
+    let data = '';
+    res.on('data', chunk => data += chunk);
+    res.on('end', () => {
+      const elapsed = ((Date.now() - new Date(startedAt).getTime()) / 1000).toFixed(0);
+      log(`Main 系统评估完成（status ${res.statusCode}, ${elapsed}s），evaluation-history.jsonl 已更新`);
+      logTaskExecution('main-pre-eval', 'L2', '评估回流', 'success', `status ${res.statusCode}, ${elapsed}s`, null, startedAt);
+    });
+  });
+  evalReq.on('error', e => {
+    log(`Main 系统评估失败: ${e.message}`);
+    logTaskExecution('main-pre-eval', 'L2', '评估回流', 'failure', '', e.message, startedAt);
+  });
+  evalReq.on('timeout', () => {
+    evalReq.destroy();
+    log('Main 系统评估超时（5min）');
+    logTaskExecution('main-pre-eval', 'L2', '评估回流', 'failure', '', 'timeout 5min', startedAt);
+  });
+  evalReq.write(evalBody);
+  evalReq.end();
+  logTaskExecution('main-pre-eval', 'L2', '评估回流', 'success', '已启动 fire-and-forget', null, startedAt);
+}
+
 // ── Andy/Lisa 自我进化蒸馏（每日凌晨 1 点）──────────────────────────────────────
 // Andy 从自己的历史设计决策中提炼判断规律（下次写 spec 更准）
 // Lisa 从历史 opencode 运行记录中提炼代码库认知（哪些模块容易出错、哪些陷阱要绕）
@@ -1373,6 +1420,12 @@ async function check() {
     if (lastPersonalizeDay !== today) {
       lastPersonalizeDay = today;
       runPersonalizationDistill();
+      // 同一时段并行触发 Main 系统评估（fire-and-forget）
+      // 给 Andy HEARTBEAT（2 点后）备好最新评分数据
+      if (lastMainEvalDay !== today) {
+        lastMainEvalDay = today;
+        runMainPreEval();
+      }
     }
   }
 
@@ -1719,8 +1772,8 @@ function schedulePipelineCleanup() {
 schedulePipelineCleanup();
 
 log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama + ChromaDB + cloudflared，Gateway 超时阈值 ${PROBE_TIMEOUT_MS / 1000}s`);
-log('凌晨 1 点：Andy/Lisa 自我进化蒸馏（设计判断 + 代码库认知 + 成员期待 + 外部知识）');
-log('凌晨 2 点：家人记忆蒸馏（对话 → Kuzu 知识图谱）+ Andy HEARTBEAT 巡检');
+log('凌晨 1 点：Andy/Lisa 自我进化蒸馏 + Main 系统评估（并行 fire-and-forget，为 Andy HEARTBEAT 备最新评分）');
+log('凌晨 2 点：家人记忆蒸馏（对话 → Kuzu 知识图谱）→ Andy HEARTBEAT（消费 Main 评估 + skill-candidates + knowledge_injection）');
 log('凌晨 3 点：team_observation（Andy 分析家人行为模式 → Lucas 理解更深）');
 log('凌晨 4 点：家人协作关系蒸馏（谁和谁一起讨论什么 → Kuzu 协作边）');
 log('凌晨 5 点：代码图谱增量重建（CrewClaw + Scripts，~39s）');
