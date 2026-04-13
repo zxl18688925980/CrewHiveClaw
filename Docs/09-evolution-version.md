@@ -7,8 +7,8 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v661
-> **最后更新**: 2026-04-13
+> **版本**: v666
+> **最后更新**: 2026-04-14
 
 ---
 
@@ -2519,4 +2519,207 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `CrewClaw/crewclaw-routing/context-sources.ts`（MEMORY.md 去重 + topK 调整）
 - `Docs/00-project-overview.md`（Lucas 特殊原则 + 角色表）
 - `Docs/HomeAI Readme.md`（Lucas 描述）
+- `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v662 · Andy L2 自进化主力意志感（2026-04-13）
+
+**干预类型**：L2 自进化飞轮——Andy 角色设计增强
+
+**背景**：L2 有两个正交子层（Vibe Anything × 自进化飞轮），但 Andy 作为自进化飞轮主力的意志感不够——Andy 的行为规则没有区分「Lucas 触发的任务」和「Andy 自主发起的自进化任务」。
+
+**设计来源**：用户原话「在系统能力自进化这个事情上，Andy 是主力，要有对应的意志感。」
+
+**变更清单**：
+
+1. **Andy AGENTS.md 核心使命声明**（新增）：
+   - 在「设计哲学」前加「核心使命：L2 自进化飞轮的主力」声明
+   - 明确自主发起改进的完整路径：观察→积累→判断→直接行动→事后汇报
+   - 明确两类任务的行为差异：Lucas 触发的任务（Andy 是执行方，阻塞必须通知 Lucas）vs Andy 自主发起的自进化任务（Andy 是需求方，直接推进，架构级改动才提前告知系统工程师）
+   - Check 13「架构改进提案」→「架构改进/能力补全」，从「提案」改为「行动」：Skill 结晶/工具补全直接推进，架构级调整才先知会系统工程师
+
+2. **00-project-overview.md L2 内部分工补充**：
+   - L2 表格/文字块明确标注 Lucas/Andy 主力归属
+   - Andy 特殊原则更新：「L2 自进化飞轮的主力」作为核心定位
+
+3. **HomeAI Readme.md L2 里程碑描述同步**
+
+**修改文件**：
+- `~/.openclaw/workspace-andy/AGENTS.md`（核心使命声明 + Check 13 行动路径 + 两类任务行为差异）
+- `Docs/00-project-overview.md`（L2 表格/文字块/内部分工段落/Andy 特殊原则）
+- `Docs/HomeAI Readme.md`（L2 里程碑描述）
+- `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v663 · Lucas 工具层加固 + Andy HEARTBEAT 基础设施修复（2026-04-13）
+
+**干预类型**：L0 基础设施修复 + L1 行为质量加固
+
+**背景**：全量审计发现两个系统性问题：(1) Lucas 工具调用缺少 agentId 守卫——21 个工具中部分调用时未校验来源角色，存在越权调用风险；(2) Andy HEARTBEAT 依赖 exec 调 ChromaDB/Kuzu，但 exec 不在 L2 允许列表中导致执行被拒；同时缺少预计算机制，Andy 每次 HEARTBEAT 都要重新查询，造成不必要的 token 消耗。
+
+**变更清单**：
+
+1. **Lucas 工具层 21/21 agentId 守卫**（index.ts）：
+   - 所有 Lucas 专属工具的 tool handler 增加调用者身份校验
+   - 非授权角色调用返回明确错误而非静默失败
+
+2. **Andy HEARTBEAT exec L2 允许列表**（index.ts）：
+   - `exec` 工具的 L2 安全校验增加 Andy HEARTBEAT 必需的命令白名单
+   - 允许 Andy 在 HEARTBEAT 上下文中执行预定义的数据查询命令
+
+3. **Andy HEARTBEAT 预计算管道**（index.ts）：
+   - 12 个数据块在 HEARTBEAT 触发前预计算并注入 prompt
+   - 包括：活跃任务数、skill-candidates 统计、capability 数、最近 DPO 信号、代码图谱变化、评估趋势等
+   - Andy 不再需要在 HEARTBEAT 中调 exec 查询，直接消费预计算结果
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（agentId 守卫 + exec 允许列表 + 12 个预计算块）
+- `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v664 · L2 双维度缺口补全（2026-04-14）
+
+**干预类型**：L2 自进化飞轮——架构完整性修复
+
+**背景**：v662 确立了 L2 双维度（Vibe Anything × 自进化飞轮）框架，v663 修复了基础设施。但全量审计发现五个结构性缺口：(1) Lisa 在 L2 中的桥梁角色没有文档化；(2) 回流机制只有 codebase_patterns 实现了，其他四条停留在设计；(3) skill-candidates 消费端（Andy HEARTBEAT）路径断裂；(4) Main 评估结果没有回流给 Andy；(5) Andy HEARTBEAT 6am 和蒸馏 2am 调度时序冲突。同时发现 Lucas false_commitment 检测缺少下一轮纠正闭环。
+
+**变更清单**：
+
+1. **Lisa 桥梁角色定义**（00-project-overview.md）：
+   - 明确 Lisa 是两个维度的桥梁：Vibe Anything 的交付手 + 自进化飞轮的信号源
+   - 三角色在 L2 中的闭环关系：Lucas 提需求 → Andy 设计 + 自进化 → Lisa 交付 + 反馈信号 → 回到 Lucas
+
+2. **五条回流机制文档化**（00-project-overview.md + index.ts）：
+   - codebase_patterns（Lisa→Andy）：已实现
+   - capability-registry（Lisa→Lucas）：已实现
+   - skill-candidates（Lucas→Andy）：框架层实现
+   - capability_gap_proposal（Lisa→Andy）：框架层实现
+   - knowledge_injection（Lucas→Andy）：框架层实现
+   - Main 评估回流（Main→Andy）：新增，evaluation-history.jsonl → Andy HEARTBEAT 消费
+
+3. **skill-candidates 消费端修复**（index.ts）：
+   - Andy HEARTBEAT 检查 4 消费 skill-candidates 路径修正
+   - 阈值从 2 个工具调整为 3 个工具 + 7 天去重
+
+4. **Main 评估回流 Andy**（index.ts）：
+   - Main evaluate_system 结果写入 evaluation-history.jsonl
+   - Andy HEARTBEAT 检查 8 消费最近评估趋势，退步维度高亮
+
+5. **调度时序重排**（gateway-watchdog.js）：
+   - Andy HEARTBEAT 从 2am 移到 6am，与蒸馏 2am 错开
+   - 避免同一时段大量后台任务竞争 Gateway 资源
+
+6. **L2 基线首次测量**：
+   - Vibe Anything 覆盖度：0 completed / 4 总计
+   - 自进化飞轮：skill-candidates 89 条，andy-goals 1 条
+
+7. **false_commitment 纠正闭环**（index.ts）：
+   - 新增 `sessionFalseCommitCorrections` Map
+   - agent_end 检测 false_commitment → 下一轮 before_prompt_build 注入针对性纠正
+   - 补全了之前只有 tool_call_hallucination 有纠正而 false_commitment 没有的缺口
+
+**Readme 系列文档同步**：
+- `Docs/00-project-overview.md`：L2 双维度表格 + Lisa 桥梁角色 + 五条回流机制 + L2 基线数据 + Main 评估回流
+- `Docs/HomeAI Readme.md`：L2 里程碑描述更新（Lisa 桥梁 + 回流机制）
+- `Docs/09-evolution-version.md`：本条目
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（sessionFalseCommitCorrections + skill-candidates 消费端 + Main 评估回流）
+- `CrewHiveClaw/HomeAILocal/Scripts/gateway-watchdog.js`（调度时序）
+- `Docs/00-project-overview.md`（L2 双维度 + 回流机制 + 基线数据）
+- `Docs/HomeAI Readme.md`（L2 描述）
+- `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v665 · Main 任务处理 + 全量评估 + 基础设施修复（2026-04-14）
+
+**干预类型**：L0 基础设施修复 + L1 行为质量 + 系统诊断
+
+**背景**：Main 监控积累 5 条 Lucas 承诺幻觉 pending 任务（mt-2026-04-11-002~005），DPO 信号持续高频。同时 gateway-watchdog 和 cloudflared-tunnel 进程不在 PM2 中运行，蒸馏管道因缺少 watchdog 调度而停滞。
+
+**变更清单**：
+
+1. **Main 5 条 pending 任务处理**：
+   - 全部标记 done，根因统一：false_commitment 缺少下一轮纠正闭环
+   - v664 已补全 sessionFalseCommitCorrections，本轮验证机制生效
+
+2. **DPO 模式扩充**（lucas-dpo-patterns.json）：
+   - 从实际 96 条 DPO 数据中发现并新增 6 个 false_commitment 模式
+   - 「已完成设计」「已经设计好」「已共享给」「Lisa 马上开始」「Lisa马上开始」「已提交给Lisa修复」
+   - 纠正提示包含具体行动指引（先调工具再说话、返回⚠️时说「已加入队列」不说「已提交」）
+
+3. **全量评估完成**：
+   - **L0 基础设施**：Gateway 正常，ChromaDB 正常（2104 conversations / 504 decisions / 1604 family_knowledge），Ollama 正常，PM2 进程除 watchdog+cloudflared 外正常
+   - **L1 记忆数据**：三个核心集合每日正常写入，conversations 最新到 4/14
+   - **L2 Kuzu 图谱**：Entity 397 / Fact 376 / CodeNode 170,854 / CODE_CALLS 7,279,685，蒸馏管道脚本路径已修正
+   - **关键发现**：conversations 检索质量差（「抖音带货」top-10 全不相关），疑因文档过长导致嵌入向量稀释 + nomic-embed-text 中文语义能力有限
+
+4. **基础设施修复**：
+   - gateway-watchdog + cloudflared-tunnel 恢复 PM2 运行
+   - 蒸馏管道诊断：log 路径已从旧路径迁移到新路径，4/12 有成功运行记录，watchdog 恢复后今晚 2am 将自动触发
+
+5. **Pipeline 0/4 completed 根因待查**：
+   - task-registry 显示 3 failed + 1 suspended，0 completed
+   - 待下次排查失败原因
+
+**Readme 系列文档同步**：
+- `Docs/09-evolution-version.md`：本条目
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/config/lucas-dpo-patterns.json`（+6 个 false_commitment 模式）
+- `~/HomeAI/Data/main-pending-tasks.json`（5 条 → done）
+- `~/HomeAI/CLAUDE.md`（版本号 v665 + 动态区更新）
+- `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v666 · Andy spec 落地自动重触发机制 + jiti 兼容性修复（2026-04-14）
+
+**干预类型**：L1 流水线可靠性修复 + 基础设施 bug 修复
+
+**背景**：task-registry 显示 3/3 任务 failed（0/4 completed），根因是 DeepSeek R1（Andy 模型）完成方案分析并输出完整 Implementation Spec 后，不调用 `trigger_lisa_implementation` 工具。Andy 的思考（CoT）里分析了需求、写了结构化 spec JSON，但最后一步「启动 Lisa」被跳过——推测是 R1 的长程推理衰减或工具调用注意力不足。
+
+**变更1：Andy spec 落地自动重触发**（index.ts `runAndyPipeline`）
+
+流水线结束检测逻辑：Andy 响应完成后，检查协作线程文件 `andy-to-lisa:{reqId}_collab.json` 是否存在。
+
+| 情况 | 检测方式 | 处理 |
+|------|---------|------|
+| Andy 正常完成 | collab 文件存在 | `markTaskStatus("completed")` |
+| Andy 有 spec 但没调 trigger | regex 匹配 ` ```json ``` ` 含 `integration_points` | 自动重触发：提取 spec → 构造精简 prompt → 二次调 Andy |
+| 自动重触发成功 | collab 文件出现 | `markTaskStatus("completed")` + notify engineer |
+| 自动重触发失败 | collab 文件仍不存在 | `markTaskStatus("failed")` + 转 Lucas 决策 |
+| Andy 无 spec 且没调 trigger | regex 无匹配 | `markTaskStatus("failed")` + 转 Lucas 决策 |
+
+重触发 prompt 设计原则：Andy 在新 session 中无历史记忆，所以把完整 spec JSON 嵌入 retry prompt，告诉 Andy「只需要做一件事：调用 trigger_lisa_implementation」。
+
+**变更2：`runLucasPipelineFallback` 提取复用**
+
+从原 inline Lucas 决策逻辑提取为独立 async 函数，供自动重触发失败路径和无 spec 路径共同调用。Lucas 收到 3 个选项：①补充背景重提需求 ②问家人一个关键问题 ③上报系统工程师。
+
+**变更3：jiti Babel parse error 修复**
+
+**根因**：`before_prompt_build` 中 Andy HEARTBEAT 的 Lucas 知识投喂代码块（~L5932-5955）没有被 `try {` 包裹。前一个 `catch` 在 L5930 关闭了对应的 `try`，但后续代码直接裸露执行，直到 L5956 遇到 `} catch (_e) {`，此时没有匹配的 `try`，jiti Babel parser 报 `Unexpected token`。
+
+**影响**：此 bug 导致 Gateway 启动时插件无法加载——jiti 懒加载在首次真实请求时才暴露 parse error，让所有工具消失。
+
+**修复**：在 L5932 前添加 `try {`。
+
+**变更4：全局 `} catch {` → `} catch (_e) {`**
+
+158 处 optional catch binding 替换为显式参数。虽然 jiti 2.6.1 Babel parser 支持 optional catch binding（实际根因是缺 `try`），但显式参数是防御性措施，避免未来 jiti 版本差异。
+
+**变更5：task-registry 清理**
+
+3 条 failed 任务（`req_1775858994072`、`req_1776003363639`、`req_1776003551689`）标记 cancelled，注明根因和修复版本。1 条 queued 任务保留。
+
+**验证**：`check-plugin.sh` 编译通过，Gateway 成功启动（`ready (2 plugins, 5.0s)`），PID 25721 端口 18789 正常监听。
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（自动重触发 + `runLucasPipelineFallback` + missing try fix + catch syntax）
+- `~/HomeAI/Data/learning/task-registry.json`（3 failed → cancelled）
 - `Docs/09-evolution-version.md`（本条目）

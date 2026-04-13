@@ -326,8 +326,11 @@ L4 = 深度学习·内化能力越来越强：DPO+SFT + 数据驱动模型评估
 6. **Main 评估回流**（Main→Andy）：Main 的 evaluate_system 评分沉淀到 evaluation-history.jsonl，Andy 在 HEARTBEAT 时消费最近评估趋势，退步维度高亮——Main 是系统的体检医生，诊断结果不只给系统工程师看，也喂给 Andy 驱动自进化
 
 **L2 基线数据（2026-04-14 首次测量）**：
-- Vibe Anything 覆盖度：流水线层面 0 completed / 4 总计，交付物多样性 ≥4 种（app/code/message/chat/capability）
+- Vibe Anything 覆盖度：流水线层面 0 completed / 4 总计（3 failed + 1 suspended），交付物多样性 ≥4 种（app/code/message/chat/capability）
 - 自进化飞轮：Andy HEARTBEAT 定时执行正常（v663 修复生效），skill-candidates 89 条积累，andy-goals 1 条（基础设施补录，Andy 尚未自主写入进化目标），andy-learning-state 不存在（主动学习行为未产出）
+- 知识图谱规模：Entity 397 / Fact 376 / CodeNode 170,854 / CODE_CALLS 7,279,685
+- 记忆规模：conversations 2,104 / decisions 504 / family_knowledge 1,604
+- **已知短板**：conversations 检索质量差（「抖音带货」top-10 全不相关），疑因文档过长导致嵌入向量稀释 + nomic-embed-text 中文语义能力有限——待数据积累后判断是嵌入模型问题还是文档格式问题
 
 **L2 与 L3 的核心差别：L3 带着人**。L2 是系统自己跟自己玩——蒸馏、结晶、设计判断，全部是系统内部循环，人不在里面。L3 才是带着人一起进化：通过影子 Agent 理解每个成员在这个组织里的行为模式，在真实沟通前帮人想清楚，让协作洞察回流影响下一次判断。L2 的进化让系统更强，L3 的进化让组织运作更优——这是两件不同的事，设计时不能混同，评估时也不能混同。
 

@@ -1,7 +1,7 @@
 # Claude Code 协作手册
 
-> **版本**: v658
-> **最后更新**: 2026-04-13
+> **版本**: v665
+> **最后更新**: 2026-04-14
 > **维护者**: 系统工程师（Claude Code 主动追加，人做方向判断）
 > **定位**: HomeAI 系统建设过程中积累的系统工程师最优实践。持续增长文档，随每次有价值的协作经验追加。
 > **双重价值**: 我们自己的成长总结；第二个系统工程师（感性脑 + 理性脑）的入场手册。
@@ -1133,3 +1133,31 @@ tail -20 ~/HomeAI/Logs/pm2/wecom-out.log
 两步缺一不可：① 基础设施写入（数据进来）+ ② AGENTS.md 行为绑定（触发规则）。只做①不做②，等于给 Agent 塞了一份它不会读的报告。
 
 **可复用性**：任何「系统注入结构化上下文 → 期望 Agent 根据它行动」的场景，都要检查 AGENTS.md 是否有对应触发规则，而不只是验证注入是否成功。
+
+### ChromaDB v2 API：查询必须用 query_embeddings（2026-04-14）
+
+**现象**：ChromaDB Server 升级到 v1.0.0 后，v1 API 返回 "Unimplemented"。用 `query_texts` 查询返回 422 "missing field query_embeddings"。
+
+**正确用法**：
+- Base path: `/api/v2/tenants/default_tenant/databases/default_database/collections`
+- 查询必须先通过 Ollama `nomic-embed-text` 生成 embedding，再用 `query_embeddings` 参数查询
+- Python SDK（旧版 chromadb-client）不兼容，直接用 HTTP requests 库调用
+- Add 请求返回 201（不是 200）
+- 插件代码 `index.ts` 已在 v664 迁移到 v2 API（`chromaQuery()` 使用 `query_embeddings`）
+
+**nomic-embed-text 向量特征**：768 维，向量范数约 21，L2 距离 250-330 为正常相似度范围。文档过长会导致嵌入向量「稀释」——全文档嵌入的语义被平均化，特定主题的区分度下降。
+
+### PM2 进程恢复流程（2026-04-14）
+
+**现象**：gateway-watchdog 和 cloudflared-tunnel 不在 PM2 进程列表中（可能因 pm2 save 未持久化或重启后丢失）。
+
+**恢复命令**：
+```bash
+cd ~/HomeAI/CrewHiveClaw/CrewClaw/daemons
+pm2 start ecosystem.config.js --only gateway-watchdog,cloudflared-tunnel
+pm2 save
+```
+
+**注意**：`pm2 save` 是必须的——没有 save 的话，下次机器重启进程又不在了。
+
+**蒸馏管道停滞诊断**：watchdog 不运行 = 蒸馏脚本不触发。日志路径已在 4/8 重构时从 `~/HomeAI/Logs/` 迁移到 `~/HomeAI/CrewHiveClaw/HomeAILocal/logs/`，旧路径的日志不代表当前状态。

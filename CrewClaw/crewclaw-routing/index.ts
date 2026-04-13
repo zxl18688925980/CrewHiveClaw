@@ -94,7 +94,7 @@ const AGENT_THREAD_DIR    = join(PROJECT_ROOT, "data", "agent-threads");
 const AGENT_THREAD_STORE  = 20;   // 最多保留 20 轮
 const AGENT_THREAD_INJECT = 10;   // 每次注入最近 10 轮
 const AGENT_THREAD_TTL    = 7 * 24 * 60 * 60 * 1000;  // 7 天过期
-try { mkdirSync(AGENT_THREAD_DIR, { recursive: true }); } catch {}
+try { mkdirSync(AGENT_THREAD_DIR, { recursive: true }); } catch (_e) {}
 
 // ── 增量蒸馏冷却（事件驱动感知侧，30 分钟/用户）────────────────────────────
 const DISTILL_COOLDOWN_MS               = 30 * 60 * 1000;
@@ -132,7 +132,7 @@ function loadAgentThread(threadId: string): ThreadEntry[] {
       if (now - raw[i].ts < AGENT_THREAD_TTL) { valid.push(raw[i], raw[i + 1]); }
     }
     return valid;
-  } catch { return []; }
+  } catch (_e) { return []; }
 }
 
 function appendAgentThread(threadId: string, userText: string, assistantText: string): void {
@@ -140,7 +140,7 @@ function appendAgentThread(threadId: string, userText: string, assistantText: st
   history.push({ role: "user", text: userText, ts: Date.now() });
   history.push({ role: "assistant", text: assistantText, ts: Date.now() });
   while (history.length > AGENT_THREAD_STORE * 2) history.splice(0, 2);
-  try { writeFileSync(agentThreadFile(threadId), JSON.stringify(history)); } catch {}
+  try { writeFileSync(agentThreadFile(threadId), JSON.stringify(history)); } catch (_e) {}
 }
 
 function buildAgentThreadMessages(threadId: string): Array<{ role: string; content: string }> {
@@ -319,7 +319,7 @@ type RoutingThresholds = Record<string, AgentRoutingState>;
 function loadRoutingThresholds(): RoutingThresholds {
   try {
     return JSON.parse(readFileSync(ROUTING_THRESHOLDS_FILE, "utf8")) as RoutingThresholds;
-  } catch {
+  } catch (_e) {
     // 首次启动：从各 Agent 的 localThresholdInit 初始化
     const init: RoutingThresholds = {};
     for (const cfg of AGENT_EVOLUTION_CONFIGS) {
@@ -338,7 +338,7 @@ function saveRoutingThresholds(thresholds: RoutingThresholds): void {
   try {
     mkdirSync(dirname(ROUTING_THRESHOLDS_FILE), { recursive: true });
     writeFileSync(ROUTING_THRESHOLDS_FILE, JSON.stringify(thresholds, null, 2), "utf8");
-  } catch { /* 写入失败不影响路由，保留上次阈值 */ }
+  } catch (_e) { /* 写入失败不影响路由，保留上次阈值 */ }
 }
 
 // ── userId / 渠道归一化 ────────────────────────────────────────────────
@@ -398,7 +398,7 @@ function appendJsonl(filePath: string, record: object): void {
   try {
     mkdirSync(dirname(filePath), { recursive: true });
     appendFileSync(filePath, JSON.stringify(record) + "\n", "utf8");
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理，不影响主流程
   }
 }
@@ -411,7 +411,7 @@ function readJsonlEntries(filePath: string): Record<string, unknown>[] {
       .split("\n")
       .filter(Boolean)
       .map(line => JSON.parse(line) as Record<string, unknown>);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -421,7 +421,7 @@ function writeJsonlEntries(filePath: string, entries: Record<string, unknown>[])
   try {
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, entries.map(e => JSON.stringify(e)).join("\n") + "\n", "utf8");
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -470,7 +470,7 @@ function loadAgentDeps(): DepSpec[] {
   let raw: DepConfigJson[];
   try {
     raw = JSON.parse(readFileSync(cfgPath, "utf8")) as DepConfigJson[];
-  } catch {
+  } catch (_e) {
     // 配置文件不存在时回退空列表，不阻断启动
     return [];
   }
@@ -505,7 +505,7 @@ function saveDepState(state: DepStateFile): void {
   try {
     mkdirSync(dirname(DEP_STATE), { recursive: true });
     writeFileSync(DEP_STATE, JSON.stringify(state, null, 2), "utf8");
-  } catch { /* 写入失败不影响主流程 */ }
+  } catch (_e) { /* 写入失败不影响主流程 */ }
 }
 
 async function isBinAvailable(bin: string, args: string[]): Promise<boolean> {
@@ -514,7 +514,7 @@ async function isBinAvailable(bin: string, args: string[]): Promise<boolean> {
       const p = spawn(bin, args, { stdio: "ignore", timeout: 8_000 });
       p.on("close", (code) => resolve(code === 0));
       p.on("error", () => resolve(false));
-    } catch {
+    } catch (_e) {
       resolve(false);
     }
   });
@@ -576,7 +576,7 @@ function backupBin(binPath: string, depName: string): string | null {
     copyFileSync(binPath, backupPath);
     chmodSync(backupPath, 0o755);
     return backupPath;
-  } catch {
+  } catch (_e) {
     return null;
   }
 }
@@ -587,7 +587,7 @@ function restoreFromBackup(backupPath: string, binPath: string): boolean {
     copyFileSync(backupPath, binPath);
     chmodSync(binPath, 0o755);
     return true;
-  } catch {
+  } catch (_e) {
     return false;
   }
 }
@@ -735,7 +735,7 @@ async function researchWithDeepSeek(requirement: string, taskType = "feature"): 
     if (!resp.ok) return "";
     const data = await resp.json() as { choices?: { message?: { content?: string } }[] };
     return data.choices?.[0]?.message?.content ?? "";
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -753,7 +753,7 @@ function readCodebaseContext(projectRoot: string): string {
     const bootstrapPath = join(process.env.HOME ?? "/", ".openclaw/workspace-andy/BOOTSTRAP.md");
     const bootstrap = readFileSync(bootstrapPath, "utf8").slice(0, 600);
     sections.push(`【Andy 身份配置】\n${bootstrap}`);
-  } catch { /* 文件不存在时跳过 */ }
+  } catch (_e) { /* 文件不存在时跳过 */ }
 
   // app/generated/ 最近 3 个生成文件（了解既有代码风格和模式）
   const generatedDir = join(projectRoot, "app/generated");
@@ -769,7 +769,7 @@ function readCodebaseContext(projectRoot: string): string {
       const sampleLines = readFileSync(samplePath, "utf8").split("\n").slice(0, 40).join("\n");
       sections.push(`【代码风格样例（${files[files.length - 1]}）】\n${sampleLines}`);
     }
-  } catch { /* 目录不存在时跳过 */ }
+  } catch (_e) { /* 目录不存在时跳过 */ }
 
   return sections.join("\n\n");
 }
@@ -956,7 +956,7 @@ function graphExpandEntities(entityIds: string[]): { topicNames: string[]; perso
         }
       }
     }
-  } catch { /* 图遍历失败不影响主流程 */ }
+  } catch (_e) { /* 图遍历失败不影响主流程 */ }
   return { topicNames: Array.from(topicNames), personNames: Array.from(personNames) };
 }
 
@@ -1122,7 +1122,7 @@ function getRelatedPersonIds(userId: string): string[] {
     if (result.status !== 0 || !result.stdout?.trim()) return [];
     const rows = JSON.parse(result.stdout.trim()) as unknown[][];
     return rows.map(row => String(row[0])).filter(Boolean);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -1149,7 +1149,7 @@ function getTopicRelatedPersonIds(userId: string): string[] {
     if (result.status !== 0 || !result.stdout?.trim()) return [];
     const rows = JSON.parse(result.stdout.trim()) as unknown[][];
     return rows.map(row => String(row[0])).filter(Boolean);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -1173,7 +1173,7 @@ function queryCausalFacts(userId: string): { value: string; context: string }[] 
     return rows
       .filter(row => row[0])
       .map(row => ({ value: String(row[0]), context: String(row[1] ?? "") }));
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -1213,7 +1213,7 @@ function queryPersonDistilledFacts(entityIds: string[]): Map<string, { relation:
       if (!facts.has(personName)) facts.set(personName, []);
       facts.get(personName)!.push({ relation, targetName, context: ctx });
     }
-  } catch { /* 静默，不影响主流程 */ }
+  } catch (_e) { /* 静默，不影响主流程 */ }
   return facts;
 }
 
@@ -1245,7 +1245,7 @@ async function queryRelevantTopics(embedding: number[], userId: string | null = 
         };
       })
       .filter(t => t.topicId && t.topicName);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -1258,7 +1258,7 @@ function relativeTimeLabel(isoStr: string, now: Date): string {
     if (diffDays <= 7) return `${diffDays}天前`;
     if (diffDays <= 30) return `${Math.floor(diffDays / 7)}周前`;
     return `${Math.floor(diffDays / 30)}个月前`;
-  } catch { return ""; }
+  } catch (_e) { return ""; }
 }
 
 async function queryMemories(prompt: string, userId: string, isGroup = false): Promise<string> {
@@ -1298,7 +1298,7 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
         const summary = (insight.document ?? "").slice(0, 600);
         insightBlock  = `【${label}人物档案（${date}蒸馏）】\n${summary}`;
       }
-    } catch { /* insights 集合不存在时静默忽略 */ }
+    } catch (_e) { /* insights 集合不存在时静默忽略 */ }
 
     // ── Step 2c: 时间维度召回（MAGMA 时间维度）──────────────────────────
     // 当 prompt 含时间锚词时，直接按 timestamp 拉取记录，不依赖语义相似度。
@@ -1366,7 +1366,7 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
         const reg = JSON.parse(readFileSync(regPath, "utf8")) as Record<string, { name?: string | null }>;
         const regKey = Object.keys(reg).find(k => k.toLowerCase() === visitTok);
         visitorRealName = (regKey && reg[regKey].name) ? reg[regKey].name! : null;
-      } catch { /* registry 读取失败，fallback 到 token */ }
+      } catch (_e) { /* registry 读取失败，fallback 到 token */ }
     }
     // 访客过滤：优先用真实姓名（与写入时 convFromId 一致），找不到时用 token 格式
     const visitorUserIdFilter = visitorRealName ?? userId;
@@ -1408,7 +1408,7 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
     }
 
     return parts.length > 0 ? parts.join("\n\n") : "";
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -1451,43 +1451,77 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
     responseLen: response.length,
   };
   appendJsonl(join(PROJECT_ROOT, "data/learning/memory-write-debug.jsonl"), debugEntry);
-  
+
   try {
-    const id = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const baseId = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     // 访客对话匿名化：document/embedDoc 用"访客:"而非具体 ID，防止语义混淆
     const displayFromId = meta.fromType === "visitor" ? "访客" : meta.fromId;
-    // document 格式：通用化，支持人/Agent/设备任意参与方
-    const document = `${displayFromId}(${meta.fromType}): ${prompt}\n${meta.toId}: ${response}`;
-    // nomic-embed-text 上下文窗口 ~768 tokens，超长时返回 500。
-    // embedding 用截断版，完整文本仍保存在 document 字段供检索展示。
-    const embedDoc = `${displayFromId}: ${prompt.slice(0, 350)}\n${meta.toId}: ${response.slice(0, 350)}`;
-    const embedding = await embedText(embedDoc);
-    await chromaAdd(collection, id, document, {
-      // ── 新字段 ──────────────────────────────────────────────────────
-      fromId:      meta.fromId,
-      fromType:    meta.fromType,
-      toId:        meta.toId,
-      toType:      meta.toType,
-      channel:     meta.channel,
-      modelUsed:   meta.modelUsed,
-      isCloud:     String(meta.isCloud),        // ChromaDB metadata 只支持 string/number/bool
-      toolsCalled:    JSON.stringify(meta.toolsCalled),
-      sessionId:      meta.sessionId ?? "",
-      // ── 进化信号字段（L2/L4）─────────────────────────────────────────
-      intent:         meta.intent ?? "",
-      qualityScore:   meta.qualityScore ?? 0,
-      dpoFlagged:     String(meta.dpoFlagged ?? false),
-      // ── 向后兼容（queryMemories where 过滤、distill-memories.py 仍用这两个字段）──
-      userId:         meta.fromId.toLowerCase(),
-      source:         meta.channel === "wecom_group" ? "group" : "private",
-      // ── 用户类型 ────────────────────────────────────────────────────────
-      userType:       getUserType(meta.fromId),
-      // ── 检索辅助 ─────────────────────────────────────────────────────
-      timestamp:      nowCST(),
-      prompt:         prompt.slice(0, 500),
-      response:       response.slice(0, 500),
-      entityTags:     extractEntityHits(`${prompt} ${response}`).join(","),
-    }, embedding);
+    const entityTags = extractEntityHits(`${prompt} ${response}`).join(",");
+
+    // ── 分块逻辑（Phase 2a）：长对话按句子边界拆分，每块独立 embedding ──
+    const totalLen = prompt.length + response.length;
+    const chunks: Array<{ text: string; embedText: string }> = [];
+
+    if (totalLen <= 600) {
+      // 短对话：不分块，保持原行为
+      const document = `${displayFromId}(${meta.fromType}): ${prompt}\n${meta.toId}: ${response}`;
+      chunks.push({ text: document, embedText: `${displayFromId}: ${prompt.slice(0, 350)}\n${meta.toId}: ${response.slice(0, 350)}` });
+    } else {
+      // 长对话：prompt 独立一块，response 按句子边界拆分
+      chunks.push({
+        text: `${displayFromId}(${meta.fromType}): ${prompt}`,
+        embedText: `${displayFromId}: ${prompt.slice(0, 500)}`,
+      });
+      // response 按句子边界切分，每块 ≤ 500 字符
+      const sentences = response.split(/(?<=[。！？\n])/);
+      let buf = "";
+      for (const s of sentences) {
+        if (buf.length + s.length > 500 && buf.length > 0) {
+          chunks.push({
+            text: `${meta.toId}: ${buf}`,
+            embedText: `${meta.toId}: ${buf.slice(0, 500)}`,
+          });
+          buf = s;
+        } else {
+          buf += s;
+        }
+      }
+      if (buf.length > 0) {
+        chunks.push({
+          text: `${meta.toId}: ${buf}`,
+          embedText: `${meta.toId}: ${buf.slice(0, 500)}`,
+        });
+      }
+    }
+
+    // 为每个 chunk 生成独立 embedding 并写入 ChromaDB
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkId = chunks.length === 1 ? baseId : `${baseId}-${i}`;
+      const embedding = await embedText(chunks[i].embedText);
+      await chromaAdd(collection, chunkId, chunks[i].text, {
+        fromId:      meta.fromId,
+        fromType:    meta.fromType,
+        toId:        meta.toId,
+        toType:      meta.toType,
+        channel:     meta.channel,
+        modelUsed:   meta.modelUsed,
+        isCloud:     String(meta.isCloud),
+        toolsCalled: JSON.stringify(meta.toolsCalled),
+        sessionId:   meta.sessionId ?? "",
+        intent:         meta.intent ?? "",
+        qualityScore:   meta.qualityScore ?? 0,
+        dpoFlagged:     String(meta.dpoFlagged ?? false),
+        userId:         meta.fromId.toLowerCase(),
+        source:         meta.channel === "wecom_group" ? "group" : "private",
+        userType:       getUserType(meta.fromId),
+        timestamp:      nowCST(),
+        prompt:         prompt.slice(0, 500),
+        response:       response.slice(0, 500),
+        entityTags,
+        // 分块元数据：同一对话的多个 chunk 共享 parentConvId
+        ...(chunks.length > 1 ? { parentConvId: baseId, chunkIndex: i } : {}),
+      }, embedding);
+    }
   } catch (e) {
     appendJsonl(join(PROJECT_ROOT, "data/learning/memory-write-errors.jsonl"), {
       t: nowCST(),
@@ -1522,7 +1556,7 @@ async function addDecisionMemory(record: DecisionRecord): Promise<void> {
       outcome_note: record.outcome_note ?? "",
       userId: record.userId ?? "",
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -1563,7 +1597,7 @@ async function queryDecisionMemory(context: string, agentId: string): Promise<st
       return `- [${date}] ${meta.context ?? ""} → 选择：${meta.decision ?? ""} → ${icon} ${outcomeVal ?? "待验收"}${note}`;
     });
     return `【历史决策参考】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -1587,7 +1621,7 @@ async function queryAgentConstraints(prompt: string, agentId: string, topK: numb
       return `- [${date}] ${r.document.slice(0, 200)}`;
     });
     return `【已知平台约束（开始实现前必查）】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -1614,7 +1648,7 @@ async function queryPendingCommitments(userId: string): Promise<string> {
     return isProactiveLoop
       ? `【所有待办承诺】\n${lines.join("\n")}`
       : `【对你的待办事项】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -1742,7 +1776,7 @@ async function getConversationsByTimeAnchor(
         return ta.localeCompare(tb);
       })
       .slice(-limit);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -1763,12 +1797,196 @@ function readFamilyProfile(userId: string): string {
     const injectPath = join(FAMILY_PROFILE_DIR, `${key}.inject.md`);
     const content = readFileSync(injectPath, "utf8");
     return `【家人档案】\n${content}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
 
-// ─── 从 openclaw.json 读取 Agent 模型配置，调用 OpenAI-compatible API ─────────
+// ── 动态家人摘要（.now.md）：机械提取，每轮注入，不走检索 ──────────────────
+
+const NOW_FILE_MAX_LINES = 50;
+const NOW_FILE_EXPIRY_DAYS = 7;
+
+function readNowFile(userId: string): string {
+  try {
+    const key = USER_PROFILE_MAP[userId.toLowerCase()];
+    if (!key) return "";
+    const nowPath = join(FAMILY_PROFILE_DIR, `${key}.now.md`);
+    const content = readFileSync(nowPath, "utf8").trim();
+    if (!content) return "";
+    return `【当前状态快照】\n${content}`;
+  } catch (_e) {
+    return "";
+  }
+}
+
+function updateNowFile(
+  userId: string, prompt: string, response: string,
+  toolsCalled: string[], entityTags: string[],
+): void {
+  try {
+    const key = USER_PROFILE_MAP[userId.toLowerCase()];
+    if (!key) return;
+    const nowPath = join(FAMILY_PROFILE_DIR, `${key}.now.md`);
+
+    // 读取现有内容
+    let lines: string[] = [];
+    try { lines = readFileSync(nowPath, "utf8").split("\n"); } catch (_e) { /* 首次创建 */ }
+
+    const now = new Date();
+    const dateStr = `${now.getMonth() + 1}/${now.getDate()}`;
+    const cutoffDate = new Date(now.getTime() - NOW_FILE_EXPIRY_DAYS * 86400000);
+
+    // 过期清理：移除超过 7 天的条目（带日期标记 {M/D} 的行）
+    const filtered = lines.filter(line => {
+      const dateMatch = line.match(/\((\d{1,2}\/\d{1,2})\)/);
+      if (dateMatch) {
+        const [m, d] = dateMatch[1].split("/").map(Number);
+        const entryDate = new Date(now.getFullYear(), m - 1, d);
+        if (entryDate < cutoffDate) return false;
+      }
+      return true;
+    });
+
+    // 构建新内容
+    const newLines: string[] = [];
+
+    // 找到各 section 的位置或创建
+    let topicSection: string[] = [];
+    let lastChatSection: string[] = [];
+    let pendingSection: string[] = [];
+
+    let currentSection = "";
+    for (const line of filtered) {
+      if (line.startsWith("## 最近话题")) { currentSection = "topic"; continue; }
+      if (line.startsWith("## 上次对话")) { currentSection = "lastChat"; continue; }
+      if (line.startsWith("## 待跟进")) { currentSection = "pending"; continue; }
+      if (line.startsWith("# ")) { continue; } // skip header
+      if (line.startsWith("## ") && !["最近话题", "上次对话", "待跟进"].some(s => line.includes(s))) { currentSection = "other"; continue; }
+      if (currentSection === "topic") topicSection.push(line);
+      else if (currentSection === "lastChat") lastChatSection.push(line);
+      else if (currentSection === "pending") pendingSection.push(line);
+    }
+
+    // 更新话题：从 entityTags 提取有意义的实体名（排除人名类 ID）
+    const personIds = new Set(Object.values(USER_PROFILE_MAP).map(v => v.toLowerCase()));
+    const topicTags = entityTags.filter(t => !personIds.has(t.toLowerCase()) && !t.startsWith("topic_"));
+    for (const tag of topicTags.slice(0, 3)) {
+      const entry = `- ${tag}（${dateStr}）`;
+      // 去重：同一话题同一天不重复
+      if (!topicSection.some(l => l.includes(tag) && l.includes(dateStr))) {
+        topicSection.unshift(entry);
+      }
+    }
+    // 话题最多保留 8 条
+    topicSection = topicSection.slice(0, 8);
+
+    // 更新上次对话
+    lastChatSection = [`- ${dateStr} ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}：${prompt.slice(0, 100)} → ${response.slice(0, 100)}`];
+
+    // 更新待跟进：从 toolsCalled 提取承诺
+    const commitmentTools = ["trigger_development_pipeline", "report_bug", "send_message"];
+    const hasCommitment = toolsCalled.some(t => commitmentTools.includes(t));
+    if (hasCommitment) {
+      const toolDesc = toolsCalled.filter(t => commitmentTools.includes(t)).join(", ");
+      const entry = `- ${toolDesc}（${dateStr}，⏳进行中）`;
+      // 同一天同一工具不重复
+      if (!pendingSection.some(l => l.includes(toolDesc) && l.includes(dateStr))) {
+        pendingSection.unshift(entry);
+      }
+    }
+    // 已完成标记：如果 response 含成功关键词，将对应的 pending 标记为完成
+    pendingSection = pendingSection.map(l =>
+      l.includes("⏳进行中") && (response.includes("完成") || response.includes("成功") || response.includes("已发送"))
+        ? l.replace("⏳进行中", "✅已完成")
+        : l
+    );
+    // 待跟进最多保留 10 条
+    pendingSection = pendingSection.slice(0, 10);
+
+    // 组装文件
+    const result: string[] = [`# ${key} · 当前状态`, ""];
+    result.push("## 最近话题（7天）");
+    result.push(...topicSection);
+    result.push("");
+    result.push("## 上次对话");
+    result.push(...lastChatSection);
+    result.push("");
+    result.push("## 待跟进");
+    result.push(...pendingSection);
+    result.push("");
+
+    // 有界：超过最大行数时截断
+    const finalContent = result.slice(0, NOW_FILE_MAX_LINES).join("\n");
+    writeFileSync(nowPath, finalContent, "utf8");
+  } catch (_e) { /* 写入失败不影响主流程 */ }
+}
+
+// ── 纠正持久化：DPO 模式反复出现 → 自动写入 AGENTS.md 永久禁令 ──────────────
+
+const DPO_FREQUENCY_FILE = join(PROJECT_ROOT, "data", "learning", "dpo-pattern-frequency.jsonl");
+const CORRECTION_PERSIST_THRESHOLD = 3; // 跨 ≥3 个 session 出现同一模式才持久化
+const CORRECTION_MAX_RULES = 10;
+
+function trackDpoFrequency(pattern: string, type: string, sessionKey: string): void {
+  try {
+    const entry = { pattern, type, sessionKey, ts: nowCST() };
+    appendJsonl(DPO_FREQUENCY_FILE, entry);
+  } catch (_e) { /* 非关键 */ }
+}
+
+function checkAndPersistCorrection(agentId: string, pattern: string, type: string, sessionKey: string): void {
+  if (agentId !== FRONTEND_AGENT_ID) return;
+  try {
+    // 读取频率文件，统计同一 pattern 出现在多少个不同 session
+    const lines = readJsonl(DPO_FREQUENCY_FILE)
+      .filter(e => e.pattern === pattern && e.type === type);
+    const uniqueSessions = new Set(lines.map(e => String(e.sessionKey)));
+    if (uniqueSessions.size < CORRECTION_PERSIST_THRESHOLD) return;
+
+    // 达到阈值：写入 AGENTS.md
+    const agentsPath = join(homedir(), `.openclaw/workspace-${agentId}/AGENTS.md`);
+    if (!existsSync(agentsPath)) return;
+    const content = readFileSync(agentsPath, "utf8");
+
+    // 检查是否已有相同规则
+    const ruleText = `禁止在未调对应工具时说「${pattern}」`;
+    if (content.includes(ruleText)) return;
+
+    // 生成规则
+    const newRule = `- **${ruleText}**。没有调工具 = 没有发生。用「我现在去安排」替代。\n`;
+
+    // 插入到 AUTO-PERSISTED 标记之间
+    const startMarker = "<!-- AUTO-PERSISTED CORRECTIONS（系统自动维护，勿删此标记） -->";
+    const endMarker = "<!-- END AUTO-PERSISTED CORRECTIONS -->";
+    if (!content.includes(startMarker)) return; // 标记不存在，不写入
+
+    // 解析已有规则数量
+    const markerBlock = content.slice(
+      content.indexOf(startMarker) + startMarker.length,
+      content.indexOf(endMarker)
+    );
+    const existingRules = markerBlock.split("\n").filter(l => l.trim().startsWith("- **")).length;
+
+    let updated: string;
+    if (existingRules >= CORRECTION_MAX_RULES) {
+      // 超出上限：替换最旧的规则（第一个）
+      const block = content.slice(content.indexOf(startMarker), content.indexOf(endMarker) + endMarker.length);
+      const ruleLines = block.split("\n");
+      const ruleIndices = ruleLines.map((l, i) => l.trim().startsWith("- **") ? i : -1).filter(i => i >= 0);
+      if (ruleIndices.length > 0) {
+        ruleLines[ruleIndices[0]] = newRule.trim();
+        updated = content.replace(block, ruleLines.join("\n"));
+      } else {
+        updated = content.replace(endMarker, `${newRule}\n${endMarker}`);
+      }
+    } else {
+      updated = content.replace(endMarker, `${newRule}${endMarker}`);
+    }
+
+    writeFileSync(agentsPath, updated, "utf8");
+  } catch (_e) { /* 非关键 */ }
+}
 function readAgentModelConfig(agentId: string): { baseUrl: string; apiKey: string; model: string } {
   const configPath = join(homedir(), ".openclaw/openclaw.json");
   const config = JSON.parse(readFileSync(configPath, "utf8")) as {
@@ -1819,7 +2037,7 @@ async function updateFamilyProfileAsync(userId: string, prompt: string, response
     let extracted: { current_status?: string | null; memory?: string | null } = {};
     try {
       extracted = JSON.parse(raw.replace(/^```json\n?|\n?```$/g, ""));
-    } catch { return; }
+    } catch (_e) { return; }
 
     if (!extracted.current_status && !extracted.memory) return;
 
@@ -1883,7 +2101,7 @@ async function queryBehaviorPatterns(prompt: string): Promise<string> {
       return `- ${who}${(meta.prompt ?? r.document).slice(0, 100)}`;
     });
     return `【成员行为规律】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -1898,7 +2116,7 @@ async function queryFamilyKnowledge(prompt: string): Promise<string> {
     if (results.length === 0) return "";
     const lines = results.map(r => `- ${r.document.slice(0, 100)}`);
     return `【家庭知识】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -1943,7 +2161,7 @@ function buildShadowCapabilityView(): string {
     const content = `【家庭可用能力清单】\n${lines.join("\n")}\n\n有成员询问某类需求时，优先推荐现有能力，不需要专门开发新功能。`;
     _capViewCache = { ts: now, content };
     return content;
-  } catch {
+  } catch (_e) {
     return ""; // 查询失败静默忽略
   }
 }
@@ -1999,7 +2217,7 @@ async function scanCrossMemberContext(currentUserId: string, prompt: string): Pr
     const userIds = [...new Set(matches.map(r => r.meta.userId ?? ""))].filter(Boolean);
     const who = userIds.length === 1 ? "另一位家人" : `${userIds.length} 位家人`;
     return `【跨成员协调参考】近 7 天内，${who}提到了与当前话题相关的内容。如有需要，可在征得双方同意后协调。私聊内容默认保密，未授权不主动连接。`;
-  } catch {
+  } catch (_e) {
     return ""; // 扫描失败静默忽略，不影响主流程
   }
 }
@@ -2022,7 +2240,7 @@ async function queryAgentInteractions(prompt: string, agentId: string): Promise<
       : "历史实现参考";
     const lines = results.map(r => `- ${r.document.slice(0, 150)}`);
     return `【${label}】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -2040,7 +2258,7 @@ async function queryCodeHistory(prompt: string): Promise<string> {
       return `- ${(meta.description ?? r.document).slice(0, 120)}${meta.filePaths ? `（文件：${meta.filePaths}）` : ""}`;
     });
     return `【历史交付记录】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -2064,7 +2282,7 @@ async function queryCodebasePatterns(prompt: string): Promise<string> {
       return `- ${status} [${date}] ${rate}${files ? `，变更：${files}` : ""}｜${r.document.slice(0, 100)}`;
     });
     return `【代码库洞察】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -2123,7 +2341,7 @@ async function queryCodeStructure(symbol: string): Promise<string> {
       lines.push(`  🔗内部调用：${[...new Set(data.callees.map(c => c.name))].slice(0, 8).join("、")}`);
     }
     return lines.join("\n");
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -2142,7 +2360,7 @@ async function queryPendingSchedulableRequirements(): Promise<string> {
       return `- [${ts}] id=${r.id}\n  需求：${summary}${note ? `\n  备注：${note}` : ""}`;
     });
     return `【待调度需求队列·共${results.length}条·空闲时触发 trigger_development_pipeline】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -2162,7 +2380,7 @@ async function queryPendingRequirements(prompt: string): Promise<string> {
       return `- [${date}] ${r.document.slice(0, 100)}（${meta.intentType ?? ""}）`;
     });
     return `【进行中的需求】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -2180,7 +2398,7 @@ async function updateDecisionOutcome(
       outcome_note: outcomeNote,
       agent: agentId, // 保留以防 ChromaDB 部分更新丢失
     });
-  } catch {
+  } catch (_e) {
     // 更新失败静默处理
   }
 }
@@ -2206,7 +2424,7 @@ async function writeRequirement(params: {
       outcome_at: "",
       outcome_note: "",
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理，不影响主流程
   }
 }
@@ -2222,7 +2440,7 @@ async function updateRequirementOutcome(
       outcome_at: nowCST(),
       outcome_note: outcomeNote,
     });
-  } catch {
+  } catch (_e) {
     // 更新失败静默处理
   }
 }
@@ -2257,7 +2475,7 @@ async function writeAgentInteraction(params: {
       interactionType: params.interactionType ?? (params.fromAgent ? "shadow-query" : ""),
       timestamp: nowCST(),
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -2282,7 +2500,7 @@ async function writeCodeHistory(params: {
       description: params.description.slice(0, 500),
       timestamp: nowCST(),
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -2312,7 +2530,7 @@ async function writeBehaviorPattern(params: {
       prompt: params.prompt.slice(0, 300),
       response: params.response.slice(0, 300),
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -2342,7 +2560,7 @@ async function writeFamilyKnowledge(params: {
       prompt: params.prompt.slice(0, 300),
       response: params.response.slice(0, 300),
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -2371,7 +2589,7 @@ async function writeAgentRecord(params: {
       status: params.status,
       updatedAt: nowCST(),
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -2609,7 +2827,7 @@ async function pushToChannel(response: string, userId: string, success: boolean)
       body: JSON.stringify({ response, replyTo: parseReplyTo(userId), success }),
       signal: AbortSignal.timeout(10_000),
     });
-  } catch {
+  } catch (_e) {
     // 推送失败静默处理
   }
 }
@@ -2646,7 +2864,7 @@ async function notifyEngineerReview(params: {
       body: JSON.stringify({ userId: OWNER_ID, text: msg }),
       signal: AbortSignal.timeout(10_000),
     });
-  } catch {
+  } catch (_e) {
     // 通知失败静默处理，不影响主流程
   }
 }
@@ -2668,7 +2886,7 @@ async function pushEventDriven(text: string, userId: string, success: boolean): 
       signal: AbortSignal.timeout(10_000),
     });
     if (!resp.ok) throw new Error(`send-message HTTP ${resp.status}`);
-  } catch {
+  } catch (_e) {
     // 主动推送失败，降级到 push-reply 兜底
     // msg 已包含 "❌ 处理失败：" 前缀（success=false 时），传 true 防止 push-reply 再次添加前缀
     await pushToChannel(msg, userId, true);
@@ -2720,6 +2938,36 @@ function andyRelease(): void {
   }
 }
 // ──────────────────────────────────────────────────────────────────────
+
+/** 流水线失败后让 Lucas 判断原因并决定下一步（提取为独立函数以便重触发路径复用） */
+async function runLucasPipelineFallback(
+  requirementId: string,
+  params: { requirement: string; userId: string; intentType?: string },
+): Promise<void> {
+  try {
+    const lucasDecisionPrompt = [
+      `【流水线卡壳】Andy 收到了这个需求，但没有调用 trigger_lisa_implementation 启动实现。`,
+      `需求原文：${params.requirement.slice(0, 400)}`,
+      `需求 ID：${requirementId}`,
+      ``,
+      `Andy 没有启动流水线，通常是因为需求信息不足、或遇到技术问题。`,
+      `请你判断，然后选一个行动（不要两个都做）：`,
+      `1. 如果是需求背景不足，你能从你对家人的了解里补充信息 → 调用 trigger_development_pipeline，在 lucasContext 里附上补充背景`,
+      `2. 如果你也不确定，需要家人提供更多信息 → 用人话问爸爸一个最关键的问题`,
+      `3. 如果你判断是技术问题（不是信息问题）→ 调用 notify_engineer 上报，并口语告知爸爸稍等`,
+    ].join("\n");
+    const lucasDecision = await callGatewayAgent(FRONTEND_AGENT_ID, lucasDecisionPrompt, 60_000, undefined, FRONTEND_AGENT_ID);
+    if (lucasDecision) {
+      await pushToChannel(lucasDecision, params.userId, true);
+    }
+  } catch (_e) {
+    await pushToChannel(
+      `Andy 分析了这个需求，但没有启动实现。可能是需求细节还不够，稍后可以把具体场景说得更详细一些。`,
+      params.userId,
+      true,
+    );
+  }
+}
 
 async function runAndyPipeline(params: {
   requirement: string;
@@ -2857,35 +3105,62 @@ async function runAndyPipeline(params: {
       if (existsSync(threadFile)) {
         markTaskStatus(requirementId, "completed");
       } else {
-        markTaskStatus(requirementId, "failed");
-        void notifyEngineer(`流水线异常 [${requirementId}]\nAndy 响应但未触发 Lisa（无协作线程文件）`, "pipeline", FRONTEND_AGENT_ID);
-        // Andy 没有启动实现流水线——让 Lucas 判断原因并决定下一步
-        // Lucas 有家人背景/记忆，能判断：①自己补充背景重新触发 ②问用户一个关键问题 ③判断是技术问题上报
-        void (async () => {
-          try {
-            const lucasDecisionPrompt = [
-              `【流水线卡壳】Andy 收到了这个需求，但没有调用 trigger_lisa_implementation 启动实现。`,
-              `需求原文：${params.requirement.slice(0, 400)}`,
-              `需求 ID：${requirementId}`,
-              ``,
-              `Andy 没有启动流水线，通常是因为需求信息不足、或遇到技术问题。`,
-              `请你判断，然后选一个行动（不要两个都做）：`,
-              `1. 如果是需求背景不足，你能从你对家人的了解里补充信息 → 调用 trigger_development_pipeline，在 lucasContext 里附上补充背景`,
-              `2. 如果你也不确定，需要家人提供更多信息 → 用人话问爸爸一个最关键的问题`,
-              `3. 如果你判断是技术问题（不是信息问题）→ 调用 notify_engineer 上报，并口语告知爸爸稍等`,
-            ].join("\n");
-            const lucasDecision = await callGatewayAgent(FRONTEND_AGENT_ID, lucasDecisionPrompt, 60_000, undefined, FRONTEND_AGENT_ID);
-            if (lucasDecision) {
-              await pushToChannel(lucasDecision, params.userId, true);
+        // ── Andy 未触发 Lisa：自动重触发机制 ──────────────────────────────
+        // 根因：DeepSeek R1 完成分析+写 spec 但忘记调用 trigger_lisa_implementation
+        // 检测 Andy 响应中是否包含 spec JSON 块（```json ... ```），
+        // 有则构造精简 prompt 让 Andy 只做一件事：调用 trigger_lisa_implementation
+        const specJsonMatch = (andyResponse ?? "").match(/```json\s*([\s\S]*?)```/);
+        const hasSpec = specJsonMatch && specJsonMatch[1].includes("integration_points");
+
+        if (hasSpec) {
+          // 自动重触发：Andy 已有完整 spec，只差最后一步工具调用
+          void notifyEngineer(`流水线自动重触发 [${requirementId}]\nAndy 输出了完整 spec 但未调用 trigger_lisa_implementation，自动补救中`, "pipeline", FRONTEND_AGENT_ID);
+          const extractedSpec = specJsonMatch![1];
+          (async () => {
+            try {
+              const retryPrompt = [
+                `【自动重触发 · 需求 ID: ${requirementId}】`,
+                `你上一轮完成了方案设计并输出了 Implementation Spec，但忘记调用 trigger_lisa_implementation。`,
+                `现在只需要做一件事：调用 trigger_lisa_implementation。`,
+                ``,
+                `你的完整 spec 如下，直接作为 trigger_lisa_implementation 的 spec 参数传入（不要修改）：`,
+                ``,
+                `\`\`\`json`,
+                extractedSpec,
+                `\`\`\``,
+                ``,
+                `其他参数：`,
+                `- user_id: "${params.userId}"`,
+                `- requirement_id: "${requirementId}"`,
+                ``,
+                `立即调用 trigger_lisa_implementation，不需要做其他任何事。`,
+              ].join("\n");
+              await callGatewayAgent(DESIGNER_AGENT_ID, retryPrompt, 600_000, undefined, FRONTEND_AGENT_ID);
+
+              // 重触发后再次验证
+              const threadFile2 = join(AGENT_THREAD_DIR, `andy-to-lisa:${requirementId}_collab.json`);
+              if (existsSync(threadFile2)) {
+                markTaskStatus(requirementId, "completed");
+                void notifyEngineer(`自动重触发成功 [${requirementId}] Lisa 已启动`, "pipeline", FRONTEND_AGENT_ID);
+              } else {
+                markTaskStatus(requirementId, "failed");
+                void notifyEngineer(`自动重触发失败 [${requirementId}] Andy 仍未调用 trigger_lisa_implementation，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
+                // fallthrough 到 Lucas 决策
+                await runLucasPipelineFallback(requirementId, params);
+              }
+            } catch (retryErr) {
+              const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+              markTaskStatus(requirementId, "failed");
+              void notifyEngineer(`自动重触发异常 [${requirementId}] ${retryErrMsg.slice(0, 200)}，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
+              await runLucasPipelineFallback(requirementId, params);
             }
-          } catch {
-            await pushToChannel(
-              `Andy 分析了这个需求，但没有启动实现。可能是需求细节还不够，稍后可以把具体场景说得更详细一些。`,
-              params.userId,
-              true,
-            );
-          }
-        })();
+          })();
+        } else {
+          // 无 spec 内容：Andy 可能没有完成设计，走 Lucas 决策路径
+          markTaskStatus(requirementId, "failed");
+          void notifyEngineer(`流水线异常 [${requirementId}]\nAndy 响应但未输出 spec 且未触发 Lisa（无协作线程文件）`, "pipeline", FRONTEND_AGENT_ID);
+          void runLucasPipelineFallback(requirementId, params);
+        }
       }
     }
   } catch (e: unknown) {
@@ -2912,7 +3187,7 @@ async function runAndyPipeline(params: {
         ].join("\n");
         const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 30_000, undefined, FRONTEND_AGENT_ID);
         await pushToChannel(lucasVerdict, params.userId, true);
-      } catch {
+      } catch (_e) {
         await pushToChannel(
           `Andy 处理这个需求时遇到了问题，流水线暂停了。你可以稍后重新发一遍需求，或者等我排查好了告诉你。`,
           params.userId,
@@ -3024,7 +3299,7 @@ function persistOpencodeSession(sessionId: string, record: Record<string, unknow
     const keys = Object.keys(existing).sort();
     if (keys.length > 30) keys.slice(0, keys.length - 30).forEach(k => delete existing[k]);
     writeFileSync(OPENCODE_SESSIONS_FILE, JSON.stringify(existing, null, 2), "utf8");
-  } catch { /* 持久化失败不阻塞主流程 */ }
+  } catch (_e) { /* 持久化失败不阻塞主流程 */ }
 }
 
 // Andy→Lisa 修订轮次（独立计数，与 Lisa→Andy 的 report_implementation_issue 分开）
@@ -3080,7 +3355,7 @@ async function launchOpenCodeBackground(
         .filter((f): f is string => typeof f === "string" && f.length > 0);
       if (ipFiles.length > 0) opencodeSpecFiles.set(sessionId, ipFiles);
     }
-  } catch { /* spec 格式不规范，跳过 */ }
+  } catch (_e) { /* spec 格式不规范，跳过 */ }
   // 持久化启动记录（重启后可检测孤儿 session）
   persistOpencodeSession(sessionId, {
     pid: proc.pid,
@@ -3129,7 +3404,7 @@ async function launchOpenCodeBackground(
     // opencode 可能超过 waitOpenCodeResult 超时时间，结果进入黑洞。
     // 无论 Lisa 是否已轮询到结果，close 事件都会触发此通知，确保 Andy 知道结果。
     const outputSnippet = (() => {
-      try { return readFileSync(session.logFile, "utf8").trim().slice(-800); } catch { return ""; }
+      try { return readFileSync(session.logFile, "utf8").trim().slice(-800); } catch (_e) { return ""; }
     })();
     // 持久化结果（供审计/调试，不依赖内存）
     try {
@@ -3141,7 +3416,7 @@ async function launchOpenCodeBackground(
         taskSummary: task.split("\n").filter(Boolean).slice(0, 2).join(" ").slice(0, 150),
         outputSnippet: outputSnippet.slice(-300),
       });
-    } catch { /* 持久化失败不阻塞通知 */ }
+    } catch (_e) { /* 持久化失败不阻塞通知 */ }
 
     // ── Spec vs 实际变更文件交叉核对（对抗性验证）────────────────────────────
     // 对比 spec integration_points 预期文件 vs git diff 实际变更文件，
@@ -3156,7 +3431,7 @@ async function launchOpenCodeBackground(
           { cwd: projectRoot, timeout: 10_000 },
         ).toString().trim();
         gitDiffFiles = diffOut ? diffOut.split("\n").filter(Boolean) : [];
-      } catch { /* git diff 失败静默 */ }
+      } catch (_e) { /* git diff 失败静默 */ }
 
       const lines = specFiles.map(sf => {
         const hit = gitDiffFiles.some(gf => gf.includes(sf.replace(/^.*\//, "")) || sf.includes(gf.replace(/^.*\//, "")));
@@ -3184,7 +3459,7 @@ async function launchOpenCodeBackground(
               "git diff --name-only HEAD", { cwd: projectRoot, timeout: 8_000 },
             ).toString().trim();
             return out ? out.split("\n").filter(Boolean) : [];
-          } catch { return [] as string[]; }
+          } catch (_e) { return [] as string[]; }
         })();
         const sf = opencodeSpecFiles.get(sessionId) ?? [];
         const matched   = sf.filter(f => actualFiles.some(a => a.includes(f.replace(/^.*\//, "")) || f.includes(a.replace(/^.*\//, ""))));
@@ -3214,7 +3489,7 @@ async function launchOpenCodeBackground(
           specFiles:    sf.slice(0, 8).join(","),
           sessionId,
         }, embedding);
-      } catch { /* 写入失败不影响主流程 */ }
+      } catch (_e) { /* 写入失败不影响主流程 */ }
     })();
 
     // ── 事件感知维度 · Andy 事件驱动观察：opencode 完成后 spec 质量反思 ──────────────
@@ -3234,7 +3509,7 @@ async function launchOpenCodeBackground(
               try {
                 return execSync("git diff --name-only HEAD", { cwd: projectRoot, timeout: 8_000 })
                   .toString().trim().split("\n").filter(Boolean);
-              } catch { return [] as string[]; }
+              } catch (_e) { return [] as string[]; }
             })();
             const matched = sf.filter(f => actualFiles.some(a => a.includes(f.replace(/^.*\//, "")) || f.includes(a.replace(/^.*\//, ""))));
             const missing = sf.filter(f => !matched.includes(f));
@@ -3260,7 +3535,7 @@ async function launchOpenCodeBackground(
               .catch(() => {});
           }
         }
-      } catch { /* spec 反思不影响主流程 */ }
+      } catch (_e) { /* spec 反思不影响主流程 */ }
     })();
 
     // ── 代码图谱增量重建（opencode 完成后，后台更新 Kuzu CodeNode/CODE_CALLS）──
@@ -3277,7 +3552,7 @@ async function launchOpenCodeBackground(
           { detached: true, stdio: "ignore" },
         );
         graphProc.unref();
-      } catch { /* 图谱重建失败不影响主流程 */ }
+      } catch (_e) { /* 图谱重建失败不影响主流程 */ }
     })();
 
     // 更新任务阶段：opencode 完成后推进到 completed（无论成败）
@@ -3295,7 +3570,7 @@ async function launchOpenCodeBackground(
         matched.currentPhase = "completed";
         writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(allTasks, null, 2), "utf8");
       }
-    } catch { /* 阶段更新失败不影响主流程 */ }
+    } catch (_e) { /* 阶段更新失败不影响主流程 */ }
 
     // Andy 技术验收 → 输出 Lucas 交付简报 → 插件层告知 Lucas → Lucas 决定用户沟通方式
     // Andy 是技术验收者，不直接面向用户；Lucas 是沟通决策者，知情后自主决定何时/如何告知用户
@@ -3335,7 +3610,7 @@ async function launchOpenCodeBackground(
               regEntry.deliveryBrief = brief;
               writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(regEntries, null, 2), "utf8");
             }
-          } catch { /* 静默，不影响主流程 */ }
+          } catch (_e) { /* 静默，不影响主流程 */ }
         }
         if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
           // 访客无持久化渠道，改用拉取机制：写入 visitor-pipeline-results，下次会话时 Lucas 主动告知
@@ -3444,7 +3719,7 @@ async function waitOpenCodeResult(sessionId: string, timeoutMs = 600_000): Promi
   let output = "";
   try {
     output = readFileSync(session.logFile, "utf8").trim();
-  } catch { output = "（输出文件读取失败）"; }
+  } catch (_e) { output = "（输出文件读取失败）"; }
 
   return session.exitCode === 0
     ? `✅ OpenCode 执行完成\n\n${output}`
@@ -3505,7 +3780,7 @@ function runProjectCompileCheck(): CompileCheckResult {
         : `✅ 无文件变更`;
 
     return { changedFiles, errors: errors.join("\n\n"), hasErrors, summary };
-  } catch {
+  } catch (_e) {
     return { changedFiles: [], errors: "", hasErrors: false, summary: "（编译检查跳过）" };
   }
 }
@@ -3574,7 +3849,7 @@ function readTaskRegistry(): TaskRegistryEntry[] {
     const all = JSON.parse(readFileSync(TASK_REGISTRY_FILE, "utf8")) as TaskRegistryEntry[];
     const cutoff = Date.now() - 48 * 60 * 60 * 1000; // 48h 自动清理
     return all.filter(e => new Date(e.submittedAt).getTime() > cutoff);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -3599,14 +3874,14 @@ function readVisitorPipelineResults(): VisitorPipelineResult[] {
     const all = JSON.parse(readFileSync(VISITOR_PIPELINE_RESULTS_FILE, "utf8")) as VisitorPipelineResult[];
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 天 TTL
     return all.filter(r => new Date(r.completedAt).getTime() > cutoff);
-  } catch { return []; }
+  } catch (_e) { return []; }
 }
 
 function writeVisitorPipelineResult(result: VisitorPipelineResult): void {
   const all = readVisitorPipelineResults();
   const idx = all.findIndex(r => r.id === result.id);
   if (idx >= 0) all[idx] = result; else all.push(result);
-  try { writeFileSync(VISITOR_PIPELINE_RESULTS_FILE, JSON.stringify(all, null, 2), "utf8"); } catch { /* 静默 */ }
+  try { writeFileSync(VISITOR_PIPELINE_RESULTS_FILE, JSON.stringify(all, null, 2), "utf8"); } catch (_e) { /* 静默 */ }
 }
 
 function markVisitorResultsSurfaced(visitorToken: string): void {
@@ -3622,7 +3897,7 @@ function markVisitorResultsSurfaced(visitorToken: string): void {
     }
   }
   if (changed) {
-    try { writeFileSync(VISITOR_PIPELINE_RESULTS_FILE, JSON.stringify(all, null, 2), "utf8"); } catch { /* 静默 */ }
+    try { writeFileSync(VISITOR_PIPELINE_RESULTS_FILE, JSON.stringify(all, null, 2), "utf8"); } catch (_e) { /* 静默 */ }
     // 同步标记 task-registry 中对应任务的 lucasAcked=true（两套机制合流）
     if (surfacedIds.length > 0) {
       try {
@@ -3635,7 +3910,7 @@ function markVisitorResultsSurfaced(visitorToken: string): void {
           }
         }
         if (regChanged) writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
-      } catch { /* 静默，不影响访客会话主流程 */ }
+      } catch (_e) { /* 静默，不影响访客会话主流程 */ }
     }
   }
 }
@@ -3701,7 +3976,7 @@ function getDpoPatterns(agentId: string): DpoPatternsJson {
     const p = JSON.parse(readFileSync(cfgPath, "utf8")) as DpoPatternsJson;
     _dpoPatternCache.set(agentId, p);
     return p;
-  } catch {
+  } catch (_e) {
     _dpoPatternCache.set(agentId, empty);
     return empty;
   }
@@ -4004,7 +4279,7 @@ async function syncCapabilityToChroma(params: {
       success: params.success,
       timestamp: nowCST(),
     }, embedding);
-  } catch {
+  } catch (_e) {
     // 写入失败静默处理
   }
 }
@@ -4018,7 +4293,7 @@ async function queryCapabilities(prompt: string, agentId: string): Promise<strin
     if (results.length === 0) return "";
     const lines = results.map(r => `- ${r.document.slice(0, 120)}`);
     return `【已有能力参考】\n${lines.join("\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -4050,7 +4325,7 @@ function loadAppCapabilities(): AppCapability[] {
   try {
     const raw = readFileSync(APP_CAPABILITIES_PATH, "utf8");
     return raw.trim().split("\n").filter(Boolean).map(l => JSON.parse(l));
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -4068,7 +4343,7 @@ function queryAppCapabilities(prompt: string): string {
       return `- **${c.name}**：${c.desc}\n  完整工具：${c.full_url}\n  精准入口（根据家人所在步骤选择）：\n${subLines}`;
     });
     return `【可调用工具】\n${lines.join("\n\n")}`;
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -4198,7 +4473,7 @@ function loadFailureStreak(agentId: string): FailureStreak {
   try {
     const data = JSON.parse(readFileSync(FAILURE_STREAK_FILE, "utf8")) as Record<string, FailureStreak>;
     return data[agentId] ?? { agentId, count: 0, lastFailAt: "", alerted: false };
-  } catch {
+  } catch (_e) {
     return { agentId, count: 0, lastFailAt: "", alerted: false };
   }
 }
@@ -4206,11 +4481,11 @@ function loadFailureStreak(agentId: string): FailureStreak {
 function saveFailureStreak(streak: FailureStreak): void {
   try {
     let data: Record<string, FailureStreak> = {};
-    try { data = JSON.parse(readFileSync(FAILURE_STREAK_FILE, "utf8")) as typeof data; } catch { /* 首次创建 */ }
+    try { data = JSON.parse(readFileSync(FAILURE_STREAK_FILE, "utf8")) as typeof data; } catch (_e) { /* 首次创建 */ }
     data[streak.agentId] = streak;
     mkdirSync(dirname(FAILURE_STREAK_FILE), { recursive: true });
     writeFileSync(FAILURE_STREAK_FILE, JSON.stringify(data, null, 2), "utf8");
-  } catch { /* 写入失败静默处理 */ }
+  } catch (_e) { /* 写入失败静默处理 */ }
 }
 
 async function checkAndAlertFailure(params: {
@@ -4257,7 +4532,7 @@ async function checkAndAlertFailure(params: {
         }),
         signal: AbortSignal.timeout(10_000),
       });
-    } catch { /* 告警推送失败静默处理 */ }
+    } catch (_e) { /* 告警推送失败静默处理 */ }
   }
 
   saveFailureStreak(streak);
@@ -4290,7 +4565,7 @@ async function checkChromaCapacity(): Promise<void> {
           issues: [`ChromaDB 集合 "${name}" 记录数 ${count} 超过阈值 ${CHROMA_MAX_COLLECTION_SIZE}`],
         });
       }
-    } catch { /* 单集合检查失败不影响其余 */ }
+    } catch (_e) { /* 单集合检查失败不影响其余 */ }
   }
 }
 
@@ -4320,7 +4595,7 @@ function initAgentSkillsDir(agentId: string): void {
         copyFileSync(srcSkillMd, destSkillMd);
       }
     }
-  } catch { /* 目录不存在或无权限，静默跳过 */ }
+  } catch (_e) { /* 目录不存在或无权限，静默跳过 */ }
 }
 
 // ── 子 Agent 生命周期：记忆归档 + corpus FIFO ─────────────────────────────
@@ -4345,7 +4620,7 @@ async function archiveAgentMemory(agentId: string, reason: "evicted" | "dormant"
       reason,
       archivedAt: nowCST(),
     });
-  } catch {
+  } catch (_e) {
     // 归档失败静默处理
   }
 }
@@ -4415,7 +4690,7 @@ async function runReflectionEngine(): Promise<void> {
         if (meta.outcome === "success") outcomeSuccess++;
       }
     }
-  } catch { /* ChromaDB 不可用时跳过 */ }
+  } catch (_e) { /* ChromaDB 不可用时跳过 */ }
 
   // ── 信号 2：对话参与深度趋势 ─────────────────────────────────────────
   const depthEntries = readJsonlEntries(DIALOGUE_DEPTH_FILE)
@@ -4513,7 +4788,7 @@ function evolveRouting(): void {
         if (!byAgent[ev.agentId]) byAgent[ev.agentId] = { total: 0, local: 0 };
         byAgent[ev.agentId].total++;
         if (!ev.isCloud) byAgent[ev.agentId].local++;
-      } catch {
+      } catch (_e) {
         continue;
       }
     }
@@ -4580,7 +4855,7 @@ function evolveRouting(): void {
       thresholdChanged: changed,
       agents: snapshot,
     });
-  } catch {
+  } catch (_e) {
     // 进化失败不影响主流程
   }
 }
@@ -4888,7 +5163,7 @@ const crewclawRoutingPlugin = {
         const eventKeys = Object.keys(event).join(",");
         dbgLog("/tmp/opencode-debug.log",
           `[${nowCST()}] llm_input: agent=${ctx.agentId} model=${event.model} tools=[${toolNames}] eventKeys=${eventKeys}\n`);
-      } catch {}
+      } catch (_e) {}
       const isCloud = event.provider !== "ollama" && !event.model.includes(LOCAL_MODEL);
 
       // 工具注册阶段意图：Lucas 从 sessionIntent 读（before_prompt_build 已写入）
@@ -4978,7 +5253,7 @@ const crewclawRoutingPlugin = {
                 }
                 const rows: unknown[][] = JSON.parse(result.stdout.trim());
                 resolve(rows.map(row => row.map(v => (v == null ? "" : String(v))).join(" | ")));
-              } catch {
+              } catch (_e) {
                 resolve([]);
               }
             });
@@ -4986,6 +5261,7 @@ const crewclawRoutingPlugin = {
         },
         file: {
           "user-profile":     (userId) => readFamilyProfile(userId),
+          "user-now":         (userId) => readNowFile(userId),
           "app-capabilities": (prompt) => queryAppCapabilities(prompt),
           "static-file":      (filePath) => {
             if (!filePath) return "";
@@ -4995,7 +5271,7 @@ const crewclawRoutingPlugin = {
                 : filePath;
               const content = readFileSync(resolved, "utf8");
               return content.trim();
-            } catch {
+            } catch (_e) {
               return "";
             }
           },
@@ -5023,7 +5299,7 @@ const crewclawRoutingPlugin = {
         if (existsSync(regPath)) {
           const entries = readFileSync(regPath, "utf8")
             .split("\n").filter(l => l.trim())
-            .map(l => { try { return JSON.parse(l) as { capability_id: string; title?: string; requirement?: string; status?: string }; } catch { return null; } })
+            .map(l => { try { return JSON.parse(l) as { capability_id: string; title?: string; requirement?: string; status?: string }; } catch (_e) { return null; } })
             .filter((e): e is NonNullable<typeof e> => !!e && e.status === "active");
 
           const contextWords = new Set(
@@ -5041,7 +5317,7 @@ const crewclawRoutingPlugin = {
             }
           }
         }
-      } catch { /* 能力视图查询失败，静默降级 */ }
+      } catch (_e) { /* 能力视图查询失败，静默降级 */ }
 
       // 待反馈的 pipeline 完成结果
       try {
@@ -5051,7 +5327,7 @@ const crewclawRoutingPlugin = {
         for (const r of pending) {
           pendingLines.push(`- ${(r.brief || r.requirement).slice(0, 80)}（已完成）`);
         }
-      } catch { /* 读取失败静默降级 */ }
+      } catch (_e) { /* 读取失败静默降级 */ }
 
       return {
         capabilityBlock: capLines.length > 0
@@ -5084,7 +5360,7 @@ const crewclawRoutingPlugin = {
               registry[registryKey].status   = "active";
               registry[registryKey].revivedAt = Date.now();
               delete registry[registryKey].dormantAt;
-              try { writeFileSync(join(PROJECT_ROOT, "data", "visitor-registry.json"), JSON.stringify(registry, null, 2), "utf8"); } catch { /* 静默 */ }
+              try { writeFileSync(join(PROJECT_ROOT, "data", "visitor-registry.json"), JSON.stringify(registry, null, 2), "utf8"); } catch (_e) { /* 静默 */ }
               visitorEntry = registry[registryKey];
               // 异步更新 Kuzu shadow_status=active
               const _entityId = `visitor:${visitorToken.toUpperCase()}`;
@@ -5106,12 +5382,12 @@ const crewclawRoutingPlugin = {
                   detached: true, stdio: "ignore",
                 });
                 _proc.unref();
-                setTimeout(() => { try { unlinkSync(_tmp); } catch {} }, 30_000);
-              } catch { /* Kuzu 更新失败不阻断对话 */ }
+                setTimeout(() => { try { unlinkSync(_tmp); } catch (_e) {} }, 30_000);
+              } catch (_e) { /* Kuzu 更新失败不阻断对话 */ }
             }
           }
         }
-      } catch { /* registry 读取失败，降级为通用访客行为 */ }
+      } catch (_e) { /* registry 读取失败，降级为通用访客行为 */ }
 
       if (!tokenFound) {
         logger.warn(`[buildVisitorSessionContext] 访客 token 不存在: ${visitorToken}，降级为匿名访客`);
@@ -5145,7 +5421,7 @@ const crewclawRoutingPlugin = {
           const summaryMatch = profileContent.match(/## 档案摘要\s+([\s\S]{0,800})/);
           const profileSummary = summaryMatch ? summaryMatch[1].trim() : "";
           if (profileSummary) contextLines.push(`\n【访客历史记忆（曾交谈过，再次到访）】\n${profileSummary}`);
-        } catch { /* 档案读取失败，静默忽略 */ }
+        } catch (_e) { /* 档案读取失败，静默忽略 */ }
       }
 
       // memoryAccess：注入 Lucas 对该访客的了解
@@ -5194,7 +5470,7 @@ const crewclawRoutingPlugin = {
               contextLines.push(`\n${label}`);
             }
           }
-        } catch { /* 记忆查询失败，静默忽略 */ }
+        } catch (_e) { /* 记忆查询失败，静默忽略 */ }
       }
 
       contextLines.push(
@@ -5370,7 +5646,7 @@ const crewclawRoutingPlugin = {
               }
             }
           }
-        } catch { /* 静默 */ }
+        } catch (_e) { /* 静默 */ }
       }
 
       // ── L3 跨成员协调扫描（Lucas 私聊专属，访客也开放——输出侧过滤隐私）────
@@ -5473,7 +5749,7 @@ const crewclawRoutingPlugin = {
               const thirtyDaysAgo = agoCST(30 * 24 * 60 * 60 * 1000).slice(0, 10);
               const lines = readFileSync(signalsPath, "utf-8").split("\n").filter(Boolean);
               const recentSignals = lines
-                .map(l => { try { return JSON.parse(l) as Record<string, string>; } catch { return null; } })
+                .map(l => { try { return JSON.parse(l) as Record<string, string>; } catch (_e) { return null; } })
                 .filter((s): s is Record<string, string> => s !== null && (s.date ?? "") >= thirtyDaysAgo);
               if (recentSignals.length > 0) {
                 const sigLines = recentSignals.map(s => {
@@ -5488,7 +5764,7 @@ const crewclawRoutingPlugin = {
                 );
               }
             }
-          } catch {
+          } catch (_e) {
             // 读取失败静默处理
           }
         }
@@ -5536,7 +5812,7 @@ const crewclawRoutingPlugin = {
               );
             }
           }
-        } catch {
+        } catch (_e) {
           // 读取失败静默忽略，不影响正常会话
         }
       }
@@ -5615,7 +5891,7 @@ const crewclawRoutingPlugin = {
               }
             }
           }
-        } catch {
+        } catch (_e) {
           // 静默失败，不影响正常对话
         }
       }
@@ -5665,7 +5941,7 @@ const crewclawRoutingPlugin = {
               if (audienceHint) appendSystem.push(audienceHint);
             }
           }
-        } catch {
+        } catch (_e) {
           // 静默失败
         }
       }
@@ -5708,7 +5984,7 @@ const crewclawRoutingPlugin = {
               );
             }
           }
-        } catch {
+        } catch (_e) {
           // 静默失败
         }
       }
@@ -5756,7 +6032,7 @@ const crewclawRoutingPlugin = {
                 lines.join("\n---\n")
               );
             }
-          } catch {
+          } catch (_e) {
             // 检索失败静默处理，不影响主流程
           }
         }
@@ -5842,7 +6118,7 @@ const crewclawRoutingPlugin = {
               `【待告知家人任务】\n以下任务已完成，但尚未主动告知家人，建议在本次对话中择机告知：\n${ackLines.join("\n")}\n\n告知后请调用 ack_task_delivered 标记已告知（task_id 见括号内）。`,
             );
           }
-        } catch { /* 读取失败不影响主流程 */ }
+        } catch (_e) { /* 读取失败不影响主流程 */ }
       }
 
       // ── Andy HEARTBEAT：Lucas 知识投喂注入（按时序，不受语义竞争）──────────────
@@ -5857,11 +6133,11 @@ const crewclawRoutingPlugin = {
           const scPath = join(DATA_DIR, "learning", "skill-candidates.jsonl");
           if (existsSync(scPath)) {
             const scLines = readFileSync(scPath, "utf8").split("\n").filter(l => l.trim());
-            const pending = scLines.filter(l => { try { return JSON.parse(l).status === "pending"; } catch { return false; } });
+            const pending = scLines.filter(l => { try { return JSON.parse(l).status === "pending"; } catch (_e) { return false; } });
             if (pending.length > 0) {
               const recent = pending.slice(-10); // 最近 10 条 pending
               const summary = recent.map(l => {
-                try { const j = JSON.parse(l); return `· [${j.pattern ?? j.signal ?? "unknown"}] 触发${j.count ?? "?"}次 ${j.firstSeen ?? ""}`; } catch { return ""; }
+                try { const j = JSON.parse(l); return `· [${j.pattern ?? j.signal ?? "unknown"}] 触发${j.count ?? "?"}次 ${j.firstSeen ?? ""}`; } catch (_e) { return ""; }
               }).filter(Boolean).join("\n");
               appendSystem.push(
                 `【技能结晶信号（${pending.length} 条 pending）】\n` +
@@ -5870,8 +6146,9 @@ const crewclawRoutingPlugin = {
               );
             }
           }
-        } catch { /* 静默 */ }
+        } catch (_e) { /* 静默 */ }
         // ── Andy HEARTBEAT：Lucas 知识投喂注入（按时序，不受语义竞争）──────────────
+        try {
           const sevenDaysAgo = agoCST(7 * 24 * 3600 * 1000);
           const injections = await chromaGet("decisions", {
             "$and": [
@@ -5896,7 +6173,7 @@ const crewclawRoutingPlugin = {
               lines.join("\n\n---\n\n")
             );
           }
-        } catch {
+        } catch (_e) {
           // 检索失败静默处理
         }
 
@@ -5908,7 +6185,7 @@ const crewclawRoutingPlugin = {
           if (existsSync(evalHistPath)) {
             const evalLines = readFileSync(evalHistPath, "utf8").split("\n").filter(l => l.trim());
             if (evalLines.length >= 1) {
-              const last2 = evalLines.slice(-2).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+              const last2 = evalLines.slice(-2).map(l => { try { return JSON.parse(l); } catch (_e) { return null; } }).filter(Boolean);
               if (last2.length >= 1) {
                 const latest = last2[last2.length - 1];
                 const ts = latest.ts ? new Date(latest.ts).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) : "未知时间";
@@ -5939,7 +6216,7 @@ const crewclawRoutingPlugin = {
               }
             }
           }
-        } catch { /* 静默 */ }
+        } catch (_e) { /* 静默 */ }
       }
 
       if (prepend.length === 0 && appendSystem.length === 0) return;
@@ -6111,7 +6388,7 @@ const crewclawRoutingPlugin = {
               writeFileSync(regPath, JSON.stringify(reg, null, 2), "utf8");
             }
           }
-        } catch { /* 静默，不影响主流程 */ }
+        } catch (_e) { /* 静默，不影响主流程 */ }
       }
 
       // content 可能是字符串或 [{type:"text",text:"..."}] 数组，统一提取
@@ -6299,6 +6576,9 @@ const crewclawRoutingPlugin = {
         const _fcHit = _fcPatterns.false_commitment.find(p => _fcAllText.includes(p));
         if (_fcHit && !_fcCalledCommit) {
           sessionFalseCommitCorrections.set(ctx.sessionKey ?? "", _fcHit);
+          // 纠正持久化：追踪频率，跨 ≥3 个 session 自动写入 AGENTS.md 永久禁令
+          trackDpoFrequency(_fcHit, "false_commitment", ctx.sessionKey ?? "");
+          checkAndPersistCorrection(ctx.agentId, _fcHit, "false_commitment", ctx.sessionKey ?? "");
         }
       }
 
@@ -6338,7 +6618,7 @@ const crewclawRoutingPlugin = {
             const _line = `- [${_nowLocal}] 工具调用幻觉：${_hallucinHit} | 用户: ${userId} | 预览: ${lastAssistant.slice(0, 60)}`;
             const _updated = _hb.replace(/(## 待汇总观察[^\n]*\n)/, `$1${_line}\n`);
             writeFileSync(_hbPath, _updated, "utf8");
-          } catch { /* 静默 */ }
+          } catch (_e) { /* 静默 */ }
           // 存入 sessionPendingCorrections，下一轮 before_prompt_build 读取并注入纠正
           sessionPendingCorrections.set(ctx.sessionKey ?? "", _hallucinHit);
         }
@@ -6359,7 +6639,7 @@ const crewclawRoutingPlugin = {
             const _vrCfg = JSON.parse(readFileSync(_vrPath, "utf8")) as { privacyPatterns?: { pattern: string; label: string }[] };
             _privacyPatterns = _vrCfg.privacyPatterns ?? [];
           }
-        } catch { /* 配置加载失败，降级为空 */ }
+        } catch (_e) { /* 配置加载失败，降级为空 */ }
         const _leakHit = _privacyPatterns.find(p => new RegExp(p.pattern).test(lastAssistant));
         if (_leakHit) {
           _visitorPrivacyLeakDetected = true;
@@ -6380,7 +6660,7 @@ const crewclawRoutingPlugin = {
               label: _leakHit.label,
               preview: lastAssistant.slice(0, 200),
             });
-          } catch { /* 静默 */ }
+          } catch (_e) { /* 静默 */ }
         }
       }
 
@@ -6432,7 +6712,7 @@ const crewclawRoutingPlugin = {
                     "git diff --name-only HEAD", { cwd: PROJECT_ROOT, timeout: 8_000 },
                   ).toString().trim();
                   return out ? out.split("\n").filter(Boolean) : [];
-                } catch { return [] as string[]; }
+                } catch (_e) { return [] as string[]; }
               })();
               const docLines = [
                 `edit 工具直接实现（Lisa 工程判断，未走 opencode）`,
@@ -6452,7 +6732,7 @@ const crewclawRoutingPlugin = {
                 sessionId:    ctx.sessionKey ?? "",
                 source:       "edit_tool",
               }, embedding);
-            } catch { /* 写入失败不影响主流程 */ }
+            } catch (_e) { /* 写入失败不影响主流程 */ }
           })();
         }
       }
@@ -6488,7 +6768,7 @@ const crewclawRoutingPlugin = {
                   }
                 }
               }
-            } catch { /* ignore，fallback 到 token */ }
+            } catch (_e) { /* ignore，fallback 到 token */ }
             convFromId = visitorName ?? `访客${visitTok}`;
           } else {
             convFromId = userId;
@@ -6582,7 +6862,7 @@ const crewclawRoutingPlugin = {
                 dpoFlagged,
               }, `visitor_shadow_${pid}`);
             }
-          } catch { /* 影子记忆写入失败，静默忽略 */ }
+          } catch (_e) { /* 影子记忆写入失败，静默忽略 */ }
         }
         } // end else (human conversation)
       }
@@ -6607,6 +6887,13 @@ const crewclawRoutingPlugin = {
           void writeFamilyKnowledge({ userId, prompt: cleanPrompt, response: lastAssistant });
           // 家人档案动态更新：提取本次对话要点，更新「当前状态」和「重要记忆」
           void updateFamilyProfileAsync(userId, cleanPrompt, lastAssistant);
+          // 动态家人摘要更新：机械提取承诺/话题/接话点到 .now.md
+          try {
+            const nowTags = kuzuEntityNameMap.size > 0
+              ? extractEntityHits(cleanPrompt + " " + lastAssistant)
+              : [];
+            updateNowFile(userId, cleanPrompt, lastAssistant, Object.keys(toolUseCounts), nowTags);
+          } catch (_e) { /* 非关键路径 */ }
         }
 
         // ── 事件驱动增量蒸馏（感知侧）──────────────────────────────────────
@@ -6704,7 +6991,7 @@ const crewclawRoutingPlugin = {
                   }).catch(() => {});
                 }, i * 2 * 60 * 1000); // 每任务间隔 2 分钟，避免并发雪崩
               });
-            } catch { /* 静默，不影响主流程 */ }
+            } catch (_e) { /* 静默，不影响主流程 */ }
           })();
         }
       }
@@ -6903,7 +7190,7 @@ const crewclawRoutingPlugin = {
                 details: { existing_skill: sk.name, decision: "awaiting_skill_confirmation" },
               };
             }
-          } catch {
+          } catch (_e) {
             // 读取失败不阻断开发流程
           }
         }
@@ -7197,7 +7484,7 @@ const crewclawRoutingPlugin = {
                   undefined,
                   FRONTEND_AGENT_ID,
                 );
-              } catch {
+              } catch (_e) {
                 // 验收失败降级：直接推 Lisa 修复报告给用户
                 if (requestorId && requestorId !== "unknown") {
                   void pushToChannel(lisaFixResponse, requestorId, true);
@@ -7574,7 +7861,7 @@ const crewclawRoutingPlugin = {
                   details: { mode: "coordinator", reqId, taskCount: subSpecs.length },
                 };
               }
-            } catch {
+            } catch (_e) {
               // JSON 解析失败：不是 coordinator spec，继续普通路径
             }
           }
@@ -7668,7 +7955,7 @@ const crewclawRoutingPlugin = {
                         if (!evContent.includes(ev.symbol)) {
                           evidenceErrors.push(`${ev.file} 中找不到符号 "${ev.symbol}"（请引用文件中真实存在的标识符）`);
                         }
-                      } catch { /* 读文件失败不阻断 */ }
+                      } catch (_e) { /* 读文件失败不阻断 */ }
                     }
                   }
                   if (evidenceErrors.length > 0) {
@@ -7707,7 +7994,7 @@ const crewclawRoutingPlugin = {
                   );
                 }
               }
-            } catch {
+            } catch (_e) {
               // JSON 解析失败：spec 格式不规范，不强制阻断（兼容旧格式过渡期）
             }
           }
@@ -7731,7 +8018,7 @@ const crewclawRoutingPlugin = {
           if (typeof sd.estimatedHours === "number" && sd.estimatedHours > 0) {
             estimatedHours = sd.estimatedHours;
           }
-        } catch { /* spec 非 JSON 时用 specPreview */ }
+        } catch (_e) { /* spec 非 JSON 时用 specPreview */ }
 
         // 更新任务注册表：阶段推进到 lisa_implementing，记录设计摘要和预估工期
         const reqIdForPhase = p.requirement_id ?? "";
@@ -7772,7 +8059,7 @@ const crewclawRoutingPlugin = {
           if (reqIdEarly) {
             const threadIdEarly = `andy-to-lisa:${reqIdEarly}_collab`;
             const placeholder: ThreadEntry[] = [{ role: "user", text: `spec submitted at ${nowCST()}`, ts: Date.now() }];
-            try { writeFileSync(agentThreadFile(threadIdEarly), JSON.stringify(placeholder)); } catch {}
+            try { writeFileSync(agentThreadFile(threadIdEarly), JSON.stringify(placeholder)); } catch (_e) {}
           }
         }
 
@@ -7830,7 +8117,7 @@ const crewclawRoutingPlugin = {
                     `2. 需要拆小任务 → 重新设计并分批触发`,
                     `3. 判断是 Lisa 的系统性问题 → 调用 notify_engineer`,
                   ].join("\n"), 180_000, threadId, FRONTEND_AGENT_ID);
-                } catch { /* 静默，不阻塞主流程 */ }
+                } catch (_e) { /* 静默，不阻塞主流程 */ }
               })();
             } else {
               success = !!lisaResponse;
@@ -7871,7 +8158,7 @@ const crewclawRoutingPlugin = {
                         if (ips?.[0]?.file) capEntryPoint = ips[0].file;
                       }
                     }
-                  } catch { /* 解析失败使用默认值，不影响主流程 */ }
+                  } catch (_e) { /* 解析失败使用默认值，不影响主流程 */ }
 
                   // 只有 Andy 在 spec 里明确标注 registers_capability: true 时才写入
                   if (registersCapability) {
@@ -7947,7 +8234,7 @@ const crewclawRoutingPlugin = {
                 } else {
                   responseText = lisaResponse;
                 }
-              } catch {
+              } catch (_e) {
                 responseText = lisaResponse;
               }
             } else {
@@ -7974,7 +8261,7 @@ const crewclawRoutingPlugin = {
                   `3. 需要 Lucas 向用户澄清需求 → 调用 query_requirement_owner`,
                   `4. 判断是技术环境问题 → 调用 notify_engineer`,
                 ].join("\n"), 180_000, threadId, FRONTEND_AGENT_ID);
-              } catch { /* 静默，不阻塞主流程 */ }
+              } catch (_e) { /* 静默，不阻塞主流程 */ }
             })();
             // ② Lisa→Andy 失败通知：Andy 同样需要知道 spec 未落地
             void addDecisionMemory({
@@ -8011,7 +8298,7 @@ const crewclawRoutingPlugin = {
                 responseText = lucasFailMsg;
                 success = true; // Lucas 已包装成人话，用 success 路径推送（去掉 ❌ 处理失败: 前缀）
               }
-            } catch { /* 降级：保持原始错误消息 */ }
+            } catch (_e) { /* 降级：保持原始错误消息 */ }
           }
           // 通报系统工程师：流水线终态
           void notifyEngineer(
@@ -8037,7 +8324,7 @@ const crewclawRoutingPlugin = {
                 deliveredAt: nowCST(),
                 status: "pending",
               });
-            } catch { /* 写入失败不影响主流程 */ }
+            } catch (_e) { /* 写入失败不影响主流程 */ }
           }
         })().catch(() => {});
 
@@ -8429,14 +8716,14 @@ const crewclawRoutingPlugin = {
                   void callGatewayAgent(DESIGNER_AGENT_ID, gapPrompt, 60_000, undefined, IMPLEMENTOR_AGENT_ID)
                     .catch(() => {});
                 }
-              } catch { /* 反思不影响主流程 */ }
+              } catch (_e) { /* 反思不影响主流程 */ }
             })();
           }
           return {
             content: [{ type: "text", text: andyReply ?? "Andy 暂无回复，继续完成 spec 中可以确定的部分。" }],
             details: { reported: true, requirementId: p.requirement_id, threadId },
           };
-        } catch {
+        } catch (_e) {
           return {
             content: [{ type: "text", text: "Andy 查询超时，继续完成 spec 中可以确定的部分，遇阻部分留注释标记。" }],
             details: { reported: false },
@@ -8530,7 +8817,7 @@ const crewclawRoutingPlugin = {
             content: [{ type: "text", text: `【Lisa 修订回复 第 ${revCount + 1} 轮】\n${lisaReply.slice(0, 1500)}` }],
             details: { revised: true, revisionRound: revCount + 1, threadId },
           };
-        } catch {
+        } catch (_e) {
           return {
             content: [{ type: "text", text: "Lisa 修订调用超时，继续后续步骤或考虑 trigger_lisa_implementation 重实现。" }],
             details: { revised: false },
@@ -8590,10 +8877,10 @@ const crewclawRoutingPlugin = {
             try {
               const data = JSON.parse(readFileSync(join(pipelineDir, f), "utf8")) as Record<string, unknown>;
               return `[${data.status as string}] ${data.taskId as string}（${data.title as string}）`;
-            } catch { return f; }
+            } catch (_e) { return f; }
           });
           subTaskSummary = `\n\n【已完成子任务】\n${summaries.join("\n")}`;
-        } catch { /* pipeline 目录不存在或为空，继续 */ }
+        } catch (_e) { /* pipeline 目录不存在或为空，继续 */ }
 
         if (requestorId && requestorId !== "unknown") {
           void pushToChannel(`Andy 正在触发集成阶段...`, requestorId, true);
@@ -8703,7 +8990,7 @@ const crewclawRoutingPlugin = {
                 sections.push(`【文件匹配 · ${lines.length} 个】\n${lines.map(l => `  ${l}`).join("\n")}`);
               }
             }
-          } catch { /* no matches */ }
+          } catch (_e) { /* no matches */ }
         }
 
         // ── Scope: content — grep 代码内容 ──
@@ -8725,7 +9012,7 @@ const crewclawRoutingPlugin = {
                 sections.push(`【内容匹配 · ${lines.length} 行】\n${lines.map(l => `  ${l}`).join("\n")}`);
               }
             }
-          } catch { /* no matches */ }
+          } catch (_e) { /* no matches */ }
         }
 
         // ── Scope: history — 查询 codebase_patterns 历史洞察 ──
@@ -8735,7 +9022,7 @@ const crewclawRoutingPlugin = {
             if (historyResult) {
               sections.push(historyResult);
             }
-          } catch { /* silent */ }
+          } catch (_e) { /* silent */ }
         }
 
         // ── Scope: structure — 代码图谱：定义位置 + 调用者 + 被调用者 ──
@@ -8749,7 +9036,7 @@ const crewclawRoutingPlugin = {
                 sections.push(structResult);
               }
             }
-          } catch { /* silent */ }
+          } catch (_e) { /* silent */ }
         }
 
         const resultText = sections.length > 0
@@ -8819,7 +9106,7 @@ const crewclawRoutingPlugin = {
               writeFileSync(tmpPath, content, "utf8");
               renameSync(tmpPath, targetPath);
             } catch (e) {
-              try { unlinkSync(tmpPath); } catch {}
+              try { unlinkSync(tmpPath); } catch (_e) {}
               throw e;
             }
           }
@@ -8911,7 +9198,7 @@ const crewclawRoutingPlugin = {
             content: [{ type: "text", text: lisaReply ?? "Lisa 暂无回复，继续按原方案写 spec。" }],
             details: { consulted: true, threadId },
           };
-        } catch {
+        } catch (_e) {
           return {
             content: [{ type: "text", text: "Lisa 查询超时，继续按原方案写 spec。" }],
             details: { consulted: false },
@@ -9006,7 +9293,7 @@ const crewclawRoutingPlugin = {
             content: [{ type: "text", text: evalReply }],
             details: { passed, requirementId: p.requirement_id, threadId },
           };
-        } catch {
+        } catch (_e) {
           return {
             content: [{ type: "text", text: "andy-evaluator 查询超时，跳过独立验收，直接输出交付报告。" }],
             details: { passed: null, reason: "timeout" },
@@ -9096,7 +9383,7 @@ const crewclawRoutingPlugin = {
             content: [{ type: "text", text: evalReply }],
             details: { passed, requirementId: p.requirement_id, threadId },
           };
-        } catch {
+        } catch (_e) {
           return {
             content: [{ type: "text", text: "lisa-evaluator 查询超时，跳过独立审查，可直接 trigger_lisa_implementation。" }],
             details: { passed: null, reason: "timeout" },
@@ -9509,7 +9796,7 @@ const crewclawRoutingPlugin = {
         try {
           let existing: Array<Record<string, unknown>> = [];
           if (existsSync(pendingTagsFile)) {
-            try { existing = JSON.parse(readFileSync(pendingTagsFile, "utf8")); } catch { existing = []; }
+            try { existing = JSON.parse(readFileSync(pendingTagsFile, "utf8")); } catch (_e) { existing = []; }
           }
           existing.push({
             visitor_user_id,
@@ -9754,7 +10041,7 @@ const crewclawRoutingPlugin = {
             writeFileSync(ocJsonPath2, JSON.stringify(ocCfg2, null, 2) + "\n", "utf8");
             execSync("kill -9 $(pgrep -f openclaw-gateway) 2>/dev/null || true", { shell: "/bin/bash" });
           }
-        } catch { /* 移除失败不致命 */ }
+        } catch (_e) { /* 移除失败不致命 */ }
         return {
           content: [{ type: "text", text: `✅ 子 Agent "${agent_id}" 已驱逐并归档，Gateway 重启中。` }],
           details: { agentId: agent_id, success: true },
@@ -9823,7 +10110,7 @@ const crewclawRoutingPlugin = {
                 updated++;
               }
             }
-          } catch {
+          } catch (_e) {
             // 单个 agent 更新失败不阻断其余
           }
         }
@@ -9966,7 +10253,7 @@ const crewclawRoutingPlugin = {
             const queueEntries = readJsonlEntries(TASK_QUEUE_FILE);
             const remaining = queueEntries.filter(e => (e as { taskId?: string }).taskId !== target!.id);
             writeFileSync(TASK_QUEUE_FILE, remaining.map(e => JSON.stringify(e)).join("\n") + (remaining.length > 0 ? "\n" : ""), "utf8");
-          } catch {
+          } catch (_e) {
             // 队列文件不存在或为空，忽略
           }
         }
@@ -10041,7 +10328,7 @@ const crewclawRoutingPlugin = {
           entries[idx].lucasAcked = true;
           try {
             writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
-          } catch { /* 静默 */ }
+          } catch (_e) { /* 静默 */ }
         }
 
         return {
@@ -10369,7 +10656,7 @@ const crewclawRoutingPlugin = {
               const st = statSync(`${dir}/${e.name}`);
               const size = e.isDirectory() ? "" : ` (${Math.round(st.size / 1024)}KB)`;
               lines.push(`${e.isDirectory() ? "📁" : "📄"} ${e.name}${size}`);
-            } catch {
+            } catch (_e) {
               lines.push(`  ${e.name}`);
             }
           }

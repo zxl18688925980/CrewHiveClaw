@@ -90,6 +90,7 @@ export interface KuzuSource {
 
 export type FileQueryMode =
   | "user-profile"     // 读 ~/.openclaw/workspace-lucas/family/{userId}.inject.md
+  | "user-now"         // 读 ~/.openclaw/workspace-lucas/family/{userId}.now.md（动态家人摘要）
   | "app-capabilities" // 读 data/corpus/app-capabilities.jsonl，关键词匹配
   | "static-file";     // 读固定路径文件，整体注入（filePath 必须指定）
 
@@ -116,6 +117,13 @@ export const contextSources: Record<string, ContextSource[]> = {
       source: "file", id: "family-profile",
       queryMode: "user-profile",
       label: "家人档案", inject: "append-system",
+    },
+
+    // 家人动态摘要：机械提取的实时状态（承诺、话题、接话点），不走检索，每轮注入
+    {
+      source: "file", id: "family-now",
+      queryMode: "user-now",
+      label: "当前状态快照", inject: "append-system",
     },
 
     // 项目背景：HomeAI 是什么、Andy/Lisa 幕后团队、流水线、里程碑（前世今生）

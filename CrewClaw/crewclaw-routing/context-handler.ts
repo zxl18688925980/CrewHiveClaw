@@ -39,6 +39,7 @@ export interface ContextResolvers {
   };
   file: {
     "user-profile":     (userId: string) => string;
+    "user-now":         (userId: string) => string;
     "app-capabilities": (prompt: string) => string;
     "static-file":      (filePath: string) => string;
   };
@@ -133,6 +134,8 @@ function resolveFile(
   switch (src.queryMode) {
     case "user-profile":
       return resolvers["user-profile"](params.userId);
+    case "user-now":
+      return resolvers["user-now"](params.userId);
     case "app-capabilities":
       return resolvers["app-capabilities"](params.prompt);
     case "static-file":
