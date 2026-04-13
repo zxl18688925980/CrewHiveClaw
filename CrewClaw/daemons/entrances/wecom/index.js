@@ -5171,16 +5171,16 @@ function startBotLongConnection() {
         ], demoGroupConfig.maxTokens);
         clearTimeout(groupAckTimer);
         await sendWithTimeout(() => wsClient.sendMessage(chatId, {
-          msgtype: 'text',
-          text: { content: demoReply || '好的，稍等一下～' },
+          msgtype: 'markdown',
+          markdown: { content: demoReply || '好的，稍等一下～' },
         }));
         logger.info('演示群回复已发送', { fromUser, chatId, replyLen: demoReply?.length });
       } catch (demoErr) {
         logger.warn('演示群回复失败', { error: demoErr.message });
         try {
           await wsClient.sendMessage(chatId, {
-            msgtype: 'text',
-            text: { content: '抱歉，我现在有点忙，请稍后再试～' },
+            msgtype: 'markdown',
+            markdown: { content: '抱歉，我现在有点忙，请稍后再试～' },
           });
         } catch {}
       }
@@ -5942,7 +5942,7 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
     logger.warn('notify-engineer app 通道失败，fallback 到 bot', { error: errMsg });
     if (globalBotClient && globalBotReady) {
       try {
-        await globalBotClient.sendMessage(WECOM_OWNER_ID, { msgtype: 'text', text: { content: text } });
+        await globalBotClient.sendMessage(WECOM_OWNER_ID, { msgtype: 'markdown', markdown: { content: text } });
         logger.info('notify-engineer 已发送 (bot fallback)', { type, length: message.length });
         res.json({ success: true, channel: 'bot' });
       } catch (botErr) {

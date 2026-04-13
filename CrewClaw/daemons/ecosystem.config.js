@@ -61,6 +61,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '200M',
+      restart_delay: 3000,
       env: {
         NODE_ENV: 'production',
         WECOM_PORT: 3003,
