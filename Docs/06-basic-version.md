@@ -32,8 +32,8 @@ wecom-entrance（端口 3003，PM2 管理）
 OpenClaw Gateway（端口 18789，launchd 管理）
   └─ crewclaw-routing 插件（~/HomeAI/CrewHiveClaw/CrewClaw/crewclaw-routing/）
        ├─ before_model_resolve：
-       │   Layer 1 意图路由 → 对话 / 成员专属 Agent / 开发需求 / 工具 / 人工干预
-       │   Layer 2 模型路由 → 本地置信度足够→ollama/homeai-assistant，不足→云端
+       │   意图路由 → 对话 / 成员专属 Agent / 开发需求 / 工具 / 人工干预
+       │   模型路由 → 本地置信度足够→ollama/homeai-assistant，不足→云端
        │     Lucas 云端：deepseek/deepseek-chat
        │     Andy 云端：deepseek/deepseek-reasoner（R1）
        │     Lisa 云端：minimax/MiniMax-M2.7

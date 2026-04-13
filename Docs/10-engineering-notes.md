@@ -269,7 +269,7 @@ pattern.sub(lambda m: new_section, content)
 **本次案例**：
 - 主流程（`message.text` / `message.mixed` / `message.voice`）已正确使用 `buildHistoryMessages` + `historyMessages` 参数
 - `/api/wecom/forward` 调试接口仍用旧方式 `callGatewayAgent('lucas', message, userId)`——无历史传入，无 `appendChatHistory` 写回
-- 测试 3 条消息后 Lucas 无法引用上文 → 误判为 Layer 2 实现失败
+- 测试 3 条消息后 Lucas 无法引用上文 → 误判为近期对话历史实现失败
 - 实际上主流程早已正确，只是调试接口漏更新
 
 **规则**：

@@ -1012,6 +1012,60 @@ function runCodeGraphRebuild() {
   child.unref();
   logTaskExecution('rebuild-code-graph', 'L2', '代码认知', 'success', `已启动 PID ${child.pid}`, null, startedAt);
   log(`代码图谱重建已启动（PID ${child.pid}），日志：${CODE_GRAPH_LOG}`);
+
+  // ── 事件感知维度 · Andy 事件驱动观察：代码图谱重建完成后 → 架构漂移反思 ──────
+  // 图谱重建完后读取日志，提取变更统计，fire-and-forget 调 Andy 做架构漂移反思
+  // 24h 冷却（每日只触发一次），Andy 判断是否有显著漂移需要记录
+  child.on('exit', (exitCode) => {
+    if (exitCode !== 0) return; // 重建失败不触发
+    try {
+      // 读取日志末尾获取统计
+      const logContent = fs.readFileSync(CODE_GRAPH_LOG, 'utf8');
+      const lines = logContent.trim().split('\n');
+      const lastStats = lines.filter(l => l.includes('节点') || l.includes('边') || l.includes('新增') || l.includes('变更')).slice(-5).join('\\n');
+      if (!lastStats) return;
+      // 调 Gateway API 触发 Andy 反思
+      const reflectBody = JSON.stringify({
+        model: 'openclaw/andy',
+        messages: [{
+          role: 'user',
+          content: [
+            `【事件感知维度 · 代码图谱重建完成】`,
+            `每日代码图谱增量重建已完成。统计摘要：${lastStats.slice(0, 500)}`,
+            ``,
+            `请判断：`,
+            `1. 是否有显著的结构变化（新增核心模块、删除模块、调用关系大幅改变）？`,
+            `2. 如果有，是否需要在 ARCH.md 中更新架构描述？`,
+            `3. 如果发现架构漂移，用 exec 写入 decisions（type=architecture_drift）。`,
+            `无显著变化时回复 OK 即可。`,
+          ].join('\n'),
+        }],
+        max_tokens: 500,
+      });
+      const req = http.request({
+        hostname: '127.0.0.1', port: 18789,
+        path: '/v1/chat/completions',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-openclaw-agent-id': 'andy', 'Content-Length': Buffer.byteLength(reflectBody) },
+        timeout: 120_000,
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          const reply = (() => { try { return JSON.parse(data).choices?.[0]?.message?.content ?? ''; } catch { return ''; } })();
+          if (reply && !reply.includes('OK')) {
+            log(`[事件感知维度] Andy 架构漂移反思：${reply.slice(0, 200)}`);
+          }
+        });
+      });
+      req.on('error', () => {});
+      req.on('timeout', () => req.destroy());
+      req.write(reflectBody);
+      req.end();
+    } catch (e) {
+      log(`[事件感知维度] 代码图谱 Andy 反思触发失败：${e.message}`);
+    }
+  });
 }
 
 // ── L4 DPO 周级自动扫描（每周一凌晨 6 点）──────────────────────────────────────

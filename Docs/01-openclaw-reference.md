@@ -3,7 +3,7 @@
 > 由系统工程师（Claude Code）维护。从 HomeAI 建设实践中提炼，结合源码分析和官方文档。
 > **阅读对象**：接手 HomeAI 的第二个系统工程师，或从零在新场景部署 OpenClaw 的工程师。
 > **使用方式**：做 OpenClaw 相关工作前先读此文件；有新发现及时更新。
-> 最后更新：2026-03-27
+> 最后更新：2026-04-13
 
 ---
 
@@ -80,8 +80,8 @@ wecom-entrance（Node.js，port 3003，PM2 守护）
                 ├─ [hook: before_model_resolve]        ← 插件介入点②
                 │       └─ 三层模型路由覆盖
                 │               lucas → deepseek-chat
-                │               andy  → MiniMax-M2.7
-                │               lisa  → deepseek-reasoner
+                │               andy  → deepseek-reasoner（R1）
+                │               lisa  → MiniMax-M2.7
                 │
                 ├─ [hook: llm_input]                   ← 插件介入点③
                 │       └─ 记录路由事件到 route-events.jsonl
@@ -280,8 +280,8 @@ Gateway 收到请求
     覆盖模型 ID（event.modelId = "xxx"）
   HomeAI 用途：三层模型路由
     lucas → deepseek-chat
-    andy  → MiniMax-M2.7
-    lisa  → deepseek-reasoner
+    andy  → deepseek-reasoner（R1）
+    lisa  → MiniMax-M2.7
       │
       ▼
 [hook: llm_input]                              ← 介入点③
@@ -576,9 +576,9 @@ Lucas ← 收到完成通知 → 告知家人
 | 模型 | 角色 | 工具调用 | 注意事项 |
 |------|------|---------|---------|
 | DeepSeek Chat（deepseek-chat）| Lucas | 稳定 | 工具调用可靠；曾用过 R1（deepseek-reasoner），因响应格式问题回退 |
-| DeepSeek V3 / R1 | —（已弃用）| 不稳定 | V3 function calling 不稳定；R1 推理 token 格式影响工具调用 |
-| MiniMax M2.7 | Andy | 稳定，但并发风险高 | 并发超时级联 → Gateway session pool 腐化（见§十二）|
-| DeepSeek Reasoner | Lisa | 稳定 | opencode 调用 deepseek/deepseek-reasoner，推理能力强，适合实现任务 |
+| DeepSeek Reasoner（deepseek-reasoner）| Andy | 稳定 | CoT 推理驱动设计，适合 spec/research；andy-evaluator 同模型 |
+| MiniMax M2.7 | Lisa | 稳定，但并发风险高 | 大上下文处理 opencode 输出；lisa-evaluator 同模型；并发超时级联 → Gateway session pool 腐化（见§十二）|
+| GLM-5.1 | Main | — | 国内部署，企业微信直连 |
 
 **MiniMax 工具注册特殊要求**：参数必须用 `parameters: Type.Object(...)` TypeBox 格式，`inputSchema` 格式会触发 400 错误。
 

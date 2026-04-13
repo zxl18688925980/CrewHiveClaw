@@ -266,7 +266,7 @@ Setup 阶段需要按实际家庭情况填写 SOUL.md：
 | **人格层** | OpenClaw 8文件体系（SOUL/AGENTS/IDENTITY/MEMORY/TOOLS/USER/HEARTBEAT.md）| `~/.openclaw/workspace-{lucas,andy,lisa}/` | Setup 时配置；MEMORY.md 由 Agent 自主写入 + distill 蒸馏 |
 | **知识层** | 家人档案（Kuzu → inject.md）；角色知识（ARCH.md / CODEBASE.md）| `~/.openclaw/workspace-*/family/`；`data/kuzu/` | 每周蒸馏自动更新（distill-memories.py → render-knowledge.py）|
 | **上下文层** | chat-history（近期对话缓冲，50轮/一周TTL）| `~/.homeai/chat-history/{key}.json` | 每次对话自动追加 |
-| **记忆层** | ChromaDB（语义事件档案，22个集合）| `~/HomeAI/chroma/`（本地 Python 包，端口 8001）| 每次 agent_end 自动积累 |
+| **记忆层** | ChromaDB（语义事件档案，21个集合）| `~/HomeAI/chroma/`（本地 Python 包，端口 8001）| 每次 agent_end 自动积累 |
 
 **chat-history key 规则**：
 - 群聊：`group:{chatId}`
@@ -552,6 +552,7 @@ rsync -av old_device:~/HomeAI/chroma/ ~/HomeAI/chroma/
 | wecom-entrance 入口代码 | `CrewHiveClaw/CrewClaw/daemons/entrances/wecom/index.js` | 是 |
 | crewclaw-routing 插件 | `CrewHiveClaw/CrewClaw/crewclaw-routing/` | 是 |
 | 实例层配置（5 个 JSON）| `CrewHiveClaw/CrewClaw/crewclaw-routing/config/` | 是 |
+| 访客工具禁令 + 隐私过滤 | `CrewHiveClaw/CrewClaw/crewclaw-routing/config/visitor-restrictions.json` | 是 |
 | 运维脚本 | `CrewHiveClaw/HomeAILocal/Scripts/` | 是 |
 | launchd 启动脚本 | `CrewHiveClaw/HomeAILocal/Scripts/start-homeai.sh` | 是 |
 | 编译检查脚本 | `CrewHiveClaw/HomeAILocal/Scripts/check-plugin.sh` | 是 |

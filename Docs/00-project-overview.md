@@ -560,6 +560,16 @@ Capability → [IMPLEMENTS] → Tool
 
 两层机制互补：标签注入防止幻觉行为被「合法化」为模式，记录过滤防止幻觉内容直接进入蒸馏输入。
 
+**L1 运行时工具调用幻觉检测**（v642，`index.ts`）：
+
+三道防线防止 Agent 虚假声称调用了工具（实际未调用）：
+
+1. **agent_end 检测**：`detectToolCallHallucination()` 对比回复中的工具声称与实际工具调用记录。声称"已完成"但无对应调用 → 标记并写入 `sessionPendingCorrections` Map
+2. **before_prompt_build 纠正注入**：下一轮对话时，`sessionPendingCorrections` 中的条目通过 `appendSystemContext` 注入，告知 Agent「你声称调用了 X 但实际未调用，请在回复中纠正」
+3. **纠正确认后清除**：Agent 在纠正轮回复中承认错误后，清除对应 pending 条目
+
+适用角色：Lucas / Andy / Lisa 均受此机制约束。
+
 **蒸馏质量六项机制**（`distill-memories.py` 扩展，已全部落地）：
 
 1. **增量更新**：蒸馏前调用 `load_existing_facts()` 读取 Kuzu 中该用户当前所有活跃 Fact，注入 LLM prompt 作为「现有知识基础」。LLM 按三规则输出——有新信息→追加 context；无新信息→原样保留；新话题→新增。避免多轮讨论同一话题只记得最近一次蒸馏的问题（已知最严重案例：抖音运营话题跨 4 次会话只记得第一次）。
@@ -1114,7 +1124,7 @@ Lucas 识别需求 → Andy 方案 → Lisa 实现
 | 设计验收          | Andy         | 基于 `test-report.json` + 对抗性验证对照表做设计意图校验（不重复 Lisa 已做的运行时验证）                                                                                                                                                                                                                                                                                                                                                                                  |
 | 交付简报          | Andy → Lucas | 验收通过后 Andy 以**家人语言**向 Lucas 发送简报：① 家人能感知的变化 ② 注意事项/限制 ③ 下次类似需求怎么说；若有 `lucasContext` 则在简报中呼应家人的原始诉求                                                                                                                                                                                                                                                                                                                                          |
 | 用户验收          | Lucas        | 交付结果是否满足原始需求，以组织语气包装推给用户                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 流水线阶段可见性      | 基础设施层        | 任务注册表 `currentPhase`：`andy_designing` → `lisa_implementing` → `completed`；`designNote` 存 Andy 方案摘要；`deliveryBrief` 存 Andy 验收后的家人语言简报；`lucasAcked` 记录 Lucas 是否已主动告知家人（false=待告知）。Lucas `before_prompt_build` 注入两块：`【当前进行中任务】`（含阶段标签 + 方案要点）和 `【待告知家人任务】`（completed + lucasAcked=false），Lucas 无需主动询问即可向家人解释进展，告知后调 `ack_task_delivered` 标记已告知                                                                                                 |
+| 流水线阶段可见性      | 基础设施层        | 任务注册表 `currentPhase`：`andy_designing` → `lisa_implementing` → `completed`；`designNote` 存 Andy 方案摘要；`deliveryBrief` 存 Andy 验收后的家人语言简报；`lucasAcked` 记录 Lucas 是否已主动告知家人（false=待告知）；`estimatedHours` Andy 基于系统资源（Token 消耗/模型负载/并发槽位）预估工期；`actualHours` 完成时自动计算实际耗时供 Andy 校准预估；`blockedAt`/`blockedReason` 任务阻塞信号（Lisa 上报或 Andy 请求修订时写入）。Lucas `before_prompt_build` 注入两块：`【当前进行中任务】`（含阶段标签 + 方案要点 + 预估工期 + 阻塞状态，紧急任务排前并标 🔴）和 `【待告知家人任务】`（completed + lucasAcked=false），Lucas 无需主动询问即可向家人解释进展，告知后调 `ack_task_delivered` 标记已告知                                                                                                 |
 
 **spec `test_cases` 字段格式**（Andy 写，Lisa 据此生成 `test.js`）：
 
@@ -1239,10 +1249,10 @@ Lucas 在以下情况主动在对话入口提醒业主：
 
 **`<think>` 块剥离**：部分模型（如 DeepSeek R1、GLM-5.1）会在回复中夹带推理过程（`<think>...</think>` 块）。wecom-entrance 在取 reply 之前统一调用 `stripThink()` 剥离，业主只看到最终结论，不看到推理中间态。Lucas 路径同样在 `stripMarkdownForWecom()` 首行处理，全路径一致。
 
-**主动监控**：Main 不只是被动响应器。wecom-entrance 内置 30min 监控循环，定时触发 Main agent 按六步协议执行 L0~L4 全链路巡检：
+**主动监控**：Main 不只是被动响应器。wecom-entrance 内置 4h 监控循环，定时触发 Main agent 按六步协议执行 L0~L4 全链路巡检：
 
 - **Step 1（每次）**：`scan_pipeline_health` — L0 快速检查（PM2 + Gateway + 日志错误），发现异常立即推送
-- **Step 1.5（每日一次）**：定时任务执行健康 — 读取 `scheduled-tasks.json`（实例层配置，25 项 Lx 分级）+ `task-execution-log.jsonl`（watchdog 写入），检查每个定时任务是否在 `maxAgeHours` 内成功执行；3+ 任务异常 → Layer 3 立即推；1-2 个 → Layer 2 日报
+- **Step 1.5（每日一次）**：定时任务执行健康 — 读取 `scheduled-tasks.json`（实例层配置，25 项 Lx 分级）+ `task-execution-log.jsonl`（watchdog 写入），检查每个定时任务是否在 `maxAgeHours` 内成功执行；3+ 任务异常 → 告警级别 3 立即推；1-2 个 → 告警级别 2 日报
 - **Step 2（每日一次）**：`evaluate_l1` — Agent 质量巡检（Lucas 对话质量 + Andy/Lisa 活跃度 + 蒸馏产出）
 - **Step 3（每日一次，与 Step 2 同频）**：`evaluate_l2` / `evaluate_l3` / `evaluate_l4` — 进化层全面巡检；L4 有模式达到内化阈值（🔴）时立即推送
 - **Step 4**：日报判断（待汇总观察积累超 20h → 发日报 + 清空）
@@ -1266,7 +1276,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `write_file`           | 直接写入本机任意路径文件（不需要生成脚本，适合写 Obsidian 笔记、保存报告等）              |
 | `send_file`            | 将 HomeAI 目录下的文件通过企业微信发给业主                                |
 | `trigger_finetune`     | 后台触发增量微调                                                  |
-| `scan_pipeline_health` | L0 快速检查：PM2 + Gateway（`/health`）+ wecom + 最近 1h 日志错误摘要（心跳 Step 1，每 30min）|
+| `scan_pipeline_health` | L0 快速检查：PM2 + Gateway（`/health`）+ wecom + 最近 1h 日志错误摘要（心跳 Step 1，每 4h）|
 | （Step 1.5 内联脚本） | 定时任务执行健康：读取 `scheduled-tasks.json` + `task-execution-log.jsonl`，按 Lx 分级检查 25 项任务 freshness（每日一次）|
 | `scan_lucas_quality`   | 扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空/过短回复（已被 evaluate_l1 取代，保留作备用工具）|
 | `evaluate_l0`          | 蒸馏管道健康：watchdog PM2 状态、Kuzu Fact/Entity 总数、ChromaDB conversations + decisions 总量、家人档案更新时间、Kuzu 协作边数量（L3 就绪信号） |
@@ -2492,7 +2502,7 @@ Andy 需要这个工具而不是直接 write_file，是因为 Andy 的 workspace
 
 **L2 激活**：能力进化机制成熟后，两个角色获得真正的主动行为，写入各自 HEARTBEAT.md：
 
-- **Andy**：HEARTBEAT 分两层——**Check 0（目标闭环，两步强制）**：① 先强制更新上轮 `andy-goals.jsonl` 中所有 `in_progress` 目标的状态（done / blocked / continued），不得跳过；② 再读 gateway-watchdog 预注入的系统健康快照（opencode matchRate 趋势 / decisions 各类型条目数），识别最薄弱指标、生成新目标并立即行动。**Check 1~9（响应式处理）**：巡检 Kuzu `has_pattern`（`confidence ≥ 0.8`）+ `skill-candidates.jsonl` pending 条目，判断是否直接调 `trigger_lisa_implementation` 结晶 Skill（不再等系统工程师审批，自主实现）；**预计算注入**：behavior_patterns（检查 5）、knowledge_injection（检查 7）、学习状态（检查 8）由 wecom-entrance 预计算注入 HEARTBEAT prompt，Andy 直接读取，不依赖 exec 查 ChromaDB（绕过 OpenClaw allowlist 限制）；**Check 8 主动学习**：每 7 天读一篇 Obsidian `04-系统工程师关键决策记录/`，提炼设计洞察写入 decisions（source=proactive_learning），让 Andy 理解设计来时路，从「任务执行者」转向「系统思考者」；**透明化**：HEARTBEAT 结果非 `HEARTBEAT_OK` 时（有主动行动），基础设施层自动 fire-and-forget 推送工程师通道，工程师可随时感知 Andy 在做什么
+- **Andy**：HEARTBEAT 分两层——**Check 0（目标闭环，两步强制）**：① 先强制更新上轮 `andy-goals.jsonl` 中所有 `in_progress` 目标的状态（done / blocked / continued），不得跳过；② 再读 gateway-watchdog 预注入的系统健康快照（opencode matchRate 趋势 / decisions 各类型条目数），识别最薄弱指标、生成新目标并立即行动。**Check 1~9（响应式处理）**：巡检 Kuzu `has_pattern`（`confidence ≥ 0.8`）+ `skill-candidates.jsonl` pending 条目，判断是否直接调 `trigger_lisa_implementation` 结晶 Skill（不再等系统工程师审批，自主实现）；**预计算注入**：behavior_patterns（检查 5）、knowledge_injection（检查 7）、学习状态（检查 8）由 wecom-entrance 预计算注入 HEARTBEAT prompt，Andy 直接读取，不依赖 exec 查 ChromaDB（绕过 OpenClaw allowlist 限制）；**Check 8 主动学习**：每 7 天读一篇 Obsidian `04-系统工程师关键决策记录/`，提炼设计洞察写入 decisions（source=proactive_learning），让 Andy 理解设计来时路，从「任务执行者」转向「系统思考者」；**三维主动性体系（Check 10-14）**：①事件感知维度——opencode 完成后 spec vs diff 对照反思（6h 冷却）、Lisa 连续 ≥3 次报实现阻塞后分析能力缺口（4h 冷却）、代码图谱重建后检测架构漂移（每日 5am）；②知识获取维度——Check 10 每周 spec 回溯（回顾本周 spec 精确度）、Check 11 每两周技术雷达（搜索关注方向最新进展）、Check 12 每日代码变化感知（更新 ARCH.md）；③自主判断维度——Check 13 每月架构改进提案（积累 ≥3 条同方向信号后主动提出）、Check 14 每两周技术债标记（识别高频修改文件和耦合过重模块）。信号跨维流转：事件感知维度事件沉淀 decisions → 自主判断维度 Check 13 聚合信号 → 达阈值后提案；**透明化**：HEARTBEAT 结果非 `HEARTBEAT_OK` 时（有主动行动），基础设施层自动 fire-and-forget 推送工程师通道，工程师可随时感知 Andy 在做什么
 - **Lisa**：每周回顾 `code_history`，把新的实现模式提炼写回 `MEMORY.md`；每次 HEARTBEAT 扫描 `behavior_patterns`，同类模式出现 3 次以上 → 格式化提案 → `notify_engineer` 发系统工程师审批（与 Andy 相同的规则自进化管道）
 
 两个行为都是「真正需要 LLM 判断」的任务，值得一次 Agent 调用。在此之前不填，是避免为了形式完整而浪费调用。
@@ -3209,7 +3219,7 @@ Main 日常维护操作详见三章"系统工程师与 Main"。
 | `FRONTEND_AGENT_ID` | `lucas` | 接待用户的主 Agent ID；所有「前台专属」逻辑的实际持有者 |
 | `PRIORITY_AGENTS` | `lucas` | 逗号分隔，从 Semaphore 保留池取槽位的 Agent 列表 |
 | `OWNER_ID` | `ZengXiaoLong` | 组织所有者 userId；系统告警、工程师通知的接收目标 |
-| `LOCAL_MODEL_NAME` | `homeai-assistant` | 本地 Ollama 模型名；Layer 2 低复杂度路由端点 |
+| `LOCAL_MODEL_NAME` | `homeai-assistant` | 本地 Ollama 模型名；低复杂度路由端点 |
 | `LUCAS_PROVIDER` | `deepseek` | 前台 Agent 云端 provider |
 | `LUCAS_MODEL` | `deepseek-chat` | 前台 Agent 云端模型 ID |
 | `ANDY_PROVIDER` | `deepseek` | 方案设计 Agent 云端 provider |
@@ -3415,16 +3425,16 @@ export const contextSources: Record<string, ContextSource[]> = {
 
 - `members.json`：5 个 userId 映射（含拼写变体合并到同一档案），对应 `~/.openclaw/workspace-lucas/family/{name}.inject.md`
 - `memory-signals.json`：行为模式信号 12 条（家务/健康/情绪/出行等）；家庭知识信号 8 条（人名/关系/地址等）
-- `visitor-restrictions.json`：13 个工具被封禁（发微信 / 发文件 / 访问记忆 / 创建数字分身等）；`trigger_development_pipeline` 已解除封锁，改为 infra guard 检查（需求含系统架构关键词时拦截，需主人审核）；访客可深度参与开发流水线，但系统架构类需求受限
+- `visitor-restrictions.json`：13 个工具被封禁（发微信 / 发文件 / 访问记忆 / 创建数字分身等）；`trigger_development_pipeline` 已解除封锁，改为 infra guard 检查（需求含系统架构关键词时拦截，需主人审核）；访客可深度参与开发流水线，但系统架构类需求受限；**输出级隐私过滤**（v650/v652）——`agent_end` 阶段检测访客对话中是否泄漏家庭成员真实姓名、地址等隐私信息（与 `visitor-restrictions.json` 中 `privacyPatterns` 匹配），泄漏时自动注入纠正提示到下一轮 `appendSystemContext`，日志标记 `[visitor-privacy]`
 
 **本地模型层**：
 
 | 服务 | 端口 | 模型 | 用途 |
 |------|------|------|------|
-| Ollama | 11434 | `homeai-assistant`（Qwen2.5-Coder-7B-4bit） | Layer 2 低复杂度路由 |
+| Ollama | 11434 | `homeai-assistant`（Qwen2.5-Coder-32B-4bit） | 低复杂度路由 |
 | mlx_lm.server | 8083 | `gemma-4-lucas`（Gemma 4 31B 4bit LoRA 微调） | Lucas 本地模型（进化终端态） |
 | mlx-vision | 8081 | Qwen3-VL-32B-4bit | 图片描述（视觉输入，当前已停止） |
-| local-tts | 8082 | Spark-TTS-0.5B-8bit（声音克隆） | 语音回复合成 |
+| local-tts | 8082 | edge-tts zh-CN-YunxiNeural（普通话男声） | 语音回复合成（Fish-Speech S2 Pro 已下载，待 mlx_audio 支持后切换声音克隆） |
 
 **context-sources.ts 注册摘要**（HomeAI 实际 source 配置）：
 

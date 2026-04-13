@@ -7,8 +7,108 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v652
-> **最后更新**: 2026-04-12
+> **版本**: v654
+> **最后更新**: 2026-04-13
+
+---
+
+## v654 · Lucas 项目管理能力增强 + 任务生命周期信号完善（2026-04-13）
+
+**干预类型**：L1 行为质量增强（任务管理基础设施 + 行为绑定）
+
+**背景**：Lucas 的主动性和项目管理能力存在六个结构性缺口：①无法给家人时间预期 ②任务阻塞时家人无感知 ③无历史工期数据供 Andy 学习 ④HEARTBEAT 空闲调度不检查超时任务 ⑤家人情绪不影响调度优先级 ⑥PM 能力分散。系统工程师明确 PM 分工：Andy = 技术 PM（预估/里程碑/风险），Lucas = 客户 PM（沟通/预期/优先级）。
+
+**变更1：TaskRegistryEntry 新增四字段**
+- `estimatedHours`：Andy spec 时基于系统资源（Token 消耗/模型负载/并发槽位）填写，不参照人类 PM 经验
+- `actualHours`：completed 时自动计算实际耗时，供 Andy 后续校准预估
+- `blockedAt` / `blockedReason`：Lisa report_implementation_issue 或 Andy request_implementation_revision 时写入阻塞信号
+
+**变更2：Andy spec 格式 + 历史工期注入**
+- Andy AGENTS.md / TOOLS.md spec JSON 新增 `estimatedHours` 字段，预估规则基于系统资源
+- `runAndyPipeline` prompt 末尾注入最近 5 条历史任务的 estimatedHours vs actualHours 对照数据
+- `trigger_lisa_implementation` 从 Andy spec JSON 提取 `estimatedHours` 写入 task-registry
+
+**变更3：任务阻塞信号流转**
+- `report_implementation_issue`（Lisa）：写入 `blockedAt` + `blockedReason`
+- `request_implementation_revision`（Andy）：写入 `blockedAt` + `blockedReason`（含修订轮次）
+- `markTaskStatus("completed")`：自动清除阻塞信号
+
+**变更4：Lucas 注入块增强**
+- `【当前进行中任务】`新增显示：预估工期、阻塞状态、阻塞原因、紧急标记
+- 紧急任务排序靠前（匹配 lucasContext / requirement 中的急/urgent/今天要等关键词）
+- 已完成任务在 `list_active_tasks` 显示预估 vs 实际耗时
+
+**变更5：HEARTBEAT 任务 6 扩展**
+- 新增 6a 超时任务巡检：running 超 3h → ask_lisa 确认进展；阻塞任务 → 告知提交者；预估工期已过 → 主动通报
+- 原调度逻辑保留为 6b，仅在无 running 任务时执行；巡检不受 22:00 限制
+
+**变更6：触发 7A 动态阈值**
+- Lucas AGENTS.md 触发 7 信号 A 从固定 6h 改为动态阈值：超过 estimatedHours × 1.5 时主动查进展
+- 信号 B：有 estimatedHours 时给家人精确时间预期
+
+**设计决策**：
+- estimatedHours 基于系统资源而非人类经验——模型耗时 × Token 消耗 × 系统负载
+- Andy/Lucas PM 分工通过 task-registry 共享状态：Andy 写预估（技术 PM），Lucas 管沟通（客户 PM）
+- 框架层机制通用，实例层配置可按组织定制
+
+**代码变更文件**：index.ts + Lucas/Andy AGENTS.md + HEARTBEAT.md + Andy TOOLS.md + 00-project-overview.md
+
+---
+
+## v653 · Andy 三维主动性体系（2026-04-13）
+
+**干预类型**：L2 架构增强（Andy 角色从「任务执行者」进化为「系统思考者」）
+
+**背景**：Andy 的所有行为此前都是「被叫到才动」——没有 Andy 自己发现问题、自己决定行动的路径。系统工程师设计三维主动性架构，让 Andy 能从运行信号中自主提炼判断。
+
+**变更1：事件感知维度 · 事件驱动观察（`index.ts` + `gateway-watchdog.js`）**
+
+| 事件 | 触发点 | Andy 行动 |
+|------|--------|----------|
+| opencode 完成 | `proc.on("close")` IIFE | spec vs diff 对照反思（6h 冷却） |
+| Lisa 报实现阻塞 | `report_implementation_issue` | 能力缺口反思（≥3 次触发，4h 冷却） |
+| 代码图谱重建完成 | `runCodeGraphRebuild()` child.on('exit') | 架构漂移检测（每日 5am） |
+
+实现模式：fire-and-forget `callGatewayAgent`，冷却机制用模块级变量。
+
+**变更2：知识获取维度 · 主动知识获取（HEARTBEAT 检查 10/11/12 + wecom/index.js 预计算）**
+
+| 检查 | 频率 | 预计算来源 |
+|------|------|----------|
+| 检查 10：spec 回溯 | 每周 | opencode-results.jsonl 最近 7 天统计 |
+| 检查 11：技术雷达 | 每两周 | andy-self-search-state.json 冷却检查 |
+| 检查 12：代码变化感知 | 每日 | build-code-graph.log 统计解析 |
+
+每个检查的预计算数据在 `wecom/index.js` 的 `runAndyHeartbeatLoop` 中完成，Andy 直接读取，无需 exec。
+
+**变更3：自主判断维度 · 自主提案（HEARTBEAT 检查 13/14 + wecom/index.js 预计算）**
+
+| 检查 | 频率 | 预计算来源 |
+|------|------|----------|
+| 检查 13：架构改进提案 | 每月 | ChromaDB decisions 反思类信号数量（≥3 条触发） |
+| 检查 14：技术债标记 | 每两周 | opencode-results.jsonl 高频修改文件统计（≥3 次） |
+
+信号流转：事件感知维度 事件沉淀 decisions → 自主判断维度 检查 13 聚合信号 → 达阈值后提案。
+
+**变更4：人格文件更新**
+
+- `SOUL.md`：新增信念「主动性是设计师的核心竞争力」
+- `AGENTS.md`：新增「Andy 三维主动性体系」节，含三维设计哲学、跨维信号流转图
+- `HEARTBEAT.md`：新增检查 10-14（spec 回溯 / 技术雷达 / 代码变化 / 架构提案 / 技术债）
+
+**设计决策**：
+- 事件驱动优先于轮询：事件感知维度 用已有事件点（proc.on("close")、child.on("exit")）注入 Andy 通知，不引入新调度器
+- 预计算模式复用：新检查 10-14 全部走 wecom/index.js 预计算注入，Andy 不依赖 exec
+- 冷却机制防过频：spec 反思 6h、阻塞反思 4h、架构提案 30 天、技术债 14 天
+- 弱信号不提案：检查 13 需要 ≥3 条同方向信号才触发，避免噪声提案
+
+**代码变更文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（spec 反思 IIFE + 能力缺口反思 + 冷却变量）
+- `HomeAILocal/Scripts/gateway-watchdog.js`（代码图谱 Andy 架构漂移检测）
+- `CrewClaw/daemons/entrances/wecom/index.js`（预计算 7-11：spec 回溯 + 技术雷达 + 代码变化 + 架构提案信号 + 技术债信号）
+- `~/.openclaw/workspace-andy/HEARTBEAT.md`（新增检查 10-14）
+- `~/.openclaw/workspace-andy/AGENTS.md`（新增主动性体系节）
+- `~/.openclaw/workspace-andy/SOUL.md`（新增主动性信念）
 
 ---
 

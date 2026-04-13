@@ -677,8 +677,8 @@ function chatHistoryKey(isGroup, chatId, fromUser) {
  */
 async function callGatewayAgent(agentId, message, userId, timeoutMs = 180000, historyMessages = []) {
   // 每次请求用独立 session（userId:timestamp），支持并发
-  // Layer 1（Kuzu）+ Layer 3（ChromaDB）由 crewclaw-routing before_prompt_build 注入
-  // Layer 2（近期对话）由调用方传入 historyMessages，作为真实 messages array 传给模型
+  // Kuzu 注入 + ChromaDB 注入由 crewclaw-routing before_prompt_build 注入
+  // 近期对话由调用方传入 historyMessages，作为真实 messages array 传给模型
   const sessionUserId = `${userId}:${Date.now()}`;
 
   // AbortController 实现硬超时：axios 的 timeout 只是 socket 空闲超时（有 keepalive 时不触发），
@@ -4534,7 +4534,7 @@ function startBotLongConnection() {
       : `【${channel}·${fromUser}】`;
     const memberName = member ? `${member.role}${member.name}` : fromUser;
 
-    // 近期对话历史：把同一个 chat 的最近 N 轮作为 messages array 传给 Lucas（Layer 2）
+    // 近期对话历史：把同一个 chat 的最近 N 轮作为 messages array 传给 Lucas
     const histKey = chatHistoryKey(isGroup, chatId, fromUser);
     const historyMessages = buildHistoryMessages(histKey);
 
@@ -5804,7 +5804,7 @@ async function runLucasProactiveLoop() {
 // Main agent 读取 HEARTBEAT.md → 调 scan_pipeline_health / scan_lucas_quality
 // → 有异常才推送给业主；正常回复 HEARTBEAT_OK 不推送。
 
-const MAIN_MONITOR_INTERVAL_MS = 4 * 60 * 60 * 1000; // 每 4 小时（Layer 3 故障探测足够；Layer 2 日报在 HEARTBEAT.md 时间控制下每日一次）
+const MAIN_MONITOR_INTERVAL_MS = 4 * 60 * 60 * 1000; // 每 4 小时（紧急故障探测足够；日报在 HEARTBEAT.md 时间控制下每日一次）
 
 async function runMainMonitorLoop() {
   if (!WECOM_OWNER_ID) return;
@@ -5818,7 +5818,7 @@ async function runMainMonitorLoop() {
     } catch {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n**三层监控协议（严格执行，禁止混层）**：\n\n【Layer 3 · 紧急故障探测】\n调用 scan_pipeline_health。\n- 任何进程不在线 / Gateway 不可达 → 立即调用 notify_engineer 推送，一句话说清楚问题，然后回复 HEARTBEAT_OK 结束。\n- 一切正常 → 不推送，继续 Layer 2 判断。\n\n【Layer 2 · 每日巡检日报】\n仅当「上次日报发送」距今超过 20 小时时才执行，否则跳过直接回复 HEARTBEAT_OK。\n执行时：\n1. 依次调用 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4\n2. 汇总为一条日报（按 L0~L4 分层），包含：各层状态、DPO 积累进度（审核待办）、待处理改进点\n3. 调用 notify_engineer 发送日报\n4. 更新「上次日报发送」时间\n\n【Layer 1 · 正常静默】\n以上两层均无需推送时 → 直接回复 HEARTBEAT_OK，不生成任何其他内容。\n\n**铁律：除 notify_engineer 推送和日报发送外，禁止生成面向工程师的文字内容。OK 就是 OK。**`;
+    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n**三层监控协议（严格执行，禁止混层）**：\n\n【告警级别 3 · 紧急故障探测】\n调用 scan_pipeline_health。\n- 任何进程不在线 / Gateway 不可达 → 立即调用 notify_engineer 推送，一句话说清楚问题，然后回复 HEARTBEAT_OK 结束。\n- 一切正常 → 不推送，继续告警级别 2 判断。\n\n【告警级别 2 · 每日巡检日报】\n仅当「上次日报发送」距今超过 20 小时时才执行，否则跳过直接回复 HEARTBEAT_OK。\n执行时：\n1. 依次调用 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4\n2. 汇总为一条日报（按 L0~L4 分层），包含：各层状态、DPO 积累进度（审核待办）、待处理改进点\n3. 调用 notify_engineer 发送日报\n4. 更新「上次日报发送」时间\n\n【告警级别 1 · 正常静默】\n以上两层均无需推送时 → 直接回复 HEARTBEAT_OK，不生成任何其他内容。\n\n**铁律：除 notify_engineer 推送和日报发送外，禁止生成面向工程师的文字内容。OK 就是 OK。**`;
 
     // 使用独立消息历史，不污染业主会话
     const messages = [{ role: 'user', content: heartbeatPrompt }];
@@ -6070,6 +6070,176 @@ os._exit(0)
       precomputedLearningState = `读取失败：${e.message.slice(0, 60)}`;
     }
 
+    // ── 预计算7：spec 回溯数据（检查 10，每周一次）──────────────────────────
+    let precomputedSpecRetro = '无 spec 数据';
+    try {
+      const retroStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-spec-retro-state.json');
+      const retroState = fs.existsSync(retroStatePath) ? JSON.parse(fs.readFileSync(retroStatePath, 'utf8')) : {};
+      const lastRetro = retroState.lastRetroAt;
+      const daysSinceRetro = lastRetro ? Math.floor((Date.now() - new Date(lastRetro).getTime()) / 86400000) : Infinity;
+      if (daysSinceRetro < 7) {
+        precomputedSpecRetro = `本周已回溯（${daysSinceRetro} 天前），跳过`;
+      } else {
+        // 从 opencode-results.jsonl 读最近 7 天的 spec 结果
+        const resultsPath = path.join(os.homedir(), 'HomeAI', 'CrewHiveClaw', 'data', 'learning', 'opencode-results.jsonl');
+        if (fs.existsSync(resultsPath)) {
+          const lines = fs.readFileSync(resultsPath, 'utf8').trim().split('\n').filter(Boolean);
+          const weekAgo = Date.now() - 7 * 86400000;
+          const recentSpecs = lines.slice(-30).map(l => { try { return JSON.parse(l); } catch { return null; } })
+            .filter(r => r && new Date(r.timestamp).getTime() > weekAgo);
+          if (recentSpecs.length > 0) {
+            const successCount = recentSpecs.filter(r => r.success).length;
+            const matchRates = recentSpecs.filter(r => r.matchRate !== undefined).map(r => r.matchRate);
+            const avgMatch = matchRates.length > 0 ? Math.round(matchRates.reduce((a, b) => a + b, 0) / matchRates.length) : 'N/A';
+            precomputedSpecRetro = [
+              `近 7 天 opencode 结果：${recentSpecs.length} 次（成功 ${successCount}）`,
+              `spec 吻合率：平均 ${avgMatch}%`,
+              `⚡ 距上次回溯已 ${daysSinceRetro === Infinity ? '从未' : `${daysSinceRetro} 天`}，建议本轮触发`,
+              ...recentSpecs.slice(-5).map(r => `  - ${r.taskSummary?.slice(0, 60) || '未知'}：${r.success ? '✅' : '❌'}（${r.matchRate !== undefined ? `${r.matchRate}%` : 'N/A'}）`),
+            ].join('\n');
+          } else {
+            precomputedSpecRetro = '近 7 天无 opencode 记录，跳过';
+          }
+        }
+      }
+    } catch (e) {
+      precomputedSpecRetro = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
+    // ── 预计算8：技术雷达状态（检查 11，每两周一次）──────────────────────────
+    let precomputedTechRadar = '冷却中';
+    try {
+      const searchStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-self-search-state.json');
+      const searchState = fs.existsSync(searchStatePath) ? JSON.parse(fs.readFileSync(searchStatePath, 'utf8')) : {};
+      const lastSearch = searchState.lastSearchAt;
+      const daysSinceSearch = lastSearch ? Math.floor((Date.now() - new Date(lastSearch).getTime()) / 86400000) : Infinity;
+      if (daysSinceSearch >= 14) {
+        const searchedTopics = searchState.searchedTopics || [];
+        precomputedTechRadar = `距上次技术搜索已 ${daysSinceSearch === Infinity ? '∞' : `${daysSinceSearch} 天`}（≥14 天可触发）\n已搜索主题：${searchedTopics.length > 0 ? searchedTopics.slice(-5).join('、') : '无'}\n⚡ 建议本轮触发技术雷达搜索`;
+      } else {
+        precomputedTechRadar = `距上次搜索 ${daysSinceSearch} 天（<14 天，跳过）`;
+      }
+    } catch (e) {
+      precomputedTechRadar = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
+    // ── 预计算9：代码图谱变化摘要（检查 12，每日）──────────────────────────
+    let precomputedCodeGraphChanges = '未运行';
+    try {
+      const graphLogPath = path.join(os.homedir(), 'HomeAI', 'Logs', 'build-code-graph.log');
+      if (fs.existsSync(graphLogPath)) {
+        const logContent = fs.readFileSync(graphLogPath, 'utf8').trim();
+        const lastRunLine = logContent.split('\n').filter(l => l.includes('增量重建完成') || l.includes('Done')).slice(-1)[0];
+        if (lastRunLine) {
+          // 提取最近一次运行的统计
+          const recentLines = logContent.split('\n').slice(-20);
+          const stats = recentLines.filter(l =>
+            l.includes('新增') || l.includes('删除') || l.includes('更新') ||
+            l.includes('节点') || l.includes('边') || l.includes('文件')
+          ).join('\n');
+          if (stats) {
+            precomputedCodeGraphChanges = stats.slice(0, 500);
+          } else {
+            precomputedCodeGraphChanges = '增量重建已完成，无显著变化';
+          }
+        } else {
+          precomputedCodeGraphChanges = '今日尚未运行';
+        }
+      }
+    } catch (e) {
+      precomputedCodeGraphChanges = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
+    // ── 预计算10：架构提案信号（检查 13，每月一次）────────────────────────
+    let precomputedArchProposalSignals = '信号不足';
+    try {
+      // 查 ChromaDB decisions 中近 30 天的反思类条目
+      const chromaUrl = `http://localhost:8001/api/v1/collections`;
+      // 先获取 decisions collection ID
+      const collectionsResp = await fetch(chromaUrl, { method: 'GET' });
+      const collections = await collectionsResp.json();
+      const decisionsCol = (collections || []).find(c => c.name === 'decisions');
+      if (decisionsCol) {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().replace('Z', '+08:00');
+        // 查反思类信号数量
+        const signalTypes = ['spec_reflection', 'capability_gap_proposal', 'architecture_drift', 'spec_retrospective'];
+        let signalParts = [];
+        for (const st of signalTypes) {
+          const where = { type: { $eq: st } };
+          const getResp = await fetch(`http://localhost:8001/api/v1/collections/${decisionsCol.id}/get`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ where, include: ['documents', 'metadatas'], limit: 10 }),
+          });
+          if (getResp.ok) {
+            const data = await getResp.json();
+            const count = (data.ids || []).length;
+            if (count > 0) {
+              const topics = (data.documents || []).slice(0, 3).map(d => d.slice(0, 80)).join('；');
+              signalParts.push(`${st}：${count} 条（${topics}）`);
+            }
+          }
+        }
+        if (signalParts.length > 0) {
+          // 检查冷却
+          const proposalStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-arch-proposal-state.json');
+          const proposalState = fs.existsSync(proposalStatePath) ? JSON.parse(fs.readFileSync(proposalStatePath, 'utf8')) : {};
+          const daysSinceProposal = proposalState.lastProposalAt
+            ? Math.floor((Date.now() - new Date(proposalState.lastProposalAt).getTime()) / 86400000) : Infinity;
+          precomputedArchProposalSignals = [
+            signalParts.join('\n'),
+            daysSinceProposal >= 30 ? '⚡ 距上次提案已超 30 天，建议本轮审查并决定是否提案' : `距上次提案 ${daysSinceProposal} 天（<30 天，冷却中）`,
+          ].join('\n');
+        }
+      }
+    } catch (e) {
+      precomputedArchProposalSignals = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
+    // ── 预计算11：技术债信号（检查 14，每两周一次）────────────────────────
+    let precomputedTechDebtSignals = '无异常';
+    try {
+      // 检查冷却
+      const debtStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-tech-debt-state.json');
+      const debtState = fs.existsSync(debtStatePath) ? JSON.parse(fs.readFileSync(debtStatePath, 'utf8')) : {};
+      const daysSinceDebt = debtState.lastDebtScanAt
+        ? Math.floor((Date.now() - new Date(debtState.lastDebtScanAt).getTime()) / 86400000) : Infinity;
+      if (daysSinceDebt >= 14) {
+        // 读 opencode-results.jsonl 找高频修改文件
+        const resultsPath = path.join(os.homedir(), 'HomeAI', 'CrewHiveClaw', 'data', 'learning', 'opencode-results.jsonl');
+        if (fs.existsSync(resultsPath)) {
+          const lines = fs.readFileSync(resultsPath, 'utf8').trim().split('\n').filter(Boolean);
+          const recentResults = lines.slice(-50).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+          // 统计文件变更频率
+          const fileChangeCount = {};
+          for (const r of recentResults) {
+            if (r.filesChanged) {
+              for (const f of r.filesChanged.split(',').filter(Boolean)) {
+                fileChangeCount[f] = (fileChangeCount[f] || 0) + 1;
+              }
+            }
+          }
+          const hotFiles = Object.entries(fileChangeCount)
+            .filter(([_, c]) => c >= 3)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+          if (hotFiles.length > 0) {
+            precomputedTechDebtSignals = [
+              '⚡ 高频修改文件（近 50 次变更中出现 ≥3 次）：',
+              ...hotFiles.map(([f, c]) => `  - ${f}：${c} 次`),
+              `距上次扫描已 ${daysSinceDebt === Infinity ? '∞' : `${daysSinceDebt} 天`}（≥14 天可触发）`,
+            ].join('\n');
+          } else {
+            precomputedTechDebtSignals = `无高频修改文件（距上次扫描 ${daysSinceDebt === Infinity ? '∞' : `${daysSinceDebt} 天`}）`;
+          }
+        }
+      } else {
+        precomputedTechDebtSignals = `冷却中（距上次扫描 ${daysSinceDebt} 天，<14 天）`;
+      }
+    } catch (e) {
+      precomputedTechDebtSignals = `读取失败：${e.message.slice(0, 60)}`;
+    }
+
     const heartbeatPrompt = `[ANDY HEARTBEAT ${now}]
 
 ${andyHeartbeatContent}
@@ -6098,7 +6268,22 @@ ${precomputedKnowledgeInjections}
 【预计算数据 - 检查 8：主动学习状态】
 ${precomputedLearningState}
 
-请按 HEARTBEAT.md 中的检查流程执行巡检，重点关注检查 0 前置（目标状态更新）、检查 1/2 的结晶候选、以及检查 5（行为规则自检）和检查 7（知识注入消化）——这两个检查的数据已预计算注入，直接读取即可，无需 exec 查 ChromaDB。检查 8（主动学习）的状态也已预计算，触发条件满足时用 read_file 读决策记录即可。`;
+【预计算数据 - 检查 10：spec 回溯数据（每周一次）】
+${precomputedSpecRetro}
+
+【预计算数据 - 检查 11：技术雷达状态（每两周一次）】
+${precomputedTechRadar}
+
+【预计算数据 - 检查 12：代码图谱变化摘要（每日）】
+${precomputedCodeGraphChanges}
+
+【预计算数据 - 检查 13：架构提案信号（每月一次）】
+${precomputedArchProposalSignals}
+
+【预计算数据 - 检查 14：技术债信号（每两周一次）】
+${precomputedTechDebtSignals}
+
+请按 HEARTBEAT.md 中的检查流程执行巡检。所有预计算数据已注入，直接读取即可，无需 exec 查询。检查 8（主动学习）满足条件时用 read_file 读决策记录。检查 10-14 为新增主动性检查（事件感知/知识获取/自主判断 三维度），按触发条件执行。`;
 
     // 调用 Andy（独立 session，不影响正常流水线）
     logger.info('Andy HEARTBEAT：发送巡检 prompt', { patternCount: precomputedPatterns === '无高置信度候选（confidence >= 0.8）' ? 0 : 'N/A' });
@@ -6159,7 +6344,7 @@ app.listen(PORT, () => {
       runMainMonitorLoop();
       setInterval(runMainMonitorLoop, MAIN_MONITOR_INTERVAL_MS);
     }, 10 * 60 * 1000);
-    logger.info('Main 监控循环已注册', { intervalHours: MAIN_MONITOR_INTERVAL_MS / 3600000, 协议: 'Layer3紧急实时/Layer2每日日报/Layer1静默' });
+    logger.info('Main 监控循环已注册', { intervalHours: MAIN_MONITOR_INTERVAL_MS / 3600000, 协议: '告警级别3紧急/告警级别2日报/告警级别1静默' });
   }
 
   // 启动 Andy HEARTBEAT 巡检循环（L2 进化循环，启动后延迟 15 分钟首次触发，之后每 24 小时）

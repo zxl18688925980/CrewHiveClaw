@@ -1,17 +1,17 @@
 /**
  * crewclaw-routing 三层路由插件
  *
- * Layer 2 (before_model_resolve)
+ * 阶段 2: 模型路由 (before_model_resolve)
  *   complexityScore < localThreshold → 本地 LOCAL_MODEL_NAME (Ollama)
  *   否则 → 云端（Lucas→DeepSeek，Andy→DeepSeek R1，Lisa→MiniMax）
  *   localThreshold 初始 0.0（全走云端），evolveRouting() 数据驱动小步提升
  *   Andy            → ANDY_PROVIDER/ANDY_MODEL 控制（默认 deepseek/deepseek-reasoner）
  *   Lisa            → LISA_PROVIDER/LISA_MODEL 控制（默认 minimax/MiniMax-M2.7）
  *
- * Layer 3 (before_prompt_build)
+ * 阶段 3: 上下文注入 (before_prompt_build)
  *   Lucas 响应前从 ChromaDB 查询相关记忆片段，注入为上下文
  *
- * Layer 1 (registerTool)
+ * 阶段 1: 工具注册 (registerTool)
  *   trigger_development_pipeline：Lucas 识别到开发需求时调用，触发 Andy 三步流水线：
  *     Step 1  DeepSeek 调研（search: true）→ 技术背景
  *     Step 2  Codebase Reader → 已有代码风格 + Andy BOOTSTRAP.md
@@ -108,6 +108,9 @@ let lastProactiveDispatchAt              = 0;
 const BLIND_SPOT_DISTILL_COOLDOWN_MS     = 4 * 60 * 60 * 1000;
 const lastBlindSpotDistillTrigger        = new Map<string, number>();
 const KUZU_PYTHON3_BIN    = "/opt/homebrew/opt/python@3.11/bin/python3.11";
+// Andy 事件驱动反思冷却：spec 反思 6h，实现阻塞反思 4h
+let andySpecReflectLastRun              = 0;
+let andyBlockerReflectLastRun           = 0;
 
 type ThreadEntry = { role: "user" | "assistant"; text: string; ts: number };
 
@@ -228,7 +231,7 @@ class Semaphore {
 //
 // 三轴自进化框架，三个基础 Agent 共用相同机制，仅领域配置不同：
 //   Axis 1：能力进化（capability-events → 成功率 → 低效能力淘汰 / 新能力引入）
-//           Layer 3 工具路由每次调用写 capability-events → 诊断框架消费
+//           上下文注入阶段工具路由每次调用写 capability-events → 诊断框架消费
 //   Axis 2：协作进化（三信号分析 → 反思引擎 → 优化成员分身 prompt / 记忆策略）
 //           信号：requirements.outcome + 对话参与深度 + 主动触达响应率
 //   Axis 3：本地专精进化（route-events → threshold 进化 + corpus → 微调正循环）
@@ -790,7 +793,7 @@ async function executePlandex(task, model, provider, projectRoot): Promise<strin
 
 ────────────────────────────────────────────────────────────────────────── */
 
-// ── Layer 2：开发意图关键词 ─────────────────────────────────────────────
+// ── 模型路由：开发意图关键词 ─────────────────────────────────────────────
 
 const DEV_PATTERNS = [
   "开发", "创建", "新增", "搭建", "构建", "建立",
@@ -808,7 +811,7 @@ function isDevOrComplexIntent(prompt: string): boolean {
   return DEV_PATTERNS.some((p) => lower.includes(p)) || prompt.length > 80;
 }
 
-// ── Layer 3：对话记忆 + 决策记忆（ChromaDB 向量检索）────────────────
+// ── 上下文注入：对话记忆 + 决策记忆（ChromaDB 向量检索）────────────────
 //
 // 统一使用 ChromaDB + nomic-embed-text 语义嵌入替代 JSONL bigram 检索。
 //   - 嵌入模型：nomic-embed-text（已在 Ollama 安装，274MB）
@@ -2782,7 +2785,14 @@ async function runAndyPipeline(params: {
     // Bug 修复不走 research（那是功能调研），直接进入 Lisa 分析 + Andy 审阅模式
     const isBugFix = params.intentType === "bug_fix";
 
-    const andyMessage = isBugFix
+    // 注入历史工期数据供 Andy 参考（预估 estimatedHours 时对照）
+    const recentCompleted = readTaskRegistry().filter(e => e.status === "completed" && e.estimatedHours && e.actualHours);
+    const historyBlock = recentCompleted.length > 0
+      ? `\n\n【历史任务工期参考】\n${recentCompleted.slice(-5).map(e =>
+          `• ${e.requirement.slice(0, 40)}：预估${e.estimatedHours}h，实际${e.actualHours}h`
+        ).join("\n")}\n请基于此校准你的 estimatedHours 预估。`
+      : "";
+    const andyMessage = (isBugFix
       ? [
           `【Bug 修复任务 ID: ${requirementId}】`,
           params.requirement,
@@ -2812,9 +2822,7 @@ async function runAndyPipeline(params: {
           `3. 调用 trigger_lisa_implementation，传入 spec、user_id="${params.userId}"、requirement_id="${requirementId}"`,
           ``,
           `完成后用一句话总结规划方案。`,
-        ].join("\n");
-
-    // 检查是否在 Andy 运行期间被叫停
+        ].join("\n")) + historyBlock;
     if (isTaskCancelled(requirementId)) {
       void pushToChannel(`ℹ️ 任务已被叫停，Andy 完成后不会继续触发 Lisa。`, params.userId, true);
     } else {
@@ -3207,6 +3215,52 @@ async function launchOpenCodeBackground(
       } catch { /* 写入失败不影响主流程 */ }
     })();
 
+    // ── 事件感知维度 · Andy 事件驱动观察：opencode 完成后 spec 质量反思 ──────────────
+    // Andy 验收完后，额外触发一次 spec 质量反思：分析 spec 预期 vs 实际结果的偏差，
+    // 沉淀为 decisions（type=spec_reflection），供 Andy 下次写 spec 时参考。
+    // fire-and-forget + 6h 冷却，避免高频 opencode 反复触发。
+    const _specVerifyBlock = specVerificationBlock;
+    void (async () => {
+      try {
+        if (specFiles.length > 0 && code === 0) {
+          const lastReflectKey = `spec_reflect_${Date.now().toString(36)}`;
+          // 冷却检查：6 小时内只触发一次 spec 反思
+          if (!andySpecReflectLastRun || Date.now() - andySpecReflectLastRun > 6 * 3600_000) {
+            andySpecReflectLastRun = Date.now();
+            const sf = specFiles;
+            const actualFiles = (() => {
+              try {
+                return execSync("git diff --name-only HEAD", { cwd: projectRoot, timeout: 8_000 })
+                  .toString().trim().split("\n").filter(Boolean);
+              } catch { return [] as string[]; }
+            })();
+            const matched = sf.filter(f => actualFiles.some(a => a.includes(f.replace(/^.*\//, "")) || f.includes(a.replace(/^.*\//, ""))));
+            const missing = sf.filter(f => !matched.includes(f));
+            const extra = actualFiles.filter(a => !sf.some(f => a.includes(f.replace(/^.*\//, "")) || f.includes(a.replace(/^.*\//, ""))));
+
+            const reflectPrompt = [
+              `【事件驱动 · opencode 完成后 spec 质量反思】`,
+              `任务摘要：${taskSummary}`,
+              ``,
+              `spec 预期文件（${sf.length}）：${sf.join("、")}`,
+              `实际变更文件（${actualFiles.length}）：${actualFiles.slice(0, 10).join("、")}`,
+              `命中：${matched.length} / ${sf.length}`,
+              missing.length > 0 ? `未命中：${missing.join("、")}` : "",
+              extra.length > 0 ? `预期外变更：${extra.slice(0, 5).join("、")}` : "",
+              ``,
+              `请反思：`,
+              `1. 未命中的文件——是 spec 写得不够精确，还是 Lisa 实现时做了合理简化？`,
+              `2. 预期外变更——是否遗漏了需要考虑的集成点？`,
+              `3. 如果有值得记住的判断，用 exec 写入 decisions（type=spec_reflection）。`,
+              `无显著偏差时回复 OK 即可。`,
+            ].filter(Boolean).join("\n");
+            void callGatewayAgent(DESIGNER_AGENT_ID, reflectPrompt, 60_000, undefined, IMPLEMENTOR_AGENT_ID)
+              .catch(() => {});
+          }
+        }
+      } catch { /* spec 反思不影响主流程 */ }
+    })();
+
     // ── 代码图谱增量重建（opencode 完成后，后台更新 Kuzu CodeNode/CODE_CALLS）──
     // fire-and-forget，不阻塞主流程；--incremental --paths 快速模式（~39s）
     void (async () => {
@@ -3470,7 +3524,7 @@ function buildAndyVerificationPrompt(spec: string, lisaReport: string): string {
 }
 
 
-// ── Layer 2 质量评估 → 微调队列 ────────────────────────────────────────
+// ── 质量评估 → 微调队列 ────────────────────────────────────────
 //
 // agent_end 中对云端响应进行轻量评分（规则评分，不调用模型）。
 // 评分 ≥ 0.6 → 写入 data/learning/finetune-queue.jsonl（微调原料）。
@@ -3507,6 +3561,10 @@ interface TaskRegistryEntry {
   deliveryBrief?: string; // Andy 验收完成时的交付简报（家人语言，供 Lucas 告知家人用）
   lucasAcked?: boolean;   // Lucas 是否已主动告知家人完成情况（false=待告知，true=已告知）
   visitorCode?: string;   // 访客邀请码（访客触发任务时写入，用于前端过滤）
+  estimatedHours?: number;  // Andy spec 时的预估工期（小时），供 Lucas 给家人时间预期
+  actualHours?: number;     // completed 时自动计算的实际耗时（小时），供 Andy 学习改进预估
+  blockedAt?: string;       // 任务阻塞时间戳，Lisa report_implementation_issue 或 Andy 请求修订时设置
+  blockedReason?: string;   // 阻塞原因摘要（50 字以内），供 Lucas 注入块显示
 }
 
 function readTaskRegistry(): TaskRegistryEntry[] {
@@ -3596,6 +3654,12 @@ function markTaskStatus(taskId: string, status: TaskRegistryEntry["status"]): vo
   if (status === "completed") {
     entry.completedAt = nowCST();
     entry.lucasAcked = false; // 待 Lucas 主动告知家人
+    // 自动计算实际耗时（小时），供 Andy 下次写 spec 时参考历史数据
+    const submitMs = new Date(entry.submittedAt).getTime();
+    const actualH = (Date.now() - submitMs) / 3_600_000;
+    if (actualH > 0) entry.actualHours = Math.round(actualH * 10) / 10; // 保留一位小数
+    entry.blockedAt = undefined;      // 完成时清除阻塞信号
+    entry.blockedReason = undefined;
   }
   writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
 }
@@ -4661,7 +4725,7 @@ function evolveLifecycles(): void {
 const crewclawRoutingPlugin = {
   id: "crewclaw-routing",
   name: "CrewClaw 三层路由",
-  description: "Layer 2 模型路由 · Layer 3 ChromaDB 注入 · Layer 1 开发任务工具",
+  description: "模型路由 · ChromaDB 注入 · 开发任务工具",
 
   register(api: OpenClawPluginApi) {
 
@@ -4751,7 +4815,7 @@ const crewclawRoutingPlugin = {
     // session → 安全阀 timer（agent_end 释放时 clearTimeout）
     const sessionSemTimer   = new Map<string, ReturnType<typeof setTimeout>>();
 
-    // ━━ Layer 2：模型路由（数据驱动，Axis 1 进化基础）━━━━━━━━━━━━━━━━━━
+    // ━━ 模型路由（数据驱动，Axis 1 进化基础）━━━━━━━━━━━━━━━━━━
     //
     // 路由决策逻辑：
     //   complexityScore = "chat"→0.2, "dev_or_complex"→0.8, 未知→0.5
@@ -4766,7 +4830,7 @@ const crewclawRoutingPlugin = {
     // Andy/Lisa 默认 0.5，localThreshold=0.0 时恒走云端，与旧行为一致。
 
     api.on("before_model_resolve", (_event, ctx) => {
-      // ── Layer 2：base agents（lucas / andy / lisa）────────────────────
+      // ── 模型路由：base agents（lucas / andy / lisa）────────────────────
       const config = AGENT_EVOLUTION_CONFIGS.find((c) => c.agentId === ctx.agentId);
       if (config) {
         const thresholds = loadRoutingThresholds();
@@ -4823,7 +4887,7 @@ const crewclawRoutingPlugin = {
       } catch {}
       const isCloud = event.provider !== "ollama" && !event.model.includes(LOCAL_MODEL);
 
-      // Layer 1 意图：Lucas 从 sessionIntent 读（before_prompt_build 已写入）
+      // 工具注册阶段意图：Lucas 从 sessionIntent 读（before_prompt_build 已写入）
       // Andy / Lisa / Main 的意图固定，按 agentId 直接标注
       let intent: string | null = null;
       if (ctx.agentId === FRONTEND_AGENT_ID) {
@@ -4837,7 +4901,7 @@ const crewclawRoutingPlugin = {
       }
 
       // llm_input 在每次请求开始时触发一次（工具调用尚未发生），
-      // Layer 3 工具调用数据在 agent_end 里通过 toolResult 消息提取，写入 capability-events。
+      // 上下文注入阶段工具调用数据在 agent_end 里通过 toolResult 消息提取，写入 capability-events。
 
       // 缓存本次路由的模型信息，供 agent_end 写 conversations 用
       sessionModel.set(ctx.sessionKey ?? "", { modelUsed: event.model ?? "unknown", isCloud });
@@ -4853,7 +4917,7 @@ const crewclawRoutingPlugin = {
       });
     });
 
-    // ━━ Layer 3：ChromaDB 上下文注入 + Skill 注入 ━━━━━━━━━━━━━━━━━━━
+    // ━━ 上下文注入：ChromaDB + Skill 注入 ━━━━━━━━━━━━━━━━━━━
 
     // ── ContextResolvers：现有查询函数 → context-handler 接口适配 ──────────
     //
@@ -4937,8 +5001,8 @@ const crewclawRoutingPlugin = {
 
     // ── 扩展成员能力视图（CrewClaw 框架层通用机制）────────────────────────────
     // 任何组织的「扩展成员」（有正式关系但边界受控）都适用此机制：
-    //   Layer 1：scope_tags 访问控制（由邀请方/组织管理员授权）
-    //   Layer 2：近期对话语义匹配（相关性过滤）
+    //   scope_tags 访问控制（由邀请方/组织管理员授权）
+    //   近期对话语义匹配（相关性过滤）
     // 同时查询未反馈的 pipeline 完成结果，注入「待主动告知」块。
     // 对外永远是 Lucas 在说话——访客感知不到「影子」这一层。
     async function buildMemberCapabilityView(
@@ -4949,7 +5013,7 @@ const crewclawRoutingPlugin = {
       const capLines: string[] = [];
       const pendingLines: string[] = [];
 
-      // Layer 1 + Layer 2：能力视图
+      // scope_tags + 语义匹配：能力视图
       try {
         const regPath = join(PROJECT_ROOT, "data/corpus/capability-registry.jsonl");
         if (existsSync(regPath)) {
@@ -5716,8 +5780,14 @@ const crewclawRoutingPlugin = {
           const allTasks = readTaskRegistry().filter(
             e => normalizeUserId(e.submittedBy) === userId,
           );
-          // 进行中/排队中任务
-          const runningTasks = allTasks.filter(e => e.status === "running" || e.status === "queued");
+          // 进行中/排队中任务，紧急任务排前面
+          const URGENT_RE = /急|urgent|今天要|马上|尽快|今晚要|赶紧/;
+          const runningTasks = allTasks.filter(e => e.status === "running" || e.status === "queued")
+            .sort((a, b) => {
+              const aUrgent = URGENT_RE.test((a.lucasContext ?? "") + a.requirement) ? 0 : 1;
+              const bUrgent = URGENT_RE.test((b.lucasContext ?? "") + b.requirement) ? 0 : 1;
+              return aUrgent - bUrgent; // 紧急任务排前
+            });
           if (runningTasks.length > 0) {
             const phaseLabels: Record<string, string> = {
               andy_designing: "Andy 设计中",
@@ -5727,12 +5797,16 @@ const crewclawRoutingPlugin = {
             const taskLines = runningTasks.map(t => {
               const agoMin = Math.round((Date.now() - new Date(t.submittedAt).getTime()) / 60_000);
               const statusLabel = t.status === "queued" ? "排队中" : (phaseLabels[t.currentPhase ?? ""] ?? "进行中");
+              const blockedLabel = t.blockedAt ? " ⚠️阻塞中" : "";
+              const urgentLabel = URGENT_RE.test((t.lucasContext ?? "") + t.requirement) ? " 🔴紧急" : "";
+              const estLabel = t.estimatedHours ? `，预估${t.estimatedHours}h` : "";
               const designLine = t.designNote ? `\n  方案要点：${t.designNote.slice(0, 80)}` : "";
               const ctxLine = t.lucasContext ? `\n  背景：${t.lucasContext.slice(0, 60)}` : "";
-              return `• [${statusLabel}] ${t.requirement.slice(0, 80)}（${agoMin} 分钟前提交）${designLine}${ctxLine}`;
+              const blockLine = t.blockedReason ? `\n  阻塞原因：${t.blockedReason.slice(0, 50)}` : "";
+              return `• [${statusLabel}${blockedLabel}${urgentLabel}] ${t.requirement.slice(0, 80)}（${agoMin} 分钟前提交${estLabel}）${designLine}${ctxLine}${blockLine}`;
             });
             appendSystem.push(
-              `【当前进行中任务】\n${taskLines.join("\n")}\n\n如对方询问进展，可按上方方案要点告知（非技术语言）；如对方提新需求，正常受理即可。`,
+              `【当前进行中任务】\n${taskLines.join("\n")}\n\n如对方询问进展，可按上方方案要点告知（非技术语言）；如对方提新需求，正常受理即可。紧急任务优先处理。`,
             );
           }
           // 已完成但 Lucas 尚未告知家人的任务
@@ -5796,7 +5870,7 @@ const crewclawRoutingPlugin = {
     //
     // 对所有 Agent 通用：
     //   - 写入 corpus（每个 Agent 各自的 corpus 文件，从 AGENT_EVOLUTION_CONFIGS 查找）
-    //   - 提取 tool_use 调用 → 写 capability-events.jsonl（Layer 3 活跃度 KPI）
+    //   - 提取 tool_use 调用 → 写 capability-events.jsonl（活跃度 KPI）
     // ── Andy 写操作拦截（基础设施层，不依赖模型记忆遵守）─────────────────────
     // Andy 是方案设计师，不允许直接写文件或修改代码。
     // 所有实现必须通过 trigger_lisa_implementation 交给 Lisa。
@@ -5956,7 +6030,7 @@ const crewclawRoutingPlugin = {
       let lastUser = "";
       let lastAssistant = "";
 
-      // Layer 3：提取本次对话中所有工具调用（名称 + 计数）
+      // 提取本次对话中所有工具调用（名称 + 计数）
       // OpenClaw 格式：{role:"toolResult", toolName:"...", toolCallId:"...", content:[...]}
       // toolName 直接记录了被调用的工具名，无需在 assistant content 里找 tool_use block
       const toolUseCounts: Record<string, number> = {};
@@ -5992,7 +6066,7 @@ const crewclawRoutingPlugin = {
         }
       }
 
-      // ── Layer 3：写 capability-events（有工具调用时）────────────────
+      // ── 写 capability-events（有工具调用时）────────────────
       const totalToolCalls = Object.values(toolUseCounts).reduce((s, n) => s + n, 0);
       if (totalToolCalls > 0) {
         appendJsonl(config.capabilityEventsFile, {
@@ -6452,7 +6526,7 @@ const crewclawRoutingPlugin = {
         }
       }
 
-      // ── Layer 2 质量评估 → 微调队列 ──────────────────────────────────
+      // ── 质量评估 → 微调队列 ──────────────────────────────────
       // qualityScore 已在上方计算（进化信号字段区域）
       if (qualityScore >= FINETUNE_THRESHOLD) {
         enqueueForFinetune({
@@ -6520,7 +6594,7 @@ const crewclawRoutingPlugin = {
       }
     });
 
-    // ━━ Layer 1：trigger_development_pipeline（Lucas 专属）━━━━━━━━━━━
+    // ━━ 工具注册：trigger_development_pipeline（Lucas 专属）━━━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
       label: "触发开发流水线",
@@ -6750,7 +6824,7 @@ const crewclawRoutingPlugin = {
       },
     }));
 
-    // ━━ Layer 1：report_bug（Lucas 专属，Bug 修复直触 Lisa）━━━━━━━━━━━
+    // ━━ 工具注册：report_bug（Lucas 专属，Bug 修复直触 Lisa）━━━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
       label: "提交 Bug 修复",
@@ -7033,7 +7107,7 @@ const crewclawRoutingPlugin = {
       },
     }));
 
-    // ━━ Layer 1：search_web（Lucas 专属，联网搜索）━━━━━━━━━━━━━━━━━━━
+    // ━━ 工具注册：search_web（Lucas 专属，联网搜索）━━━━━━━━━━━━━━━━━━━
 
     api.registerTool((_toolCtx) => ({
       label: "联网搜索",
@@ -7084,7 +7158,7 @@ const crewclawRoutingPlugin = {
       },
     }));
 
-    // ━━ Layer 1：ask_andy（Lucas 专属，直接向 Andy 咨询，不触发流水线）━━━━━━━━━
+    // ━━ 工具注册：ask_andy（Lucas 专属，直接向 Andy 咨询，不触发流水线）━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
       label: "询问 Andy",
@@ -7143,7 +7217,7 @@ const crewclawRoutingPlugin = {
       },
     }));
 
-    // ━━ Layer 1：ask_lisa（Lucas 专属，直接向 Lisa 咨询实现细节，不触发流水线）━━━━━━━━━
+    // ━━ 工具注册：ask_lisa（Lucas 专属，直接向 Lisa 咨询实现细节，不触发流水线）━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
       label: "询问 Lisa",
@@ -7201,7 +7275,7 @@ const crewclawRoutingPlugin = {
       },
     }));
 
-    // ━━ Layer 1：trigger_lisa_implementation（Andy 专属）━━━━━━━━━━━━━
+    // ━━ 工具注册：trigger_lisa_implementation（Andy 专属）━━━━━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
       label: "触发 Lisa 实现",
@@ -7516,14 +7590,18 @@ const crewclawRoutingPlugin = {
           .join(" / ")
           .slice(0, 180);
 
-        // 从 spec 提取 designNote（solution 字段的前 120 字，非技术语言摘要）
+        // 从 spec 提取 designNote（solution 字段的前 120 字，非技术语言摘要）+ estimatedHours
         let designNote = specPreview;
+        let estimatedHours: number | undefined;
         try {
-          const sd = JSON.parse(p.spec) as { solution?: string };
+          const sd = JSON.parse(p.spec) as { solution?: string; estimatedHours?: number };
           if (sd.solution) designNote = sd.solution.slice(0, 120);
+          if (typeof sd.estimatedHours === "number" && sd.estimatedHours > 0) {
+            estimatedHours = sd.estimatedHours;
+          }
         } catch { /* spec 非 JSON 时用 specPreview */ }
 
-        // 更新任务注册表：阶段推进到 lisa_implementing，记录设计摘要
+        // 更新任务注册表：阶段推进到 lisa_implementing，记录设计摘要和预估工期
         const reqIdForPhase = p.requirement_id ?? "";
         if (reqIdForPhase) {
           const taskEntries = readTaskRegistry();
@@ -7531,6 +7609,7 @@ const crewclawRoutingPlugin = {
           if (taskEntry) {
             taskEntry.currentPhase = "lisa_implementing";
             taskEntry.designNote = designNote;
+            if (estimatedHours !== undefined) taskEntry.estimatedHours = estimatedHours;
             writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(taskEntries, null, 2), "utf8");
           }
         }
@@ -8121,6 +8200,17 @@ const crewclawRoutingPlugin = {
           "pipeline", IMPLEMENTOR_AGENT_ID,
         );
 
+        // 写入阻塞信号到任务注册表，Lucas 注入块会显示「⚠️阻塞中」
+        if (p.requirement_id) {
+          const taskEntries = readTaskRegistry();
+          const blockedTask = taskEntries.find(e => e.id === p.requirement_id);
+          if (blockedTask) {
+            blockedTask.blockedAt = nowCST();
+            blockedTask.blockedReason = p.issue.slice(0, 50);
+            writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(taskEntries, null, 2), "utf8");
+          }
+        }
+
         // Lucas 知情：Lisa 遇到实现阻塞，Andy 在决策（用户可能在等，Lucas 可告知"正在处理"）
         if (p.requirement_id) {
           const issueTask = readTaskRegistry().find(t => t.id === p.requirement_id);
@@ -8180,6 +8270,36 @@ const crewclawRoutingPlugin = {
             outcome_at: nowCST(),
             outcome_note: (andyReply ?? "").slice(0, 200),
           } satisfies DecisionRecord);
+
+          // ── 自主判断维度 · Andy 能力缺口反思（事件驱动，4h 冷却）────────────────
+          // Lisa 反复报阻塞时，触发 Andy 反思：是否需要新增工具、改架构、或更新 spec 模板
+          if (!andyBlockerReflectLastRun || Date.now() - andyBlockerReflectLastRun > 4 * 3600_000) {
+            andyBlockerReflectLastRun = Date.now();
+            void (async () => {
+              try {
+                // 查最近 30 天的 implementation_issue 记录
+                const recentIssues = await chromaGet("decisions", {
+                  decision: { $eq: "实现遇阻，上报 Andy" },
+                });
+                const issueCount = recentIssues?.length ?? 0;
+                if (issueCount >= 3) {
+                  const gapPrompt = [
+                    `【自主判断维度 · 能力缺口反思】`,
+                    `最近 Lisa 报了 ${issueCount} 次实现阻塞。`,
+                    `阻塞主题摘要：${(recentIssues ?? []).slice(0, 5).map(d => d.document.slice(0, 80)).join("；")}`,
+                    ``,
+                    `请判断：`,
+                    `1. 这些阻塞是否有共同模式？（如：同一类集成点反复出错、缺少某个工具）`,
+                    `2. 如果有，是 spec 写法需要改进，还是需要新增工具/改架构？`,
+                    `3. 如果判断值得行动，用 exec 写入 decisions（type=capability_gap_proposal），包含建议。`,
+                    `无明确模式时回复 OK 即可。`,
+                  ].join("\n");
+                  void callGatewayAgent(DESIGNER_AGENT_ID, gapPrompt, 60_000, undefined, IMPLEMENTOR_AGENT_ID)
+                    .catch(() => {});
+                }
+              } catch { /* 反思不影响主流程 */ }
+            })();
+          }
           return {
             content: [{ type: "text", text: andyReply ?? "Andy 暂无回复，继续完成 spec 中可以确定的部分。" }],
             details: { reported: true, requirementId: p.requirement_id, threadId },
@@ -8245,6 +8365,15 @@ const crewclawRoutingPlugin = {
           };
         }
         revisionRoundsMap.set(threadId, revCount + 1);
+
+        // 写入阻塞信号到任务注册表（Andy 要求修订 = 任务暂时阻塞）
+        const revTaskEntries = readTaskRegistry();
+        const revTask = revTaskEntries.find(e => e.id === p.requirement_id);
+        if (revTask) {
+          revTask.blockedAt = nowCST();
+          revTask.blockedReason = `验收修订第${revCount + 1}轮：${p.issues.slice(0, 40)}`;
+          writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(revTaskEntries, null, 2), "utf8");
+        }
 
         const message = [
           `【验收修订请求·第 ${revCount + 1} 轮】需求 ${p.requirement_id}`,
@@ -9609,7 +9738,10 @@ const crewclawRoutingPlugin = {
           const time = e.submittedAt.slice(0, 16).replace("T", " ");
           const desc = e.requirement.slice(0, 80);
           const ackLabel = e.status === "completed" && e.lucasAcked === false ? " [待告知]" : e.status === "completed" && e.lucasAcked === true ? " [已告知]" : "";
-          return `${icon} [${e.id}] (${time}) ${desc}${ackLabel}`;
+          const blockLabel = e.blockedAt ? " [⚠️阻塞]" : "";
+          const estLabel = e.estimatedHours ? ` ~${e.estimatedHours}h` : "";
+          const actualLabel = e.actualHours ? ` 实际${e.actualHours}h` : "";
+          return `${icon} [${e.id}] (${time}) ${desc}${ackLabel}${blockLabel}${estLabel}${actualLabel}`;
         });
         return {
           content: [{ type: "text", text: lines.join("\n") }],
