@@ -2419,6 +2419,32 @@ L2 = Vibe Anything × 自进化飞轮（乘法关系）
 
 ---
 
+## v664 · L2 双维度缺口补全 + Main 评估回流 + 调度时序重排（2026-04-14）
+
+**变更类型**：架构增强 + 设计补全
+
+### 背景
+L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系统发现五个缺口。
+
+### 改动
+1. **Lisa L2 角色定义**：三角色体系中 Lisa 是双维度桥梁——Vibe Anything 交付手 + 自进化飞轮信号源。`00-project-overview.md` + `HomeAI Readme.md` 补入。
+2. **回流机制文档化**：五条已实现回流路径 + 新增第六条 Main 评估回流。`00-project-overview.md` 新增「双维度回流机制」段。
+3. **skill-candidates 消费端修复**：Lucas 写入 skill-candidates.jsonl，Andy HEARTBEAT 注入中新增读取逻辑（`index.ts`）。
+4. **Main 评估回流 Andy**：Andy HEARTBEAT 注入读取 `evaluation-history.jsonl` 最后两条记录，退步维度高亮（`index.ts`）。
+5. **evaluate_l2 对齐**：工具描述 + AGENTS.md 汇报格式从旧三问更新为双维度。
+6. **调度时序重排**：Andy HEARTBEAT 从凌晨 2 点移至 6 点（例行动作最后），Main evaluate_system 凌晨 1 点 fire-and-forget，给足 5 小时完成。L4 DPO 从周一 6 点挪至 7 点。
+7. **L2 基线首次测量**：覆盖度 0（task-registry 无 completed）、opencode 100%、交付物 ≥4 种、Andy HEARTBEAT 定时执行正常、andy-learning-state 不存在（主动学习未产出）。
+
+### 文件
+- `CrewClaw/crewclaw-routing/index.ts`：Andy HEARTBEAT 注入（skill-candidates + Main 评估回流）
+- `CrewClaw/daemons/entrances/wecom/index.js`：evaluate_l2 工具描述更新
+- `HomeAILocal/Scripts/gateway-watchdog.js`：调度时序重排 + Main 预评估独立任务
+- `HomeAILocal/Config/scheduled-tasks.json`：新增 main-pre-eval + andy-heartbeat 移至 6 点
+- `Docs/00-project-overview.md`：Lisa 桥梁角色 + 回流机制 + 调度表 + 基线数据
+- `Docs/HomeAI Readme.md`：Lisa 桥梁角色一句话
+
+---
+
 ## v662 · L2 内部分工明确——Andy 自进化主力意志感（2026-04-13）
 
 **干预类型**：L2 设计补全——Andy 作为自进化飞轮主力的定位、意志感与自主行动路径

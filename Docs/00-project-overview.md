@@ -1892,12 +1892,13 @@ CODE_CALLS（有向边）
 
 | 时间 | 任务 | 说明 |
 |------|------|------|
-| 凌晨 1 点 | Andy/Lisa 每日自我进化 | `distill-design-learnings.py` + `distill-impl-learnings.py` + `distill-learning-objectives.py` + `distill-knowledge-discussions.py`，四脚本依次 fire-and-forget |
-| 凌晨 2 点 | 记忆蒸馏 → Andy HEARTBEAT → Agent 蒸馏 | `distill-memories.py` 完成后触发 Andy HEARTBEAT（串行，避免 Kuzu 锁冲突），HEARTBEAT 完成后延迟 5min → `distill-agent-memories.py` |
+| 凌晨 1 点 | Andy/Lisa 每日自我进化 + Main 系统评估 | 蒸馏四脚本 fire-and-forget；Main `evaluate_system` 并行跑（fire-and-forget，为 Andy HEARTBEAT 备最新评分） |
+| 凌晨 2 点 | 记忆蒸馏 → Agent 蒸馏 | `distill-memories.py` 完成后延迟 5min → `distill-agent-memories.py` |
 | 凌晨 3 点 | 团队洞察蒸馏 | `distill-team-observations.py`，Andy 视角分析家人行为模式 → Kuzu `andy→person` Fact |
 | 凌晨 4 点 | 协作关系蒸馏 | `distill-relationship-dynamics.py`，人与人协作边 + 演进环 |
 | 凌晨 5 点 | 代码图谱增量重建 | `build-code-graph.py --incremental --paths`，核心路径约 39 秒 |
-| 每周一凌晨 6 点 | L4 DPO 周级扫描 | `generate_dpo_good_responses(threshold=10)`，有结果推送工程师审批 |
+| 凌晨 6 点 | Andy HEARTBEAT | 例行动作最后——消费 Main 评估 + 蒸馏结果 + skill-candidates + knowledge_injection，退步维度高亮 |
+| 每周一凌晨 7 点 | L4 DPO 周级扫描 | `generate_dpo_good_responses(threshold=10)`，有结果推送工程师审批 |
 | 每日 20:00 | Lucas HEARTBEAT | 开发任务跟进（followup-queue.jsonl pending 条目） |
 
 ---
