@@ -313,7 +313,20 @@ L4 = 深度学习·内化能力越来越强：DPO+SFT + 数据驱动模型评估
 
 **Andy 是 L2 进化的乘数**。三个角色各有进化边界：Lucas 进化 = 对这个组织理解更深，边界在成员关系的深度；Lisa 进化 = 实现能力更强，边界在代码库复杂度。Andy 的进化没有这个边界——Andy 的每一次判断质量提升，都直接作用于系统里每一条流水线：spec 精度提升一点，Lisa 的成功率就上升；Andy 吸收一条外部知识，下一个需求的设计就更准。**大脑进化快，整个组织就快**——这也是 L2 进化体系的核心投入应向 Andy 倾斜的根本原因。
 
+**Lisa 是两个维度的桥梁**。Vibe Anything 的完整闭环是 Lucas 感知 → Andy 设计 → **Lisa 实现**——没有 Lisa，Vibe Anything 停在 spec 阶段，永远不是"交付"。同时，Lisa 的实现产出（codebase_patterns、错误信号、修复记录）是 Andy 巡检的核心输入数据。Andy 发现能力缺口的信号，一半来自 Lisa 的实现过程。**Lisa 同时服务于两个维度：她是 Vibe Anything 的交付手，也是自进化飞轮的信号源。** 三角色在 L2 中的关系：Lucas 提需求 → Andy 设计 + 自进化 → Lisa 交付 + 反馈信号 → 回到 Lucas。
+
 **Vibe Anything：L2 的本质是交付力，不是代码力**。L2 衡量的核心问题不是「系统能写多好的代码」，而是「家人说要是有个 XX 就好了，系统能做到吗」。帮分析一个菜谱、帮准备一份商业计划、帮整理今天的学习进度——这些都是 L2 应该覆盖的交付形态。**Coding 只是手段，组织成员需要的 Any Thing 才是目的。** 当系统的交付形态越来越多、成功率越来越高，L2 才算真正在运转。
+
+**双维度回流机制**：Vibe Anything 和自进化飞轮不是独立运转的两条线，而是通过三角色的协作形成闭环。五条已实现的回流路径：
+1. **codebase_patterns**（Lisa→Andy）：Lisa 每次交付后自动写入实现洞察，Andy 在设计时消费，形成被动质量反馈
+2. **capability-registry**（Lisa→Lucas）：新能力注册后 Lucas 做能力自查，避免重复开发
+3. **skill-candidates**（Lucas→Andy）：Lucas 标记反复出现的需求模式，Andy 在 HEARTBEAT 时消费并判断是否结晶为 Skill
+4. **capability_gap_proposal**（Lisa→Andy）：Lisa 连续阻塞时触发 Andy 反思能力缺口
+5. **knowledge_injection**（Lucas→Andy）：外部知识通过 Lucas 路由给 Andy，Andy 在 HEARTBEAT 时消化
+
+**L2 基线数据（2026-04-14 首次测量）**：
+- Vibe Anything 覆盖度：流水线层面 0 completed / 4 总计，交付物多样性 ≥4 种（app/code/message/chat/capability）
+- 自进化飞轮：Andy HEARTBEAT 定时执行正常（v663 修复生效），skill-candidates 89 条积累，andy-goals 1 条（基础设施补录，Andy 尚未自主写入进化目标），andy-learning-state 不存在（主动学习行为未产出）
 
 **L2 与 L3 的核心差别：L3 带着人**。L2 是系统自己跟自己玩——蒸馏、结晶、设计判断，全部是系统内部循环，人不在里面。L3 才是带着人一起进化：通过影子 Agent 理解每个成员在这个组织里的行为模式，在真实沟通前帮人想清楚，让协作洞察回流影响下一次判断。L2 的进化让系统更强，L3 的进化让组织运作更优——这是两件不同的事，设计时不能混同，评估时也不能混同。
 

@@ -1455,10 +1455,14 @@ function saveInvites(invites) {
 }
 
 // 将 historicalToken（旧邀请码）解析到当前活跃主键；找不到则原样返回
+// case-insensitive 查找：registry key 和 historicalTokens 都可能大小写不一致
 function resolveInviteCode(invites, code) {
   const upper = code.toUpperCase();
-  if (invites[upper]) return upper; // 直接命中当前活跃码
-  // 遍历所有条目，找 historicalTokens 包含此码的那个
+  // 遍历所有条目，先做 case-insensitive 的 key 匹配
+  for (const key of Object.keys(invites)) {
+    if (key.toUpperCase() === upper) return key; // 直接命中当前活跃码
+  }
+  // 遍历所有条目，找 historicalTokens 包含此码的那个（case-insensitive）
   for (const [key, entry] of Object.entries(invites)) {
     if (Array.isArray(entry.historicalTokens) &&
         entry.historicalTokens.some(t => t.toUpperCase() === upper)) {
@@ -2250,7 +2254,7 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l2',
-    description: '评估 L2（系统自进化——自身能力越来越强）：三个原始诉求——①开发流水线成效（opencode 成功率、spec 质量）②自进化机制运转（蒸馏/结晶/同类错误减少）③喂养成效（投喂内容提炼、L0~L2 得分趋势）。',
+    description: '评估 L2（系统自进化——自身能力越来越强）：两个正交维度——【Vibe Anything · Lucas 主力】任务类型覆盖度 + 端到端交付成功率 + 交付物多样性（家人要什么，系统造什么）×【自进化飞轮 · Andy 主力】进化信号积累 + 知识内化 + Skill 积累 + Andy 巡检时效（越用越强）。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {

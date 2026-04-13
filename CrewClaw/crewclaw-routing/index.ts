@@ -4807,6 +4807,8 @@ const crewclawRoutingPlugin = {
     const sessionPendingCorrections = new Map<string, string>();
     // 访客隐私泄漏纠正（独立的 correction map，不与工具调用幻觉共用）
     const sessionVisitorPrivacyCorrections = new Map<string, string>();
+    // 承诺幻觉纠正（false_commitment 检测到但未调工具 → 下一轮注入针对性纠正）
+    const sessionFalseCommitCorrections = new Map<string, string>();
 
     // ── Gateway 资源池实例（插件生命周期内全局共享）──────────────────────────
     // Lucas 专属保留槽位，其余 agent 使用共享竞争槽位
@@ -5432,6 +5434,24 @@ const crewclawRoutingPlugin = {
             `被追问时，自然地转移话题。`
           );
         }
+        // 承诺幻觉纠正（上一轮检测到 false_commitment 时注入）
+        // 这是 tool_call_hallucination 纠正的补全：false_commitment 频率远高于
+        // tool_call_hallucination，之前缺少下一轮纠正机制。
+        const _pendingFalseCommit = sessionFalseCommitCorrections.get(ctx.sessionKey ?? "");
+        if (_pendingFalseCommit) {
+          sessionFalseCommitCorrections.delete(ctx.sessionKey ?? "");
+          appendSystem.push(
+            `【承诺纠正】\n` +
+            `上一轮你说了"${_pendingFalseCommit}"，但实际上没有调用任何工具来执行。\n` +
+            `**没有调工具 = 没有发生。** 这是你最重要的规则。\n` +
+            `你需要做某事时：先调工具，再根据工具结果回复。不能先说"已做"再调工具，也不能不调工具就说"已做"。\n` +
+            `- 需要触发开发 → 先调 trigger_development_pipeline，成功后再说"已提交"\n` +
+            `  返回 ⚠️ 时说"已加入队列"，不说"已提交"\n` +
+            `- 需要报 Bug → 先调 report_bug，成功后再说"已报告"\n` +
+            `- 需要通知 → 先调 send_message，成功后再说"已通知"\n` +
+            `还没做就说「我现在去做」。`
+          );
+        }
 
         // ── 待调度需求队列（仅 HEARTBEAT 触发时注入，避免干扰正常家庭对话）────
         // event.messages 只含历史（不含当前消息）；当前消息在 event.prompt 里。
@@ -5830,7 +5850,28 @@ const crewclawRoutingPlugin = {
       // 语义搜索 topK=5 名额竞争激烈；直近投喂必须走专用时序通道，不依赖语义召回。
       // 只在 Andy HEARTBEAT 时注入，避免干扰正常设计对话。
       if (agentId === DESIGNER_AGENT_ID && /HEARTBEAT/i.test(event.prompt ?? "")) {
+        // ── Andy HEARTBEAT：skill-candidates 结晶信号注入 ──
+        // Lucas 通过 flag_for_skill 和自动检测写入 skill-candidates.jsonl，
+        // Andy 在 HEARTBEAT 时消费，判断是否值得结晶为正式 Skill/Tool。
         try {
+          const scPath = join(DATA_DIR, "learning", "skill-candidates.jsonl");
+          if (existsSync(scPath)) {
+            const scLines = readFileSync(scPath, "utf8").split("\n").filter(l => l.trim());
+            const pending = scLines.filter(l => { try { return JSON.parse(l).status === "pending"; } catch { return false; } });
+            if (pending.length > 0) {
+              const recent = pending.slice(-10); // 最近 10 条 pending
+              const summary = recent.map(l => {
+                try { const j = JSON.parse(l); return `· [${j.pattern ?? j.signal ?? "unknown"}] 触发${j.count ?? "?"}次 ${j.firstSeen ?? ""}`; } catch { return ""; }
+              }).filter(Boolean).join("\n");
+              appendSystem.push(
+                `【技能结晶信号（${pending.length} 条 pending）】\n` +
+                `以下需求模式被 Lucas 标记为反复出现。请判断是否值得结晶为正式 Skill 或 Tool，` +
+                `如果值得，用 exec 写入 decisions（type=skill_proposal）。\n${summary}`
+              );
+            }
+          }
+        } catch { /* 静默 */ }
+        // ── Andy HEARTBEAT：Lucas 知识投喂注入（按时序，不受语义竞争）──────────────
           const sevenDaysAgo = agoCST(7 * 24 * 3600 * 1000);
           const injections = await chromaGet("decisions", {
             "$and": [
@@ -6203,6 +6244,21 @@ const crewclawRoutingPlugin = {
           userId,
           isCloud: isCloudResponse,
         });
+      }
+
+      // ── 承诺幻觉下一轮纠正（Lucas 专属）────────────────────────────────
+      // detectDpoCandidates 已检测并记录 DPO 候选，这里额外提取 false_commitment 模式
+      // 写入 sessionFalseCommitCorrections，让下一轮 before_prompt_build 注入针对性纠正。
+      // 这是 tool_call_hallucination 纠正机制的补全——之前只纠正了"声称读文件"，
+      // 没有纠正"声称已提交/Andy 会"，而后者的发生频率更高。
+      if (ctx.agentId === FRONTEND_AGENT_ID && !isTestSession && dpoFlagged) {
+        const _fcPatterns = getDpoPatterns(ctx.agentId);
+        const _fcAllText = [lastAssistant, ...sendToolContents].join("\n");
+        const _fcCalledCommit = _fcPatterns.commitment_tools.some(t => (toolUseCounts[t] ?? 0) > 0);
+        const _fcHit = _fcPatterns.false_commitment.find(p => _fcAllText.includes(p));
+        if (_fcHit && !_fcCalledCommit) {
+          sessionFalseCommitCorrections.set(ctx.sessionKey ?? "", _fcHit);
+        }
       }
 
       // ── 工具调用幻觉检测（Lucas 专属）──────────────────────────────────────
