@@ -5899,6 +5899,47 @@ const crewclawRoutingPlugin = {
         } catch {
           // 检索失败静默处理
         }
+
+        // ── Andy HEARTBEAT：Main 评估回流（体检医生的诊断摘要）──
+        // Main 的 evaluate_system 沉淀了 L0~L4 评分到 evaluation-history.jsonl。
+        // Andy 在 HEARTBEAT 时消费最近两次评估的趋势变化，退步维度高亮提示。
+        try {
+          const evalHistPath = join(DATA_DIR, "learning", "evaluation-history.jsonl");
+          if (existsSync(evalHistPath)) {
+            const evalLines = readFileSync(evalHistPath, "utf8").split("\n").filter(l => l.trim());
+            if (evalLines.length >= 1) {
+              const last2 = evalLines.slice(-2).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+              if (last2.length >= 1) {
+                const latest = last2[last2.length - 1];
+                const ts = latest.ts ? new Date(latest.ts).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) : "未知时间";
+                const overall = latest.overall != null ? latest.overall.toFixed(1) : "?";
+                const layers = ["L0", "L1", "L2", "L3", "L4"];
+                const layerLabels: Record<string, string> = { L0: "基础设施", L1: "行为质量", L2: "系统自进化", L3: "组织协作进化", L4: "深度学习" };
+                const scores = layers.map(lk => {
+                  const w = latest[lk]?.w;
+                  return `${lk} ${layerLabels[lk]}：${w != null ? w.toFixed(1) : "—"}`;
+                });
+                // 趋势对比（有两条记录时）
+                let trendHint = "";
+                if (last2.length >= 2) {
+                  const prev = last2[0];
+                  const declining: string[] = [];
+                  for (const lk of layers) {
+                    const pw = prev[lk]?.w, cw = latest[lk]?.w;
+                    if (pw != null && cw != null && cw < pw - 0.3) declining.push(`${lk} ${layerLabels[lk]}（${pw.toFixed(1)}→${cw.toFixed(1)}）`);
+                  }
+                  if (declining.length > 0) trendHint = `\n\n⚠️ 退步维度：${declining.join("、")}——请重点关注这些层面的能力缺口。`;
+                }
+                appendSystem.push(
+                  `【Main 系统评估摘要（${ts}）】\n` +
+                  `综合评分 ${overall}/5.0\n${scores.join(" | ")}${trendHint}\n\n` +
+                  `以上是 Main 最近一次系统体检结果。请结合你的巡检判断，` +
+                  `对退步维度或有能力缺口的领域，考虑是否需要主动提出改进提案。`
+                );
+              }
+            }
+          }
+        } catch { /* 静默 */ }
       }
 
       if (prepend.length === 0 && appendSystem.length === 0) return;

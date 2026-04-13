@@ -323,6 +323,7 @@ L4 = 深度学习·内化能力越来越强：DPO+SFT + 数据驱动模型评估
 3. **skill-candidates**（Lucas→Andy）：Lucas 标记反复出现的需求模式，Andy 在 HEARTBEAT 时消费并判断是否结晶为 Skill
 4. **capability_gap_proposal**（Lisa→Andy）：Lisa 连续阻塞时触发 Andy 反思能力缺口
 5. **knowledge_injection**（Lucas→Andy）：外部知识通过 Lucas 路由给 Andy，Andy 在 HEARTBEAT 时消化
+6. **Main 评估回流**（Main→Andy）：Main 的 evaluate_system 评分沉淀到 evaluation-history.jsonl，Andy 在 HEARTBEAT 时消费最近评估趋势，退步维度高亮——Main 是系统的体检医生，诊断结果不只给系统工程师看，也喂给 Andy 驱动自进化
 
 **L2 基线数据（2026-04-14 首次测量）**：
 - Vibe Anything 覆盖度：流水线层面 0 completed / 4 总计，交付物多样性 ≥4 种（app/code/message/chat/capability）
