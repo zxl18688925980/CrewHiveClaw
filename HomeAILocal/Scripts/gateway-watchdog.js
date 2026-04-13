@@ -839,8 +839,8 @@ function probeAndyHeartbeat() {
 
 function shouldRunAndyHeartbeat() {
   const now = new Date();
-  // 每天凌晨 2~3 点之间
-  return now.getHours() === 2;
+  // 每天凌晨 6 点（例行动作最后：蒸馏1-2点、评估1点、team_obs 4点、collab 5点、代码图谱5点全部完成）
+  return now.getHours() === 6;
 }
 
 let lastHeartbeatDay = '';  // 防止同一天重复触发
@@ -1059,20 +1059,12 @@ function runDistill() {
   // Agent 蒸馏（distill-agent-memories.py）必须在 distill-memories.py 退出后再启动：
   //   两者都需要 Kuzu 独占锁；distill-memories.py 末尾还会 spawn render-knowledge.py，
   //   所以等 distill-memories.py 退出后再延迟 5 分钟，确保 render-knowledge.py 也完成。
-  // Andy HEARTBEAT 也在蒸馏完成后、Agent 蒸馏之前触发（避免 Kuzu 锁冲突）。
+  // Andy HEARTBEAT 改为凌晨 3 点独立触发（给 Main 评估足 2 小时）。
   child.on('close', (code) => {
     log(`记忆蒸馏完成（code ${code}）`);
     logTaskExecution('distill-memories', 'L2', '蒸馏管道', code === 0 ? 'success' : 'failure', `exit code ${code}`, code !== 0 ? `exit ${code}` : null, distillStartedAt);
 
-    // 先触发 Andy HEARTBEAT（蒸馏新数据可用，Kuzu 锁已释放）
-    if (pendingHeartbeatToday && lastHeartbeatDay !== new Date().toDateString()) {
-      lastHeartbeatDay = new Date().toDateString();
-      pendingHeartbeatToday = false;
-      log('蒸馏完成后触发 Andy HEARTBEAT...');
-      runAndyHeartbeat().catch(e => log(`Andy HEARTBEAT 异常: ${e.message}`));
-    }
-
-    // 5 分钟后启动 Agent 蒸馏（等待 HEARTBEAT 和 render-knowledge.py 完成）
+    // 5 分钟后启动 Agent 蒸馏（等待 render-knowledge.py 完成）
     if (fs.existsSync(DISTILL_AGENTS_SCRIPT)) {
       log('5 分钟后启动 Agent 记忆蒸馏...');
       setTimeout(() => {
@@ -1100,7 +1092,7 @@ let lastCodeGraphDay     = '';  // 代码图谱每日增量重建触发去重
 let lastL4ScanWeek       = '';  // L4 DPO 周级扫描去重（格式 yyyy-Www）
 
 function shouldRunTeamObs() {
-  // 每天凌晨 3~4 点之间（错开 Andy HEARTBEAT 的 2~3 点，避免 Kuzu 锁竞争）
+  // 每天凌晨 3 点（记忆蒸馏 2 点已完成，Kuzu 锁已释放）
   return new Date().getHours() === 3;
 }
 
@@ -1218,8 +1210,8 @@ function getISOWeek() {
 
 function shouldRunL4Scan() {
   const now = new Date();
-  // 每周一凌晨 6 点（错开所有凌晨 1~5 点的每日任务）
-  return now.getDay() === 1 && now.getHours() === 6;
+  // 每周一凌晨 7 点（错开 Andy HEARTBEAT 的 6 点）
+  return now.getDay() === 1 && now.getHours() === 7;
 }
 
 async function runL4DpoScan() {
@@ -1773,11 +1765,12 @@ schedulePipelineCleanup();
 
 log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama + ChromaDB + cloudflared，Gateway 超时阈值 ${PROBE_TIMEOUT_MS / 1000}s`);
 log('凌晨 1 点：Andy/Lisa 自我进化蒸馏 + Main 系统评估（并行 fire-and-forget，为 Andy HEARTBEAT 备最新评分）');
-log('凌晨 2 点：家人记忆蒸馏（对话 → Kuzu 知识图谱）→ Andy HEARTBEAT（消费 Main 评估 + skill-candidates + knowledge_injection）');
+log('凌晨 2 点：家人记忆蒸馏（对话 → Kuzu 知识图谱）→ Agent 记忆蒸馏');
 log('凌晨 3 点：team_observation（Andy 分析家人行为模式 → Lucas 理解更深）');
 log('凌晨 4 点：家人协作关系蒸馏（谁和谁一起讨论什么 → Kuzu 协作边）');
 log('凌晨 5 点：代码图谱增量重建（CrewClaw + Scripts，~39s）');
-log('每周一凌晨 6 点：L4 DPO 周级扫描（generate_dpo_good_responses threshold=10，有结果推工程师审批）');
+log('凌晨 6 点：Andy HEARTBEAT（例行动作最后，消费 Main 评估 + 蒸馏结果 + skill-candidates + knowledge_injection）');
+log('每周一凌晨 7 点：L4 DPO 周级扫描（generate_dpo_good_responses threshold=10，有结果推工程师审批）');
 log(`长流程任务扫描：每 ${TASK_SCAN_INTERVAL_MS / 1000}s 扫描 processing 超时任务（阈值 ${TASK_STUCK_MS / 60000} 分钟）`);
 log(`群消息推送检测：每 ${GROUP_SILENCE_SCAN_MS / 60000} 分钟扫描（静默阈值 ${GROUP_SILENCE_THRESHOLD_MS / 3_600_000} 小时，告警间隔 ${GROUP_SILENCE_ALERT_INTERVAL_MS / 3_600_000} 小时）`);
 log('访客沉寂检测：每小时扫描一次，凌晨 3 点执行——30 天无对话 → dormant；expiresAt 到期或 dormant 超 90 天 → 蒸馏 + 归档（shadow_status=archived）');
