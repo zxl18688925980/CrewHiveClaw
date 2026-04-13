@@ -737,6 +737,137 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// ─── 评估仪表盘（Web Dashboard）────────────────────────────────────────────────
+// 公网 URL: https://wecom.homeai-wecom-zxl.top/eval-dashboard
+const EVAL_DASHBOARD_URL = 'https://wecom.homeai-wecom-zxl.top/eval-dashboard';
+
+app.get('/api/eval/history', (req, res) => {
+  const historyPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'evaluation-history.jsonl');
+  const count = Math.min(parseInt(req.query.count) || 50, 200);
+  if (!fs.existsSync(historyPath)) return res.json([]);
+  const lines = fs.readFileSync(historyPath, 'utf8').split('\n').filter(l => l.trim());
+  const entries = lines.slice(-count).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  res.json(entries);
+});
+
+app.get('/eval-dashboard', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>HomeAI 系统评估仪表盘</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f0f23;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:12px}
+h1{font-size:18px;text-align:center;margin-bottom:8px;color:#fff}
+.subtitle{font-size:12px;text-align:center;color:#888;margin-bottom:16px}
+.card{background:#1a1a2e;border-radius:10px;padding:14px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.card h2{font-size:14px;margin-bottom:8px;color:#fff;border-bottom:1px solid #333;padding-bottom:6px}
+.chart-wrap{position:relative;height:280px}
+.score-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.score-item{text-align:center;padding:8px 4px;background:#16213e;border-radius:8px}
+.score-item .label{font-size:11px;color:#999;margin-bottom:2px}
+.score-item .value{font-size:22px;font-weight:bold}
+.score-item .pass{color:#2ecc71}
+.score-item .warn{color:#e67e22}
+.score-item .fail{color:#e74c3c}
+.bottleneck{padding:6px 10px;margin:4px 0;border-radius:6px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+.bottleneck.critical{background:rgba(231,76,60,.15);border-left:3px solid #e74c3c}
+.bottleneck.warning{background:rgba(230,126,34,.15);border-left:3px solid #e67e22}
+.bottleneck .name{flex:1}.bottleneck .score{font-weight:bold;min-width:40px;text-align:right}
+.empty{text-align:center;color:#666;padding:40px;font-size:14px}
+.refresh-btn{position:fixed;bottom:20px;right:20px;width:44px;height:44px;border-radius:50%;background:#3498db;color:#fff;border:none;font-size:20px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+</style>
+</head>
+<body>
+<h1>HomeAI 系统评估仪表盘</h1>
+<div class="subtitle" id="lastUpdate">加载中...</div>
+<div class="card"><h2>总体评分</h2><div class="score-grid" id="scoreGrid"></div></div>
+<div class="card"><h2>L0-L4 趋势</h2><div class="chart-wrap"><canvas id="trendChart"></canvas></div></div>
+<div class="card"><h2>子维度分布（最近一次）</h2><div class="chart-wrap"><canvas id="barChart"></canvas></div></div>
+<div class="card"><h2>关键卡点</h2><div id="bottlenecks"></div></div>
+<button class="refresh-btn" onclick="loadData()" title="刷新">&#x21bb;</button>
+<script>
+const LAYER_COLORS={L0:'#2ecc71',L1:'#3498db',L2:'#e67e22',L3:'#9b59b6',L4:'#e74c3c'};
+const LAYER_NAMES={L0:'L0 基础设施',L1:'L1 行为质量',L2:'L2 自进化',L3:'L3 组织协作',L4:'L4 深度学习'};
+const PASS_TH={L0:3.0,L1:3.0,L2:2.5,L3:2.0,L4:2.0};
+let trendChart=null,barChart=null;
+async function loadData(){
+  try{
+    const r=await fetch('/api/eval/history?count=30');
+    const data=await r.json();
+    if(!data.length){document.getElementById('scoreGrid').innerHTML='<div class="empty">暂无评估数据，请先运行 evaluate_system</div>';return;}
+    renderScoreGrid(data);
+    renderTrend(data);
+    renderBar(data);
+    renderBottlenecks(data);
+    document.getElementById('lastUpdate').textContent='最近更新: '+new Date(data[data.length-1].ts).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})+' | 共 '+data.length+' 次评估';
+  }catch(e){document.getElementById('lastUpdate').textContent='加载失败: '+e.message;}
+}
+function renderScoreGrid(data){
+  const latest=data[data.length-1];
+  const keys=['L0','L1','L2','L3','L4'];
+  const avg=latest.overall||0;
+  let html='<div class="score-item"><div class="label">整体均值</div><div class="value '+(avg>=3?'pass':avg>=2?'warn':'fail')+'">'+avg.toFixed(1)+'</div></div>';
+  for(const k of keys){
+    const s=latest[k]?.w;
+    if(s==null)continue;
+    const cls=s>=PASS_TH[k]?'pass':s>=PASS_TH[k]-1?'warn':'fail';
+    html+='<div class="score-item"><div class="label">'+LAYER_NAMES[k]+'</div><div class="value '+cls+'">'+s.toFixed(1)+'</div></div>';
+  }
+  document.getElementById('scoreGrid').innerHTML=html;
+}
+function renderTrend(data){
+  const keys=['L0','L1','L2','L3','L4'];
+  const labels=data.map(e=>{try{return new Date(e.ts).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}catch{return'?';}});
+  const datasets=keys.map(k=>({label:LAYER_NAMES[k],data:data.map(e=>e[k]?.w??null),borderColor:LAYER_COLORS[k],backgroundColor:LAYER_COLORS[k]+'33',tension:.3,pointRadius:2,borderWidth:2,spanGaps:true}));
+  datasets.push({label:'整体均值',data:data.map(e=>e.overall??null),borderColor:'#fff',backgroundColor:'#ffffff22',tension:.3,pointRadius:3,borderWidth:2.5,borderDash:[6,3],spanGaps:true});
+  const ctx=document.getElementById('trendChart').getContext('2d');
+  if(trendChart)trendChart.destroy();
+  trendChart=new Chart(ctx,{type:'line',data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#ccc',font:{size:10}}}},scales:{x:{ticks:{color:'#888',maxRotation:45,font:{size:9}},grid:{color:'#ffffff0a'}},y:{min:0,max:5.5,ticks:{color:'#888',stepSize:1},grid:{color:'#ffffff0a'}}}}});
+}
+function renderBar(data){
+  const latest=data[data.length-1];
+  const keys=['L0','L1','L2','L3','L4'];
+  const names=[],scores=[],colors=[];
+  for(const k of keys){
+    const items=latest[k]?.items||{};
+    for(const[ik,iv]of Object.entries(items)){
+      if(iv?.s==null)continue;
+      names.push(ik.replace(/_/g,' ').substring(0,12));
+      scores.push(iv.s);
+      colors.push(LAYER_COLORS[k]);
+    }
+  }
+  const ctx=document.getElementById('barChart').getContext('2d');
+  if(barChart)barChart.destroy();
+  barChart=new Chart(ctx,{type:'bar',data:{labels:names,datasets:[{data:scores,backgroundColor:colors.map(c=>c+'cc'),borderColor:colors,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#888',font:{size:8},maxRotation:60},grid:{color:'#ffffff0a'}},y:{min:0,max:5.5,ticks:{color:'#888',stepSize:1},grid:{color:'#ffffff0a'}}}}});
+}
+function renderBottlenecks(data){
+  const latest=data[data.length-1];
+  const keys=['L0','L1','L2','L3','L4'];
+  const items=[];
+  for(const k of keys){
+    const its=latest[k]?.items||{};
+    for(const[ik,iv]of Object.entries(its)){
+      if(iv?.s==null)continue;
+      if(iv.s<PASS_TH[k])items.push({layer:k,key:ik,score:iv.s,threshold:PASS_TH[k],critical:iv.s<PASS_TH[k]-1});
+    }
+  }
+  items.sort((a,b)=>a.score-b.score);
+  const el=document.getElementById('bottlenecks');
+  if(!items.length){el.innerHTML='<div style="color:#2ecc71;text-align:center;padding:12px;font-size:13px">所有子维度均达标</div>';return;}
+  el.innerHTML=items.slice(0,15).map(i=>'<div class="bottleneck '+(i.critical?'critical':'warning')+'"><span class="name">'+LAYER_NAMES[i.layer]+' · '+i.key.replace(/_/g,' ')+'</span><span class="score">'+i.s.toFixed(1)+'/'+i.threshold+'</span></div>').join('');
+}
+loadData();
+</script>
+</body>
+</html>`);
+});
+
 // ─── 回调 URL 验证（GET）────────────────────────────────────────────────────
 // 企业微信首次保存回调 URL 时发送 GET，需要解密 echostr 后原样返回
 
@@ -4271,31 +4402,27 @@ ${factsDesc}`;
     } catch (_) {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}`;
+    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}\n\n---\n📊 [交互式仪表盘](${EVAL_DASHBOARD_URL})`;
   }
 
   if (toolName === 'evaluate_trend') {
     const count = Math.min(toolInput.count || 10, 50);
     const historyPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'evaluation-history.jsonl');
     if (!fs.existsSync(historyPath)) {
-      return '暂无评估历史记录。请先运行 evaluate_system 生成首次评估。';
+      return `暂无评估历史记录。请先运行 evaluate_system 生成首次评估。\n\n📊 仪表盘：${EVAL_DASHBOARD_URL}`;
     }
     const lines = fs.readFileSync(historyPath, 'utf8').split('\n').filter(l => l.trim());
     if (lines.length === 0) {
-      return '评估历史为空。请先运行 evaluate_system。';
+      return `评估历史为空。请先运行 evaluate_system。\n\n📊 仪表盘：${EVAL_DASHBOARD_URL}`;
     }
-    // 解析历史
     const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-count);
-
-    // 提取数据
-    const timestamps = entries.map(e => e.ts?.slice(5, 16)?.replace('T', ' ') || '?');
     const layerKeys = ['L0', 'L1', 'L2', 'L3', 'L4'];
     const layerLabels = { L0: 'L0 基础设施', L1: 'L1 行为质量', L2: 'L2 自进化', L3: 'L3 组织协作', L4: 'L4 深度学习' };
     const layerScores = {};
     for (const lk of layerKeys) layerScores[lk] = entries.map(e => e[lk]?.w ?? null);
     const overallScores = entries.map(e => e.overall);
 
-    // 趋势分析：最近3次 vs 之前
+    // 趋势分析
     const trendLines = [];
     for (const lk of layerKeys) {
       const scores = layerScores[lk].filter(s => s !== null);
@@ -4309,11 +4436,10 @@ ${factsDesc}`;
       trendLines.push(`${arrow} ${layerLabels[lk]}：最近 ${recentAvg.toFixed(1)}（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）`);
     }
 
-    // 卡点分析：找拖累得分的子维度
+    // 卡点分析
     const rubric = loadRubric();
     const bottlenecks = [];
     if (rubric) {
-      // 取最近一条记录的所有子维度分数
       const latest = entries[entries.length - 1];
       for (const lk of layerKeys) {
         const layerData = latest[lk];
@@ -4328,105 +4454,6 @@ ${factsDesc}`;
       }
     }
 
-    // 生成 matplotlib 图表
-    const chartDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
-    const chartPath = path.join(chartDir, 'evaluation-trend.png');
-    const chartScript = `
-import sys, json, os
-sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import numpy as np
-from datetime import datetime
-
-lines = open('${historyPath}').read().strip().split('\\n')
-entries = [json.loads(l) for l in lines if l.strip()]
-entries = entries[-${count}:]
-
-layer_keys = ['L0', 'L1', 'L2', 'L3', 'L4']
-layer_labels = ['L0 基础设施', 'L1 行为质量', 'L2 自进化', 'L3 组织协作', 'L4 深度学习']
-colors = ['#2ecc71', '#3498db', '#e67e22', '#9b59b6', '#e74c3c']
-
-ts = []
-for e in entries:
-    try:
-        ts.append(datetime.fromisoformat(e['ts']))
-    except:
-        ts.append(datetime.now())
-
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), gridspec_kw={'height_ratios': [3, 1]})
-fig.patch.set_facecolor('#1a1a2e')
-
-# 上图：各层评分趋势
-ax1.set_facecolor('#16213e')
-for i, lk in enumerate(layer_keys):
-    scores = [e.get(lk, {}).get('w') for e in entries]
-    valid_idx = [j for j, s in enumerate(scores) if s is not None]
-    if valid_idx:
-        ax1.plot([ts[j] for j in valid_idx], [scores[j] for j in valid_idx],
-                 color=colors[i], marker='o', markersize=4, linewidth=1.8, label=layer_labels[i])
-
-# overall 趋势
-overall = [e.get('overall') for e in entries]
-valid_o = [j for j, s in enumerate(overall) if s is not None]
-if valid_o:
-    ax1.plot([ts[j] for j in valid_o], [overall[j] for j in valid_o],
-             color='white', marker='D', markersize=5, linewidth=2.5, label='整体均值', linestyle='--')
-
-ax1.set_ylim(0, 5.5)
-ax1.axhline(y=3.0, color='#e74c3c', linestyle=':', alpha=0.5, label='合格线 3.0')
-ax1.set_ylabel('评分 (0-5)', color='white', fontsize=11)
-ax1.legend(loc='lower left', fontsize=8, facecolor='#16213e', edgecolor='#333', labelcolor='white')
-ax1.tick_params(colors='white')
-ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d %H:%M'))
-ax1.set_title('HomeAI L0-L4 评分趋势', color='white', fontsize=14, fontweight='bold')
-ax1.grid(True, alpha=0.15)
-
-# 下图：最近一次各子维度柱状图
-latest = entries[-1] if entries else {}
-ax2.set_facecolor('#16213e')
-item_names = []
-item_scores = []
-item_colors = []
-for lk in layer_keys:
-    items = latest.get(lk, {}).get('items', {})
-    for ik, iv in items.items():
-        if isinstance(iv, dict) and 's' in iv:
-            item_names.append(f'{lk}.{ik[:8]}')
-            item_scores.append(iv['s'])
-            item_colors.append(colors[layer_keys.index(lk)])
-
-if item_scores:
-    bars = ax2.bar(range(len(item_scores)), item_scores, color=item_colors, alpha=0.8)
-    ax2.axhline(y=3.0, color='#e74c3c', linestyle=':', alpha=0.7)
-    ax2.set_ylim(0, 5.5)
-    ax2.set_ylabel('分数', color='white', fontsize=9)
-    ax2.set_xticks(range(len(item_names)))
-    ax2.set_xticklabels(item_names, rotation=45, ha='right', fontsize=6, color='white')
-    ax2.tick_params(colors='white')
-    ax2.set_title('最近评估子维度', color='white', fontsize=10)
-
-plt.tight_layout()
-plt.savefig('${chartPath}', dpi=150, facecolor='#1a1a2e', bbox_inches='tight')
-plt.close()
-os._exit(0)
-`;
-
-    let chartGenerated = false;
-    try {
-      const tmpChart = path.join(HOMEAI_ROOT, 'temp', `eval-chart-${Date.now()}.py`);
-      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
-      fs.writeFileSync(tmpChart, chartScript);
-      execSync(`${PYTHON311} ${tmpChart}`, { timeout: 30_000, encoding: 'utf8' });
-      try { fs.unlinkSync(tmpChart); } catch (_) {}
-      chartGenerated = fs.existsSync(chartPath);
-    } catch (e) {
-      // matplotlib 不可用时降级为纯文本
-    }
-
-    // 组装返回文本
     const resultLines = [
       `**评分趋势分析（最近 ${entries.length} 次评估）**\n`,
       `**趋势方向**`,
@@ -4440,11 +4467,7 @@ os._exit(0)
       resultLines.push(`\n**关键卡点（低于合格线）**`);
       resultLines.push(...bottlenecks.slice(0, 10));
     }
-    if (chartGenerated) {
-      resultLines.push(`\n📈 趋势图已生成：Data/learning/evaluation-trend.png`);
-      resultLines.push(`提示：调用 send_file 发送 file_path="Data/learning/evaluation-trend.png" 将图表发给业主。`);
-    }
-
+    resultLines.push(`\n📊 [交互式仪表盘](${EVAL_DASHBOARD_URL})`);
     return resultLines.join('\n');
   }
 

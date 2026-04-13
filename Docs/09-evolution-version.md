@@ -7,7 +7,7 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v657
+> **版本**: v659
 > **最后更新**: 2026-04-13
 
 ---
@@ -2285,3 +2285,96 @@ L0~L4 全部落地：
 - 注入顺序：自我认知 > 受众认知 > 最近对话 > 回忆/背景知识
 - 大量 prepend 源迁移到 appendSystem（conversations、decisions、behavior_patterns 等）
 - 仅保留 user-profile（受众）和 app-capabilities（工具）为 prepend
+
+---
+
+## v658 · 项目三问认知校正 + Lucas 可靠性差距分析（2026-04-13）
+
+**干预类型**：认知校正 + 探索分析（非代码变更）
+
+**背景**：v657 会话中，系统工程师发现近期架构决策（v629-v657）偏离了项目初衷——大量决策被放在「让 HomeAI 更好用」的框架下评估，而非回答三个核心问题。
+
+**认知校正**：
+
+1. **项目三问**（架构决策校准标准）：
+   - ① 开发即交付，交付即开发是什么样的？
+   - ② Agentic Team / Organization 应该怎么运作？
+   - ③ AI 时代，研发团队何去何从？
+   - HomeAI / 小姨公司 / 自己管理的部门 = 三个验证项目，不是目的本身
+   - 本质：AI 变革带来的社会实验的一部分
+
+2. **Main 定位校正**：Main 不是为了抢系统的工作多做，而是保留系统演化的「明白人」把控，不是限制自我发展。脚手架是过程态，逐步下沉能力给三角色。
+
+3. **Lucas 受众自适应**：不是「隐藏技术细节」这么简单——Lucas 要看人说话，根据每个人的认知背景用她能理解的方式沟通。对爸爸可以讲逻辑，对妈妈直接说结果，对小姨要说跟她的关系。
+
+4. **运行即测试**：不需要额外加回归测试机制。Main evaluate_l0~l3 = 系统级测试，三角色的日常运作 = 功能级测试，家人反馈 = 验收测试。
+
+**Lucas 可靠性差距分析（探索完成）**：
+
+差距不在模型（模型还是那些模型），在于工程可靠性。Claude Code 可靠是因为有原子化工具、精确读写、ripgrep 搜索等工程模式。
+
+- 工具层：21 个 Lucas 工具中 agentId 守卫不一致（一半硬检查一半 description 文本）、fire-and-forget 异步链缺乏确认、返回格式不统一
+- 上下文层：40 个注入块 / 50-70K tokens 系统提示，MEMORY.md 双注浪费 16-24K tokens，人物信息 6 块重复，承诺规则三重注入
+- 行为层：AGENTS.md 暴露内部术语（Andy/Lisa/pipeline），未实现受众自适应
+
+**下次任务**：Lucas 可靠性增强——工具层加固 + 上下文精简 + AGENTS.md 封装性。
+
+**文档变更**：
+- `Obsidian/04-系统工程师关键决策记录/2026-04-13-项目三问与认知校正.md`（新建）
+- `CLAUDE.md` v658（下次起点更新 + 项目三问 + Main 定位校正 + 运行即测试 + 受众自适应）
+- `Docs/09-evolution-version.md` 本条目
+
+**未修改文件**：无代码变更，本次纯认知校正 + 探索分析
+
+---
+
+### v659：Main 评估体系升级——数值化评分 + Web 仪表盘（设计提案）
+
+**日期**：2026-04-13
+
+**类型**：架构升级（Main 工具 + 前端仪表盘）
+
+**背景**：Main 的 evaluate_l0~l4 全部使用 emoji 三档评分（✅/⚠️/❌），无数值化分数，无历史记录，无法追踪趋势。业主要求 Main 评估时自动提供图形化分析，且以 Web 应用形式在企业微信访问。
+
+**变更**：
+
+1. **新建 `config/evaluation-rubric.json`（框架层配置）**
+   - L0~L4 共 31 个子维度，每个含 name / weight / direction（enum / higher_better / lower_better）/ threshold→score 映射
+   - 评分规则：0=缺失, 1=较差, 2=偏低, 3=合格, 4=良好, 5=完美
+   - pass_threshold：L0=3.0, L1=3.0, L2=2.5, L3=2.0, L4=2.0
+
+2. **重构 evaluate_l0~l4（`wecom/index.js`）**
+   - 保持所有检查逻辑和文本输出不变
+   - 每层末尾新增文本解析评分块：从 results 数组提取原始指标值 → 对照 rubric 阈值 → 输出 0-5 分数
+   - 每层加权均分，文本末尾追加 `· X.X/5.0`
+   - 内部返回结构化评分对象供 evaluate_system 消费
+
+3. **新增 evaluate_trend 工具（Main 专属）**
+   - 读取 `evaluation-history.jsonl`，输出趋势方向 + 关键卡点分析
+   - 自动附 Web 仪表盘链接
+
+4. **evaluate_system 增强**
+   - 收集 L0~L4 结构化分数，生成含数值的评分卡
+   - 写入 `evaluation-history.jsonl`（历史可追溯）
+   - 自动附 Web 仪表盘链接
+
+5. **Web 仪表盘（`/eval-dashboard`）**
+   - 公网 URL：`https://wecom.homeai-wecom-zxl.top/eval-dashboard`
+   - Chart.js 交互式图表，暗色主题，手机友好
+   - 四模块：总体评分（L0-L4 均值）→ 趋势折线图 → 子维度柱状图 → 关键卡点列表
+   - 数据 API：`/api/eval/history`（JSONL → JSON 数组）
+   - 通过 Cloudflare Tunnel 企业微信直接访问
+
+6. **Co-Pilot 化交付**
+   - evaluate_system / evaluate_trend 返回自动附带 `[交互式仪表盘](URL)` markdown 链接
+   - Main 在企业微信回复时，业主点链接即可跳转浏览器查看图形化分析
+
+**设计原则**：
+- 评分逻辑在代码（确定性），rubric 阈值在配置（可调整），历史在文件（可追溯）
+- Main 跑 GLM-5.1，不依赖 LLM 判断来评分——纯代码逻辑
+- 仪表盘是前端渲染（Chart.js CDN），后端只提供数据 API
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/config/evaluation-rubric.json`（新建）
+- `CrewClaw/daemons/entrances/wecom/index.js`（评分框架 + evaluate_l0~l4 重构 + evaluate_system 增强 + evaluate_trend 新增 + 仪表盘路由）
+- `~/.openclaw/workspace-main/AGENTS.md`（工具列表 + 触发词更新）
