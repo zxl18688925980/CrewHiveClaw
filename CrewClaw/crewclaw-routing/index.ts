@@ -6152,6 +6152,7 @@ const crewclawRoutingPlugin = {
       // ── 所有 Agent：写入 conversations（对话流水账）────────────────────
       // 测试会话（sessionKey 含 "test" 或 "watchdog"）跳过所有 ChromaDB 写入，防止脏数据污染
       const isTestSession = /test|watchdog/i.test(ctx.sessionKey ?? "");
+      const isVisitorSession = userId.startsWith("visitor:");
 
       // ── 进化信号字段：提前计算，供 writeMemory 使用 ──────────────────
       const isCloudResponse = !lastAssistant.includes(LOCAL_MODEL);

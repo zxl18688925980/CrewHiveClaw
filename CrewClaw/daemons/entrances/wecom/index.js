@@ -2172,6 +2172,17 @@ const MAIN_TOOLS = [
     description: '系统全面评估（L0~L4）：依次运行 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4，汇总为一张评分卡。业主发「系统评估」时调用此工具。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
+  {
+    name: 'evaluate_trend',
+    description: '评分趋势分析：读取历史评估记录（evaluation-history.jsonl），输出各层分数变化表格 + 趋势方向 + 关键卡点分析（拖累得分的子维度）。业主发「评分趋势」「看看演进」时调用。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        count: { type: 'number', description: '显示最近 N 次评估记录（默认 10）' },
+      },
+      required: [],
+    },
+  },
   // run_claude_code 暂时禁用（2026-03-26）：子进程 execFileSync 阻塞事件循环 120s，
   // 且 Main 容易在不该调用时触发（应改为按需启用，设计待确认后恢复）
   {
@@ -2216,6 +2227,50 @@ const MAIN_TOOLS_OAI = MAIN_TOOLS.map(t => ({
   type: 'function',
   function: { name: t.name, description: t.description, parameters: t.input_schema },
 }));
+
+// ─── 评估体系：数值评分框架 ────────────────────────────────────────────────────
+const _evalScores = {};
+let _rubricCache = null;
+
+function loadRubric() {
+  if (_rubricCache !== null) return _rubricCache;
+  try {
+    _rubricCache = JSON.parse(fs.readFileSync(
+      path.join(HOMEAI_ROOT, 'CrewHiveClaw', 'CrewClaw', 'crewclaw-routing', 'config', 'evaluation-rubric.json'), 'utf8'
+    ));
+  } catch { _rubricCache = null; }
+  return _rubricCache;
+}
+
+function scoreWithRubric(item, rawValue) {
+  if (!item) return 3;
+  if (item.direction === 'enum') return item.map?.[rawValue] ?? 3;
+  if (item.direction === 'higher_better') {
+    for (const [threshold, sc] of (item.thresholds || [])) {
+      if (rawValue >= threshold) return sc;
+    }
+    return 0;
+  }
+  if (item.direction === 'lower_better') {
+    for (const [threshold, sc] of (item.thresholds || [])) {
+      if (rawValue <= threshold) return sc;
+    }
+    return 0;
+  }
+  return 3;
+}
+
+function trackScore(scores, layerItems, key, rawValue) {
+  if (!layerItems?.[key]) return;
+  const item = layerItems[key];
+  scores.push({ key, name: item.name, score: scoreWithRubric(item, rawValue), weight: item.weight, raw: rawValue });
+}
+
+function calcWeightedAvg(scores) {
+  let tw = 0, ts = 0;
+  for (const s of scores) { tw += s.weight; ts += s.score * s.weight; }
+  return tw > 0 ? ts / tw : 0;
+}
 
 // 工具执行
 async function executeMainTool(toolName, toolInput) {
@@ -2961,6 +3016,30 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // 数值评分：从 results 文本提取原始值，对照 rubric 计算 0-5 分
+    const _rub0 = loadRubric();
+    const _L0I = _rub0?.layers?.L0?.items;
+    const _l0s = [];
+    if (_L0I) {
+      for (const r of results) {
+        if (r.includes('gateway-watchdog')) trackScore(_l0s, _L0I, 'process_alive', r.includes('online') ? 'online' : (r.includes('不在') ? 'missing' : 'stopped'));
+        if (r.includes('Kuzu 知识图谱')) { const m = r.match(/(\d+) 条 Fact/); if (m) trackScore(_l0s, _L0I, 'kuzu_data', +m[1]); }
+        if (r.includes('ChromaDB conversations')) trackScore(_l0s, _L0I, 'chromadb_conversations', r.trim().startsWith('✅') ? 'reachable' : 'unreachable');
+        if (r.includes('家人档案最后更新')) { const m = r.match(/([\d.]+) 小时前/); if (m) trackScore(_l0s, _L0I, 'data_freshness', +m[1]); }
+        else if (r.includes('家人档案')) trackScore(_l0s, _L0I, 'data_freshness', 9999);
+        if (r.includes('ChromaDB decisions') && !r.includes('延迟')) trackScore(_l0s, _L0I, 'chromadb_decisions', r.trim().startsWith('✅') ? 'reachable' : 'unreachable');
+        if (r.includes('磁盘空间')) { const m = r.match(/已用 (\d+)%/); if (m) trackScore(_l0s, _L0I, 'disk_space', +m[1]); }
+        if (r.includes('Gateway 延迟')) { const m = r.match(/(\d+)ms/); if (m) trackScore(_l0s, _L0I, 'gateway_latency', +m[1]); }
+        if (r.includes('ChromaDB 延迟')) { const m = r.match(/(\d+)ms/); if (m) trackScore(_l0s, _L0I, 'chromadb_latency', +m[1]); }
+        if (r.includes('内存') && r.includes('活跃')) { const m = r.match(/活跃 (\d+)%/); if (m) trackScore(_l0s, _L0I, 'memory_usage', +m[1]); }
+        if (r.includes('Kuzu 协作边（L3）')) { const m = r.match(/(\d+) 条（/); if (m) trackScore(_l0s, _L0I, 'collab_edges_readiness', +m[1]); }
+      }
+      if (_l0s.length > 0) {
+        const _wa = calcWeightedAvg(_l0s);
+        _evalScores.L0 = { items: _l0s, weighted: _wa };
+        score += ` · ${_wa.toFixed(1)}/5.0`;
+      }
+    }
     return `**L0 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
 
@@ -3192,6 +3271,35 @@ os._exit(0)
     } catch (e) {
       results.push(`⚠️ 子 Agent 检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
+    }
+
+    // 数值评分
+    const _rub1 = loadRubric();
+    const _L1I = _rub1?.layers?.L1?.items;
+    const _l1s = [];
+    if (_L1I) {
+      for (const r of results) {
+        if (r.includes('Lucas 质量')) { const m = r.match(/问题率 (\d+)%/); if (m) trackScore(_l1s, _L1I, 'lucas_output_quality', +m[1]); }
+        if (r.includes('Andy/Lisa 活跃') || r.includes('Andy/Lisa：')) { const ac = (r.match(/Andy (\d+)/)?.[1] || 0) > 0; const lc = (r.match(/Lisa (\d+)/)?.[1] || 0) > 0; trackScore(_l1s, _L1I, 'agent_interactions', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('家人档案注入文件')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l1s, _L1I, 'family_inject', +m[1]); }
+        if (r.includes('每日自我进化产出')) { const ac = (r.match(/design_learning (\d+)/)?.[1] || 0) > 0; const lc = (r.match(/impl_learning (\d+)/)?.[1] || 0) > 0; trackScore(_l1s, _L1I, 'distillation_output', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Kuzu 模式积累')) { const ac = (r.match(/Andy (\d+)/)?.[1] || 0) > 0; const lc = (r.match(/Lisa (\d+)/)?.[1] || 0) > 0; trackScore(_l1s, _L1I, 'pattern_accumulation', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Main') && r.includes('HEARTBEAT')) trackScore(_l1s, _L1I, 'main_heartbeat', r.trim().startsWith('✅') ? 'ok' : 'missing');
+        if (r.includes('子 Agent') || r.includes('andy-evaluator') || r.includes('lisa-evaluator')) { /* scored separately below */ }
+      }
+      // 子 Agent 活跃度（汇总 evaluator + shadow 计数）
+      let subCount = 0;
+      for (const r of results) {
+        if (r.includes('andy-evaluator') && r.trim().startsWith('✅')) subCount++;
+        if (r.includes('lisa-evaluator') && r.trim().startsWith('✅')) subCount++;
+        if (r.includes('访客影子语料') && !r.includes('0 个')) subCount++;
+      }
+      trackScore(_l1s, _L1I, 'sub_agent_activity', subCount);
+      if (_l1s.length > 0) {
+        const _wa = calcWeightedAvg(_l1s);
+        _evalScores.L1 = { items: _l1s, weighted: _wa };
+        score += ` · ${_wa.toFixed(1)}/5.0`;
+      }
     }
 
     return `**L1 评估 ${score}**\n` +
@@ -3435,6 +3543,26 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // 数值评分
+    const _rub2 = loadRubric();
+    const _L2I = _rub2?.layers?.L2?.items;
+    const _l2s = [];
+    if (_L2I) {
+      for (const r of results) {
+        if (r.includes('skill-candidates')) { const m = r.match(/(\d+) 条候选/); if (m) trackScore(_l2s, _L2I, 'skill_candidates', +m[1]); }
+        if (r.includes('dpo-candidates') || (r.includes('dpo') && r.includes('负例'))) { const m = r.match(/(\d+) 条负例/); if (m) trackScore(_l2s, _L2I, 'dpo_candidates', +m[1]); }
+        if (r.includes('Andy HEARTBEAT 上次巡检')) { const m = r.match(/([\d.]+)h 前/); if (m) trackScore(_l2s, _L2I, 'andy_heartbeat_check', +m[1]); }
+        if (r.includes('opencode 近')) { const m = r.match(/成功率 (\d+)%/); if (m) trackScore(_l2s, _L2I, 'opencode_success_rate', +m[1]); }
+        if (r.includes('codebase_patterns') && r.includes('洞察')) { const m = r.match(/(\d+) 条代码/); if (m) trackScore(_l2s, _L2I, 'codebase_patterns', +m[1]); }
+        if (r.includes('Skill 总量')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l2s, _L2I, 'skill_count', +m[1]); }
+      }
+      if (_l2s.length > 0) {
+        const _wa = calcWeightedAvg(_l2s);
+        _evalScores.L2 = { items: _l2s, weighted: _wa };
+        score += ` · ${_wa.toFixed(1)}/5.0`;
+      }
+    }
+
     // 按三个原始诉求分组输出
     const pipeline = results.filter(r => r.includes('opencode') || r.includes('Skill'));
     const mechanism = results.filter(r => r.includes('skill-candidates') || r.includes('dpo') || r.includes('HEARTBEAT') || r.includes('codebase_patterns'));
@@ -3555,6 +3683,27 @@ os._exit(0)
       // 非关键
     }
 
+    // 数值评分
+    const _rub3 = loadRubric();
+    const _L3I = _rub3?.layers?.L3?.items;
+    const _l3s = [];
+    if (_L3I) {
+      for (const r of results) {
+        if (r.includes('协作关系边')) { const m = r.match(/(\d+) 条（/); if (m) trackScore(_l3s, _L3I, 'collab_edges', +m[1]); }
+        if (r.includes('shadow_interactions') || r.includes('演进环')) { const m = r.match(/(\d+) 条演进/); if (m) trackScore(_l3s, _L3I, 'shadow_interactions', +m[1]); }
+        if (r.includes('访客影子') && r.includes('active')) {
+          const m = r.match(/active:(\d+)/);
+          trackScore(_l3s, _L3I, 'visitor_registry', (m && +m[1] > 0) ? 'active' : (r.includes('dormant') ? 'dormant_only' : 'none'));
+        }
+        if (r.includes('关系蒸馏') && r.includes('运行')) trackScore(_l3s, _L3I, 'relationship_distill', r.trim().startsWith('✅') ? 'recent' : (r.includes('尚无') ? 'never' : 'exists'));
+        if (r.includes('成员增强效果')) { const m = r.match(/(\d+)\/(\d+)/); if (m) trackScore(_l3s, _L3I, 'member_enhancement', +m[2] > 0 ? Math.round(+m[1] / +m[2] * 100) : 0); }
+      }
+      if (_l3s.length > 0) {
+        const _wa = calcWeightedAvg(_l3s);
+        _evalScores.L3 = { items: _l3s, weighted: _wa };
+        score += ` · ${_wa.toFixed(1)}/5.0`;
+      }
+    }
     return `**L3 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
 
@@ -3688,6 +3837,39 @@ os._exit(0)
     // 4. 模型能力评估提示（evaluate_local_model 已有完整实现）
     results.push('💡 模型能力评估：调用 evaluate_local_model 运行 8 条测试用例 × 4 维度（行为合规/人格一致性/中文质量/指令遵从），获取本地模型量化评分');
 
+    // 数值评分
+    const _rub4 = loadRubric();
+    const _L4I = _rub4?.layers?.L4?.items;
+    const _l4s = [];
+    if (_L4I) {
+      for (const r of results) {
+        if (r.includes('DPO 信号总计')) { /* count tracked via patterns below */ }
+        if (r.includes('已达内化阈值')) { const m = r.match(/(\d+) 个模式/); if (m) trackScore(_l4s, _L4I, 'dpo_accumulation', 100); }
+        if (r.includes('幻觉') && r.includes('禁令')) trackScore(_l4s, _L4I, 'l2_intervention', r.trim().startsWith('✅') ? 'exists' : 'missing');
+        if (r.includes('本地模型') || r.includes('Ollama') || r.includes('MLX')) {
+          const hasOllama = results.some(x => x.includes('Ollama 模型'));
+          const hasMlx = results.some(x => x.includes('MLX 模型'));
+          if (r.includes('未检测到')) trackScore(_l4s, _L4I, 'local_model_ready', 'none');
+          else if (hasOllama && hasMlx) trackScore(_l4s, _L4I, 'local_model_ready', 'ready');
+          else if (hasOllama || hasMlx) trackScore(_l4s, _L4I, 'local_model_ready', 'partial');
+        }
+      }
+      // DPO 进度：从 pattern 行提取最高进度百分比
+      if (!_l4s.some(s => s.key === 'dpo_accumulation')) {
+        for (const r of results) {
+          if (r.includes('距阈值还差')) { const m = r.match(/还差 (\d+)/); if (m) { const pct = Math.max(0, Math.round((1 - +m[1] / 50) * 100)); trackScore(_l4s, _L4I, 'dpo_accumulation', pct); break; } }
+        }
+        if (!_l4s.some(s => s.key === 'dpo_accumulation')) {
+          const totalLine = results.find(x => x.includes('DPO 信号总计'));
+          if (totalLine) { const m = totalLine.match(/(\d+) 条/); if (m) trackScore(_l4s, _L4I, 'dpo_accumulation', Math.min(+m[1], 50) > 0 ? Math.round(+m[1] / 50 * 100) : 0); }
+        }
+      }
+      if (_l4s.length > 0) {
+        const _wa = calcWeightedAvg(_l4s);
+        _evalScores.L4 = { items: _l4s, weighted: _wa };
+        score += ` · ${_wa.toFixed(1)}/5.0`;
+      }
+    }
     return `**L4 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
 
@@ -4034,6 +4216,9 @@ ${factsDesc}`;
   }
 
   if (toolName === 'evaluate_system') {
+    // 清空上次评分缓存
+    for (const k of Object.keys(_evalScores)) delete _evalScores[k];
+
     // 依次调用 L0~L4 子评估，汇总为评分卡
     const l0 = await executeMainTool('evaluate_l0', {});
     const l1 = await executeMainTool('evaluate_l1', {});
@@ -4047,16 +4232,220 @@ ${factsDesc}`;
       return m ? m[1] : '❓';
     };
 
-    const scoreCard = [
-      `L0 基础设施 ${extractScore(l0)}`,
-      `L1 Agent 人格化 ${extractScore(l1)}`,
-      `L2 进化循环 ${extractScore(l2)}`,
-      `L3 组织协作 ${extractScore(l3)}`,
-      `L4 行为内化 ${extractScore(l4)}`,
-    ].join('\n');
+    // 提取数值评分
+    const extractNum = (text) => {
+      const m = text.match(/(\d+\.\d+)\/5\.0/);
+      return m ? parseFloat(m[1]) : null;
+    };
+
+    // 数值评分卡（含趋势）
+    const rubric = loadRubric();
+    const numCard = [];
+    let totalWeight = 0, totalScore = 0;
+    for (const [lk, text] of [['L0', l0], ['L1', l1], ['L2', l2], ['L3', l3], ['L4', l4]]) {
+      const emoji = extractScore(text);
+      const num = extractNum(text);
+      const label = rubric?.layers?.[lk]?.label || lk;
+      const numStr = num !== null ? `${num.toFixed(1)}/5.0` : '?';
+      const pass = rubric?.layers?.[lk]?.pass_threshold;
+      const passStr = (pass !== undefined && num !== null) ? (num >= pass ? '✅' : '⚠️') : '';
+      numCard.push(`${emoji} ${lk} ${label}：${numStr} ${passStr}`);
+      // 全局加权（等权）
+      if (num !== null) { totalWeight += 1; totalScore += num; }
+    }
+    const overall = totalWeight > 0 ? (totalScore / totalWeight).toFixed(1) : '?';
+
+    // 写入评分历史 JSONL
+    const historyDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+    try {
+      fs.mkdirSync(historyDir, { recursive: true });
+      const historyEntry = {
+        ts: new Date().toISOString(),
+        trigger: toolInput._trigger || 'manual',
+        overall: totalWeight > 0 ? totalScore / totalWeight : null,
+      };
+      for (const lk of ['L0', 'L1', 'L2', 'L3', 'L4']) {
+        if (_evalScores[lk]) historyEntry[lk] = { w: +_evalScores[lk].weighted.toFixed(2), items: Object.fromEntries(_evalScores[lk].items.map(s => [s.key, { s: s.score, r: s.raw }])) };
+      }
+      fs.appendFileSync(path.join(historyDir, 'evaluation-history.jsonl'), JSON.stringify(historyEntry) + '\n');
+    } catch (_) {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡**\n${scoreCard}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}`;
+    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}`;
+  }
+
+  if (toolName === 'evaluate_trend') {
+    const count = Math.min(toolInput.count || 10, 50);
+    const historyPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'evaluation-history.jsonl');
+    if (!fs.existsSync(historyPath)) {
+      return '暂无评估历史记录。请先运行 evaluate_system 生成首次评估。';
+    }
+    const lines = fs.readFileSync(historyPath, 'utf8').split('\n').filter(l => l.trim());
+    if (lines.length === 0) {
+      return '评估历史为空。请先运行 evaluate_system。';
+    }
+    // 解析历史
+    const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-count);
+
+    // 提取数据
+    const timestamps = entries.map(e => e.ts?.slice(5, 16)?.replace('T', ' ') || '?');
+    const layerKeys = ['L0', 'L1', 'L2', 'L3', 'L4'];
+    const layerLabels = { L0: 'L0 基础设施', L1: 'L1 行为质量', L2: 'L2 自进化', L3: 'L3 组织协作', L4: 'L4 深度学习' };
+    const layerScores = {};
+    for (const lk of layerKeys) layerScores[lk] = entries.map(e => e[lk]?.w ?? null);
+    const overallScores = entries.map(e => e.overall);
+
+    // 趋势分析：最近3次 vs 之前
+    const trendLines = [];
+    for (const lk of layerKeys) {
+      const scores = layerScores[lk].filter(s => s !== null);
+      if (scores.length < 2) { trendLines.push(`${layerLabels[lk]}：数据不足（需 ≥2 次）`); continue; }
+      const recent = scores.slice(-3);
+      const prev = scores.slice(0, -3);
+      const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+      const prevAvg = prev.length > 0 ? prev.reduce((a, b) => a + b, 0) / prev.length : recentAvg;
+      const delta = recentAvg - prevAvg;
+      const arrow = delta > 0.2 ? '📈' : delta < -0.2 ? '📉' : '➡️';
+      trendLines.push(`${arrow} ${layerLabels[lk]}：最近 ${recentAvg.toFixed(1)}（${delta >= 0 ? '+' : ''}${delta.toFixed(2)}）`);
+    }
+
+    // 卡点分析：找拖累得分的子维度
+    const rubric = loadRubric();
+    const bottlenecks = [];
+    if (rubric) {
+      // 取最近一条记录的所有子维度分数
+      const latest = entries[entries.length - 1];
+      for (const lk of layerKeys) {
+        const layerData = latest[lk];
+        if (!layerData?.items) continue;
+        const passTh = rubric.layers?.[lk]?.pass_threshold ?? 3.0;
+        for (const [itemKey, itemData] of Object.entries(layerData.items)) {
+          if (itemData.s < passTh) {
+            const name = rubric.layers?.[lk]?.items?.[itemKey]?.name || itemKey;
+            bottlenecks.push(`🔴 ${lk} · ${name}：${itemData.s}/5（阈值 ${passTh}）`);
+          }
+        }
+      }
+    }
+
+    // 生成 matplotlib 图表
+    const chartDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+    const chartPath = path.join(chartDir, 'evaluation-trend.png');
+    const chartScript = `
+import sys, json, os
+sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import numpy as np
+from datetime import datetime
+
+lines = open('${historyPath}').read().strip().split('\\n')
+entries = [json.loads(l) for l in lines if l.strip()]
+entries = entries[-${count}:]
+
+layer_keys = ['L0', 'L1', 'L2', 'L3', 'L4']
+layer_labels = ['L0 基础设施', 'L1 行为质量', 'L2 自进化', 'L3 组织协作', 'L4 深度学习']
+colors = ['#2ecc71', '#3498db', '#e67e22', '#9b59b6', '#e74c3c']
+
+ts = []
+for e in entries:
+    try:
+        ts.append(datetime.fromisoformat(e['ts']))
+    except:
+        ts.append(datetime.now())
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), gridspec_kw={'height_ratios': [3, 1]})
+fig.patch.set_facecolor('#1a1a2e')
+
+# 上图：各层评分趋势
+ax1.set_facecolor('#16213e')
+for i, lk in enumerate(layer_keys):
+    scores = [e.get(lk, {}).get('w') for e in entries]
+    valid_idx = [j for j, s in enumerate(scores) if s is not None]
+    if valid_idx:
+        ax1.plot([ts[j] for j in valid_idx], [scores[j] for j in valid_idx],
+                 color=colors[i], marker='o', markersize=4, linewidth=1.8, label=layer_labels[i])
+
+# overall 趋势
+overall = [e.get('overall') for e in entries]
+valid_o = [j for j, s in enumerate(overall) if s is not None]
+if valid_o:
+    ax1.plot([ts[j] for j in valid_o], [overall[j] for j in valid_o],
+             color='white', marker='D', markersize=5, linewidth=2.5, label='整体均值', linestyle='--')
+
+ax1.set_ylim(0, 5.5)
+ax1.axhline(y=3.0, color='#e74c3c', linestyle=':', alpha=0.5, label='合格线 3.0')
+ax1.set_ylabel('评分 (0-5)', color='white', fontsize=11)
+ax1.legend(loc='lower left', fontsize=8, facecolor='#16213e', edgecolor='#333', labelcolor='white')
+ax1.tick_params(colors='white')
+ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d %H:%M'))
+ax1.set_title('HomeAI L0-L4 评分趋势', color='white', fontsize=14, fontweight='bold')
+ax1.grid(True, alpha=0.15)
+
+# 下图：最近一次各子维度柱状图
+latest = entries[-1] if entries else {}
+ax2.set_facecolor('#16213e')
+item_names = []
+item_scores = []
+item_colors = []
+for lk in layer_keys:
+    items = latest.get(lk, {}).get('items', {})
+    for ik, iv in items.items():
+        if isinstance(iv, dict) and 's' in iv:
+            item_names.append(f'{lk}.{ik[:8]}')
+            item_scores.append(iv['s'])
+            item_colors.append(colors[layer_keys.index(lk)])
+
+if item_scores:
+    bars = ax2.bar(range(len(item_scores)), item_scores, color=item_colors, alpha=0.8)
+    ax2.axhline(y=3.0, color='#e74c3c', linestyle=':', alpha=0.7)
+    ax2.set_ylim(0, 5.5)
+    ax2.set_ylabel('分数', color='white', fontsize=9)
+    ax2.set_xticks(range(len(item_names)))
+    ax2.set_xticklabels(item_names, rotation=45, ha='right', fontsize=6, color='white')
+    ax2.tick_params(colors='white')
+    ax2.set_title('最近评估子维度', color='white', fontsize=10)
+
+plt.tight_layout()
+plt.savefig('${chartPath}', dpi=150, facecolor='#1a1a2e', bbox_inches='tight')
+plt.close()
+os._exit(0)
+`;
+
+    let chartGenerated = false;
+    try {
+      const tmpChart = path.join(HOMEAI_ROOT, 'temp', `eval-chart-${Date.now()}.py`);
+      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      fs.writeFileSync(tmpChart, chartScript);
+      execSync(`${PYTHON311} ${tmpChart}`, { timeout: 30_000, encoding: 'utf8' });
+      try { fs.unlinkSync(tmpChart); } catch (_) {}
+      chartGenerated = fs.existsSync(chartPath);
+    } catch (e) {
+      // matplotlib 不可用时降级为纯文本
+    }
+
+    // 组装返回文本
+    const resultLines = [
+      `**评分趋势分析（最近 ${entries.length} 次评估）**\n`,
+      `**趋势方向**`,
+      ...trendLines,
+    ];
+    if (overallScores.filter(s => s !== null).length >= 2) {
+      const latestOverall = overallScores.filter(s => s !== null).slice(-1)[0];
+      resultLines.push(`\n📊 整体均值：${latestOverall.toFixed(1)}/5.0`);
+    }
+    if (bottlenecks.length > 0) {
+      resultLines.push(`\n**关键卡点（低于合格线）**`);
+      resultLines.push(...bottlenecks.slice(0, 10));
+    }
+    if (chartGenerated) {
+      resultLines.push(`\n📈 趋势图已生成：Data/learning/evaluation-trend.png`);
+      resultLines.push(`提示：调用 send_file 发送 file_path="Data/learning/evaluation-trend.png" 将图表发给业主。`);
+    }
+
+    return resultLines.join('\n');
   }
 
   return `未知工具：${toolName}`;

@@ -7,8 +7,57 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v654
+> **版本**: v657
 > **最后更新**: 2026-04-13
+
+---
+
+## v657 · 00-project-overview 四项机制文档补全（2026-04-13）
+
+**干预类型**：文档维护（P0/P1 实现细节补入设计文档）
+
+**背景**：v645-v651 实现了 P0 图增强检索、P1 Entity Tags、因果双置信度提取、代码知识自动蒸馏四项机制，代码已全部落地，但 `00-project-overview.md` 中缺少对应的设计描述。第二个系统工程师无法仅凭代码理解这些机制的设计意图和选择原因。
+
+**变更清单**：
+
+1. **因果关系双置信度**（§2.2 蒸馏节）：从「必须出现线索词，不推断」更新为高置信（0.85，明确线索词）/ 中置信（0.7，上下文合理推断）双档，匹配实际 `distill-memories.py` 实现
+2. **代码知识自动蒸馏**（§2.2 蒸馏节，新增段落）：描述 codebase_patterns 写入时机（opencode 完成后 + Lisa 编辑路径）、Andy 上下文注入（context-sources.ts 注册）、主动查询（search_codebase scope=history），以及框架层机制如何适配不同实现工具
+3. **Entity Tags 元数据 + 实体加权重排**（§2.3 上下文工程，新增条目）：描述写入层（extractEntityHits → entityTags metadata）和检索层（timeWeightedRerankWithEntityBoost 1.5x boost），说明 post-filtering reranking 的设计选择及三原因
+4. **P0 图增强检索机制**（§2.1 记忆四维，扩展）：从一行括号扩展为完整的 extractEntityHits → graphExpandEntities → Kuzu Entity→Topic→Fact 遍历 → appendSystemContext 注入路径描述，含访客隔离守卫
+
+**写作视角**：所有补充内容从「第二个系统工程师重建项目」角度撰写——不仅描述做了什么，还说明为什么这样设计、设计选择的原因、框架层机制在第二个部署中如何复用。
+
+**未修改文件**：HomeAI Readme.md（愿景层，不含实现细节）、08-handbook（协作技巧，不含架构机制）
+
+---
+
+## v655 · Readme 系列文档全面刷新（2026-04-13）
+
+**干预类型**：文档维护（v650-v654 变更同步到 Readme 系列）
+
+**背景**：系统经历 v650-v654 大量架构变更（Andy 三维主动性 + 系统思考者转型、Lucas PM 能力增强、上下文注入优化、代码图谱化），但 Readme 系列文档存在多处过时描述。
+
+**变更清单**：
+
+1. **00-project-overview.md**（12 处修复）：
+   - Andy 角色定位从「技术设计师」→「系统思考者 + 技术设计师」，补充三维主动性和代码图谱能力
+   - Lucas 角色补充 PM 能力维度（工期感知/阻塞信号/紧急排序/交付闭环）
+   - Andy 工具表补齐 trigger_lisa_integration / request_implementation_revision / evict_sub_agent
+   - Andy/Lisa capability 注册从「2 个工具」更新为实际数量（15/10）
+   - 蒸馏频率描述从「每周/每 7 天」统一为「每日」
+   - Coordinator 模式 Lisa 模型标注错误修正（DeepSeek Reasoner → MiniMax M2.7）
+   - notify_engineer 重新定位：从「请求干预的通道」→「三角色通用透明通报工具」
+   - Lucas 任务协调管理信号 A 改为动态阈值（estimatedHours × 1.5）
+   - 技术栈总览表 Andy/Lucas 描述更新
+
+2. **HomeAI Readme.md**（3 处更新）：
+   - Andy 角色列定位更新 + 补充代码图谱查询、预估工期
+   - Lucas 角色列补充 PM 能力描述
+   - Andy 人格描述段补充三维主动性人话描述
+
+3. **08-claudecode-handbook.md**：
+   - 版本号 v432→v654，日期更新
+   - Main 工具补 evaluate_local_model
 
 ---
 
