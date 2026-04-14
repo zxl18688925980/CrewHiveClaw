@@ -2775,3 +2775,56 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `CrewClaw/crewclaw-routing/index.ts`（自动重触发 + `runLucasPipelineFallback` + missing try fix + catch syntax）
 - `~/HomeAI/Data/learning/task-registry.json`（3 failed → cancelled）
 - `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v668 · Lx 能力分级体系重构 + watchdog 修复 + 架构拓扑厘清（2026-04-14）
+
+### 1. Lx 能力分级体系重构
+
+**问题**：原有 L2 定义同时包含「Vibe Anything（帮人做事）」和「系统自进化（自己变强）」两个正交维度，本质上是爸爸的双重身份（家庭成员+系统工程师）导致的设计边界模糊。L4 只定义为「深度学习（DPO+微调）」，遗漏了系统层面的自我改进能力。
+
+**决策**：重新定义 Lx 体系：
+- L2 = **Vibe Anything**·开发即交付（帮人做事的能力）：Lucas 感知家人需求 → Andy 设计 → Lisa 实现 → 家人用上
+- L4 = **系统自我演化**·让 L0~L3 越来越好的元能力，含两层：
+  - 系统层自我改进（结晶/蒸馏/spec 质量提升/DPO 信号收集/路由阈值进化/Andy 主动巡检）
+  - 模型层内化（本地模型微调/DPO 训练/行为模式写入权重）
+
+**L2 与 L4 核心差别**：L2 是「帮人做事的能力」，L4 是「自己变强的能力」。L2 与 L3 核心差别：L3 带着人。
+
+**控制回路**：「正朔→认知」工作流——系统工程师修改 Readme（正朔）→ 刷新 Agent 认知文件（AGENTS.md/SOUL.md/MEMORY.md/TOOLS.md），这是系统工程师影响系统自演化方向的最关键工作流，也是 L4 的控制回路。
+
+**刷新范围**（进行中）：
+- ✅ `docs/HomeAI Readme.md` line 150：Lx 里程碑引用段落
+- ✅ `docs/00-project-overview.md` §七 核心定义表 + 说明文字（lines 290-335）
+- ✅ `docs/00-project-overview.md` 散落引用：结晶路径/学习闭环/Andy 原则/记忆系统图（~6 处）
+- ⬜ `docs/00-project-overview.md` §八「L2：系统自进化」整节改 L4 + L4 行为内化节对齐 + watchdog 描述 + HEARTBEAT 标签 + 其他散落引用
+- ⬜ Agent 认知文件刷新（四角色全刷）
+
+### 2. Watchdog probe 自毁循环修复
+
+**问题**：gateway-watchdog 通过 `/v1/chat/completions` 发 `model: 'openclaw/lucas'` + `content: 'watchdog probe'` 验证 LLM 链路。Lucas 把 probe 当用户消息处理，调用 `restart_service` 重启 Gateway。watchdog 下一轮发现 Gateway 无响应又触发重启，形成自毁循环。
+
+**根因**：watchdog 探测 Gateway，不应通过 Gateway 内部验证 Gateway（逻辑倒挂）。LLM 链路健康是 Gateway 自己的内部事务。
+
+**修复**：
+1. `gateway-watchdog.js`：probe 从 LLM 请求改为纯 `/health` HTTP GET
+2. `crewclaw-routing/index.ts`：`before_prompt_build` 开头增加 watchdog probe 短路拦截
+
+### 3. 架构拓扑厘清
+
+确认系统架构的四个独立组件及其关系：
+- **watchdog**（PM2）= Main 的基础设施，独立于 Gateway
+- **Gateway**（launchd）= Lucas/Andy/Lisa 的主进程
+- **wecom-entrance**（PM2）= 统一外部接口，内含 bot 通道 + 企业应用通道两条独立通道
+- **Main** = 直连 LLM API（`callMainModel` → `fetch(completionsUrl)`），不经 Gateway
+
+**设计原则**：watchdog 探测 Gateway 只做外部 HTTP 检查，不做 LLM 请求验证。
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（watchdog probe 短路拦截）
+- `HomeAILocal/Scripts/gateway-watchdog.js`（probe 改为 /health-only）
+- `docs/HomeAI Readme.md`（Lx 里程碑引用）
+- `docs/00-project-overview.md`（核心定义表 + 散落引用，部分完成）
+- `docs/09-evolution-version.md`（本条目）
+- `docs/10-engineering-notes.md`（watchdog 自毁循环约束追加）
