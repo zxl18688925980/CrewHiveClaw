@@ -3172,3 +3172,47 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `Docs/HomeAI Readme.md`
 - `Docs/00-project-overview.md`
 - `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v678（2026-04-15）
+
+**主题**：L1 自进化链路补全——flag_for_skill 三角色共用 + Skill 固化三层机制
+
+**背景与动机**：
+- 原设计 `flag_for_skill` 是 Lucas 专属工具，Andy/Lisa 在流水线执行中遇到弱信号没有出口
+- Andy HEARTBEAT 的检查 2（skill-candidates 评估）依赖候选池，但输入源只有 Lucas——流水线里最密集产生缺口感知的两个角色反而无法标记
+- 核心原则确立：**L1 自进化要靠各角色自己的主动性，不依赖定时任务**；Andy HEARTBEAT 是批处理端，三角色主动 flag 是感知生产端
+
+**变更内容**：
+
+1. **`crewclaw-routing/index.ts`**：
+   - `flag_for_skill` 从 Lucas 专属 → 三角色共用
+   - guard 从 `!== FRONTEND_AGENT_ID` 改为 `allowedAgents.has(agentId)`（阻止 main，开放 lucas/andy/lisa）
+   - jsonl 记录新增 `source: toolCtx.agentId` 字段，标记哪个角色发出信号
+   - description 更新为三角色各自的弱信号示例（Lucas/Andy/Lisa 各一套）
+
+2. **`~/.openclaw/workspace-andy/AGENTS.md`**：
+   - Skill 自主管理从「直接 skill_manage」升级为两级机制
+   - 弱信号（首次出现、尚不确定）→ `flag_for_skill`；稳定信号（2+ 次、pattern 清晰）→ `skill_manage create`
+
+3. **`~/.openclaw/workspace-lisa/AGENTS.md`**：同上，弱信号示例换成 Lisa 实现场景
+
+4. **Readme 系列文档全量对齐**：
+   - `Docs/HomeAI Readme.md`：L1 段"两层"→"三层"（新增弱信号预标记层）
+   - `Docs/00-project-overview.md`：6 处更新——V字流水线热路径、skill-candidates 写入描述、工具表 flag_for_skill 行、L1 Skill 自主管理三层表、flag_for_skill 工具签名（修正参数名 situation_type→pattern_name）、三轴进化"Lucas 感知"→"三角色感知"
+   - `~/HomeAI/CLAUDE.md`：Lucas 21专属→20专属，共享 9→10，flag_for_skill 迁移到共享工具
+
+**设计决策**：
+- `flag_for_skill` 工具签名中实际参数（`pattern_name`/`description`/`suggested_form`）与 00-project-overview 文档记录（`situation_type`/`examples`/`context`）存在历史漂移，本次一并修正
+- 两级机制门槛：弱信号首次即可 flag（低门槛，不遗漏）；稳定信号 2+ 次才直接结晶（高确信，不产生劣质 Skill）
+- L1 与 L4 职责边界：agent 任务中感知 = L1；HEARTBEAT 批处理候选池 = L4；两者配合才能让结晶链路真正转起来
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`
+- `~/.openclaw/workspace-andy/AGENTS.md`
+- `~/.openclaw/workspace-lisa/AGENTS.md`
+- `Docs/HomeAI Readme.md`
+- `Docs/00-project-overview.md`
+- `Docs/09-evolution-version.md`（本条目）
+- `~/HomeAI/CLAUDE.md`
