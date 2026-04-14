@@ -1103,6 +1103,82 @@ async function chromaUpsert(
   if (!resp.ok) throw new Error(`ChromaDB upsert failed: ${resp.status}`);
 }
 
+// ── Closet 层（MemPalace 借鉴：两层检索架构）─────────────────────────
+// conversations_closets = 紧凑索引层（小文档，语义精准）
+// conversations         = 原文 drawer 层（完整内容，按 ID fetch）
+//
+// 检索流程：搜 closets → 取 drawer_id → batch fetch 原文 → rerank
+// 写入流程：writeMemory 同步为每个 chunk 写一条 closet
+// 兼容：closets 为空（历史数据无 closet）时静默 fallback 到直接搜 conversations
+
+/** 按 ID 批量取 drawers（不做向量搜索，精确 fetch） */
+async function chromaGetByIds(
+  collection: string,
+  ids: string[],
+): Promise<Array<{ id: string; document: string; metadata: Record<string, unknown> }>> {
+  if (ids.length === 0) return [];
+  const colId = await getChromaCollectionId(collection);
+  const resp = await fetch(`${CHROMA_BASE}/${colId}/get`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, include: ["documents", "metadatas"] }),
+  });
+  if (!resp.ok) throw new Error(`chromaGetByIds failed: ${resp.status}`);
+  const data = await resp.json() as { ids: string[]; documents: string[]; metadatas: Record<string, unknown>[] };
+  return (data.ids ?? []).map((id, i) => ({
+    id,
+    document: data.documents[i] ?? "",
+    metadata: data.metadatas[i] ?? {},
+  }));
+}
+
+/**
+ * 构建 closet 文档：紧凑、聚焦，供语义检索定位 drawer
+ * 格式：[hall_type] entities: prompt摘要 | response摘要 →drawerId
+ */
+function buildClosetDoc(
+  prompt: string,
+  response: string,
+  drawerId: string,
+  hallType: string,
+  entityTags: string,
+  userId: string,
+): string {
+  const entities = entityTags || userId;
+  const promptSummary  = prompt.slice(0, 120).replace(/\n/g, " ").trim();
+  const responseSummary = response.slice(0, 80).replace(/\n/g, " ").trim();
+  return `[${hallType}] ${entities}: ${promptSummary}${responseSummary ? ` | ${responseSummary}` : ""} →${drawerId}`;
+}
+
+/**
+ * Closet-first 检索：先搜索 conversations_closets（紧凑索引），
+ * 命中后 batch fetch conversations 原文 drawer。
+ * 若 closets 集合为空或查询失败，返回 [] 由调用方 fallback 到直接搜 conversations。
+ */
+async function closetFirstSearch(
+  embedding: number[],
+  where?: Record<string, unknown>,
+  nClosets = 20,
+  nFinal = 10,
+): Promise<Array<{ document: string; metadata: Record<string, unknown> }>> {
+  try {
+    const closetResults = await chromaQuery("conversations_closets", embedding, nClosets, where);
+    if (closetResults.length === 0) return [];
+
+    // 从 closet metadata 提取 drawer_id，去重后 batch fetch
+    const drawerIds = [...new Set(
+      closetResults.map(r => r.metadata.drawer_id as string).filter(Boolean),
+    )].slice(0, nFinal);
+    if (drawerIds.length === 0) return [];
+
+    const drawers = await chromaGetByIds("conversations", drawerIds);
+    console.log(`[closet] ${closetResults.length} closet hits → ${drawers.length} drawers fetched`);
+    return drawers.map(d => ({ document: d.document, metadata: d.metadata }));
+  } catch (_e) {
+    return []; // fallback 到 direct search 由调用方处理
+  }
+}
+
 // ── 对话记忆（conversations 集合）────────────────────────────────────
 
 // P3 图定向召回（关系路径）：通过 Kuzu 关系边找出与当前说话人有直接关系的家人 ID
@@ -1407,40 +1483,49 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
       : isVisitorQuery
         ? { $and: [humanFilter, { userId: { $eq: visitorUserIdFilter.toLowerCase() } }] }
         : humanFilter;
-    // ── Step 3a: Kuzu 预筛（entity-based pre-filter）─────────────────────
-    // 如果 entityHits 非空，先在有 entity tag 匹配的记录中搜索，不足时 fallback 全量补充
-    // 利用 ChromaDB metadata where 过滤 entityTags 字段（逗号分隔字符串，$contains 匹配）
+    // ── Step 3a: Closet-first 检索（MemPalace 两层架构）─────────────────
+    // 主路径：先搜 conversations_closets（紧凑索引），命中后 fetch 原文 drawer
+    // Fallback：closets 为空（历史对话无 closet）→ 直接搜 conversations（含 entity 预筛）
     const fetchSize = MEMORY_CONTEXT_SIZE * 2;
     let raw: Array<{ document: string; metadata: Record<string, unknown> }>;
     const queryEntityIds = entityHits.length > 0 ? new Set(entityHits) : null;
 
-    if (queryEntityIds && !isGroup && !isVisitorSession) {
-      // 预筛：构建 entity OR 条件，每个 entityHit 做 $contains 匹配
-      const entityOrConditions = Array.from(queryEntityIds).map(eid => ({ entityTags: { $contains: eid } }));
-      const entityFilter: Record<string, unknown> = { $and: [where, { $or: entityOrConditions }] };
-      try {
-        const entityRaw = await chromaQuery("conversations", searchEmbedding, fetchSize, entityFilter);
-        if (entityRaw.length >= MEMORY_CONTEXT_SIZE) {
-          // 预筛结果充足，直接用
-          raw = entityRaw;
-          console.log(`[P2] entity pre-filter: ${entityRaw.length} results from ${queryEntityIds.size} entities (sufficient)`);
-        } else {
-          // 预筛不足，全量补充，去重合并
-          const supplementSize = fetchSize - entityRaw.length;
-          const supplement = await chromaQuery("conversations", searchEmbedding, supplementSize, isGroup ? undefined : where);
-          const entityIds = new Set(entityRaw.map(r => (r.metadata as { convId?: string }).convId));
-          const extra = supplement.filter(r => !entityIds.has((r.metadata as { convId?: string }).convId));
-          raw = [...entityRaw, ...extra];
-          console.log(`[P2] entity pre-filter: ${entityRaw.length} entity + ${extra.length} supplement = ${raw.length} total`);
-        }
-      } catch (_e) {
-        // 预筛失败（如 ChromaDB where 语法不兼容），fallback 全量
-        raw = await chromaQuery("conversations", searchEmbedding, fetchSize, isGroup ? undefined : where);
-        console.log(`[P2] entity pre-filter failed, fallback to full query`);
-      }
+    // closet where 过滤：与 conversations where 保持语义一致，但仅用 userId/source 字段
+    const closetWhere: Record<string, unknown> = isGroup
+      ? { source: { $eq: "group" } }
+      : isVisitorQuery
+        ? { $and: [{ source: { $eq: "private" } }, { userId: { $eq: visitorUserIdFilter.toLowerCase() } }] }
+        : { source: { $eq: "private" } };
+
+    const closetRaw = await closetFirstSearch(searchEmbedding, closetWhere, fetchSize * 2, fetchSize);
+    if (closetRaw.length > 0) {
+      raw = closetRaw;
+      console.log(`[closet] queryMemories: ${raw.length} results via closet-first`);
     } else {
-      // 无实体命中 / 群聊 / 访客：全量搜索
-      raw = await chromaQuery("conversations", searchEmbedding, fetchSize, isGroup ? undefined : where);
+      // Fallback：closets 为空（旧数据）→ 原有 entity 预筛 + 直接搜 conversations
+      if (queryEntityIds && !isGroup && !isVisitorSession) {
+        const entityOrConditions = Array.from(queryEntityIds).map(eid => ({ entityTags: { $contains: eid } }));
+        const entityFilter: Record<string, unknown> = { $and: [where, { $or: entityOrConditions }] };
+        try {
+          const entityRaw = await chromaQuery("conversations", searchEmbedding, fetchSize, entityFilter);
+          if (entityRaw.length >= MEMORY_CONTEXT_SIZE) {
+            raw = entityRaw;
+            console.log(`[P2] entity pre-filter: ${entityRaw.length} results (sufficient)`);
+          } else {
+            const supplementSize = fetchSize - entityRaw.length;
+            const supplement = await chromaQuery("conversations", searchEmbedding, supplementSize, isGroup ? undefined : where);
+            const entityIds = new Set(entityRaw.map(r => (r.metadata as { convId?: string }).convId));
+            const extra = supplement.filter(r => !entityIds.has((r.metadata as { convId?: string }).convId));
+            raw = [...entityRaw, ...extra];
+            console.log(`[P2] entity pre-filter: ${entityRaw.length} entity + ${extra.length} supplement = ${raw.length} total`);
+          }
+        } catch (_e) {
+          raw = await chromaQuery("conversations", searchEmbedding, fetchSize, isGroup ? undefined : where);
+          console.log(`[P2] entity pre-filter failed, fallback to full query`);
+        }
+      } else {
+        raw = await chromaQuery("conversations", searchEmbedding, fetchSize, isGroup ? undefined : where);
+      }
     }
 
     // entity boost reranking: 如果查询命中了实体，给包含相同实体 tag 的记录排序提升
@@ -1560,6 +1645,16 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
       }
     }
 
+    // 提前计算 hall_type（对话级别，所有 chunks 共享）
+    const hallType = (() => {
+      const combined = `${prompt} ${response}`;
+      if (meta.intent === "dev_or_complex") return "hall_events";
+      if (/发现|原来|学到|了解到|知道了|没想到/.test(combined)) return "hall_discoveries";
+      if (/喜欢|不喜欢|习惯|讨厌|偏好|比较喜|最爱|不爱/.test(combined)) return "hall_preferences";
+      return "hall_facts";
+    })();
+    const convSource = meta.channel === "wecom_group" ? "group" : "private";
+
     // 为每个 chunk 生成独立 embedding 并写入 ChromaDB
     for (let i = 0; i < chunks.length; i++) {
       const chunkId = chunks.length === 1 ? baseId : `${baseId}-${i}`;
@@ -1578,24 +1673,30 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
         qualityScore:   meta.qualityScore ?? 0,
         dpoFlagged:     String(meta.dpoFlagged ?? false),
         userId:         meta.fromId.toLowerCase(),
-        source:         meta.channel === "wecom_group" ? "group" : "private",
+        source:         convSource,
         userType:       getUserType(meta.fromId),
         timestamp:      nowCST(),
         prompt:         prompt.slice(0, 500),
         response:       response.slice(0, 500),
         entityTags,
-        // MemPalace hall_type：记忆类型分类，供按类型过滤检索
-        // hall_events(任务/事件) / hall_facts(偏好/习惯) / hall_discoveries(新知) / hall_preferences(个人喜好)
-        hall_type: (() => {
-          const combined = `${prompt} ${response}`;
-          if (meta.intent === "dev_or_complex") return "hall_events";
-          if (/发现|原来|学到|了解到|知道了|没想到/.test(combined)) return "hall_discoveries";
-          if (/喜欢|不喜欢|习惯|讨厌|偏好|比较喜|最爱|不爱/.test(combined)) return "hall_preferences";
-          return "hall_facts";
-        })(),
+        hall_type:      hallType,
         // 分块元数据：同一对话的多个 chunk 共享 parentConvId
         ...(chunks.length > 1 ? { parentConvId: baseId, chunkIndex: i } : {}),
       }, embedding);
+
+      // ── Closet 层写入（MemPalace 两层架构）──────────────────────────────
+      // closet = 紧凑索引文档，语义检索精准度高于全文 drawer
+      // 与 drawer 并行写入，fire-and-forget（writeMemory 本身已是 void 调用）
+      const closetDoc = buildClosetDoc(prompt, response, chunkId, hallType, entityTags, meta.fromId);
+      const closetEmbedding = await embedText(closetDoc);
+      await chromaUpsert("conversations_closets", `closet-${chunkId}`, closetDoc, {
+        drawer_id:  chunkId,
+        userId:     meta.fromId.toLowerCase(),
+        source:     convSource,
+        hall_type:  hallType,
+        timestamp:  nowCST(),
+        entityTags,
+      }, closetEmbedding).catch(() => { /* closet 写入失败不影响 drawer */ });
     }
   } catch (e) {
     appendJsonl(join(PROJECT_ROOT, "data/learning/memory-write-errors.jsonl"), {
@@ -12122,7 +12223,15 @@ last_used: null
                 ]}
               : undefined;
 
-          const raw = await chromaQuery("conversations", searchEmbedding, 10, where);
+          // Closet-first：先搜索紧凑索引，命中后 fetch 原文；无 closets 时 fallback
+          const closetScope: Record<string, unknown> | undefined =
+            scope === "private" ? { source: { $eq: "private" } } :
+            scope === "group"   ? { source: { $eq: "group"   } } :
+            undefined;
+          let raw = await closetFirstSearch(searchEmbedding, closetScope, 20, 10);
+          if (raw.length === 0) {
+            raw = await chromaQuery("conversations", searchEmbedding, 10, where);
+          }
           const recallEntityIds = entityHits.length > 0 ? new Set(entityHits) : null;
           const results = recallEntityIds
             ? timeWeightedRerankWithEntityBoost(raw, 6, recallEntityIds)
