@@ -82,47 +82,33 @@ function log(msg) {
   } catch (_) {}
 }
 
+// ── Gateway 健康探测 ────────────────────────────────────────────────────────
+//
+// watchdog 是 Main 系统工程师的基础设施，独立于 Gateway（三角色的主进程）。
+// probe 只做 /health HTTP 检查——从外部看 Gateway 进程是否活着。
+// LLM 链路健康是 Gateway 自己的内部事务，不是 watchdog 的职责。
+//
+// 历史教训：之前 probe 走 Gateway 的 /v1/chat/completions（经 Agent 调 LLM），
+// Lucas 把 "watchdog probe" 当用户消息处理，调 restart_service 把 Gateway 重启了。
+// 设计原则：watchdog 探测 Gateway，不应通过 Gateway 内部验证 Gateway（逻辑倒挂）。
+
 function probe() {
   return new Promise((resolve) => {
-    const body = JSON.stringify({
-      model: 'openclaw/lucas',
-      messages: [{ role: 'user', content: 'watchdog probe' }],
-      user: `watchdog:${Date.now()}`,
-      stream: false,
-    });
     const req = http.request({
       hostname: '127.0.0.1',
       port: 18789,
-      path: '/v1/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      path: '/health',
+      method: 'GET',
+      timeout: 5000,
     }, (res) => {
       let data = '';
       res.on('data', d => data += d);
       res.on('end', () => {
-        clearTimeout(hardTimer);
-        try {
-          const json = JSON.parse(data);
-          const content = json?.choices?.[0]?.message?.content;
-          // 必须有非空 content 才算正常——防止 Gateway 返回空 body 或 error JSON 被误判为正常
-          resolve({ ok: !!content, status: res.statusCode, content: content?.substring(0, 30) });
-        } catch (_) {
-          resolve({ ok: false, status: res.statusCode, error: 'invalid JSON body' });
-        }
+        resolve({ ok: res.statusCode === 200, status: res.statusCode });
       });
     });
-    req.on('error', (e) => { clearTimeout(hardTimer); resolve({ ok: false, error: e.message }); });
-    // req.setTimeout 只计 socket 空闲时间，收到 HTTP headers 后就复位，无法限制总响应时长。
-    // 用独立 hardTimer 强制截止整个请求（包括 LLM 生成时间）。
-    const hardTimer = setTimeout(() => {
-      req.destroy();
-      resolve({ ok: false, error: `timeout ${PROBE_TIMEOUT_MS}ms` });
-    }, PROBE_TIMEOUT_MS);
-    req.write(body);
+    req.on('error', (e) => resolve({ ok: false, error: e.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: '/health timeout' }); });
     req.end();
   });
 }
@@ -393,7 +379,7 @@ function restartGateway() {
 async function checkGateway() {
   const result = await probe();
   if (result.ok) {
-    log(`Gateway 正常 (HTTP ${result.status}, reply: "${result.content}")`);
+    log(`Gateway 正常 (HTTP ${result.status})`);
   } else {
     log(`Gateway 异常: ${result.error || result.status} → 触发重启`);
     restartGateway();
@@ -1763,7 +1749,7 @@ function schedulePipelineCleanup() {
 }
 schedulePipelineCleanup();
 
-log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway + Ollama + ChromaDB + cloudflared，Gateway 超时阈值 ${PROBE_TIMEOUT_MS / 1000}s`);
+log(`Watchdog 启动，每 ${CHECK_INTERVAL_MS / 1000}s 检查 Gateway (/health) + Ollama + ChromaDB + cloudflared`);
 log('凌晨 1 点：Andy/Lisa 自我进化蒸馏 + Main 系统评估（并行 fire-and-forget，为 Andy HEARTBEAT 备最新评分）');
 log('凌晨 2 点：家人记忆蒸馏（对话 → Kuzu 知识图谱）→ Agent 记忆蒸馏');
 log('凌晨 3 点：team_observation（Andy 分析家人行为模式 → Lucas 理解更深）');

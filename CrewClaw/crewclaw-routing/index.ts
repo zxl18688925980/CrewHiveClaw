@@ -5569,6 +5569,21 @@ const crewclawRoutingPlugin = {
 
     api.on("before_prompt_build", async (event, ctx) => {
       const agentId = ctx.agentId;
+
+      // ── Watchdog probe 短路：不消耗 Agent token，直接注入固定回复指令 ──────
+      // watchdog 每小时发一次 /v1/chat/completions (model=openclaw/lucas, content="watchdog probe")
+      // 如果不拦截，Lucas 会"检查 watchdog 状态"并调用 restart_service，导致 Gateway 自杀重启。
+      // 检测条件：sessionKey 含 "watchdog" 且 prompt 含 "watchdog probe"
+      const _isWatchdogProbe = /watchdog/i.test(ctx.sessionKey ?? "")
+        && /watchdog\s*probe/i.test(event.prompt ?? "");
+      if (_isWatchdogProbe) {
+        ctx.appendSystemContext(
+          "[system] This is an automated health probe, not a user message. " +
+          'Reply with exactly "watchdog OK" and nothing else. Do not call any tools.'
+        );
+        return;
+      }
+
       // ── Gateway 资源池：获取槽位（紧邻 LLM 调用前，这里排队等待）─────────
       //
       // 优先级设计：
@@ -9119,47 +9134,54 @@ const crewclawRoutingPlugin = {
       },
     }));
 
-    // ── write_file：Andy 专属，原子写入工作区文件（spec / 设计草稿 / 笔记）──
+    // ── write_file：Lucas/Andy/Lisa 共享，原子写入本地文件 ──
     //
     // ClaudeCode 架构借鉴：Write 工具采用原子写入（临时文件 → rename），防止部分写入污染。
-    // 路径限定在 ~/.openclaw/workspace-andy/，防止越权改动代码库或家人数据。
-    // Andy 可以用此工具把 spec、设计笔记、研究摘要持久化到自己的工作区，
-    // 而不是依赖 OpenClaw 的会话 write 机制（容易被 context 压缩冲掉）。
+    // 路径限定在用户主目录内（$HOME/），相对路径自动解析到当前 Agent 工作区。
 
     api.registerTool((toolCtx) => ({
-      label: "写入工作区文件",
+      label: "写入文件",
       name: "write_file",
       description: [
-        "Andy 专属工具：将内容原子写入工作区文件。",
+        "将内容原子写入本地文件。Lucas/Andy/Lisa 均可使用。",
         "采用「临时文件 → rename」原子写入，写入失败不会产生部分写入的脏文件。",
-        "路径限定在 ~/.openclaw/workspace-andy/ 内，防止越权写入代码库或家人数据。",
-        "典型用法：把 spec 草稿持久化到 specs/ 子目录、把研究笔记写入 notes/ 子目录。",
-        "path：文件路径，必须在 workspace-andy/ 内（可用相对路径如 specs/xxx.md，也可用绝对路径）。",
+        "路径限定在用户主目录内。",
+        "path：文件路径。绝对路径必须在主目录内；相对路径自动解析到当前 Agent 工作区。",
         "content：文件内容（字符串）。",
         "append（可选，默认 false）：true 时追加到文件末尾，false 时覆盖整个文件。",
         "父目录不存在时自动创建。",
       ].join("\n"),
       parameters: Type.Object({
-        path: Type.String({ description: "文件路径（workspace-andy/ 内的相对路径，或绝对路径）" }),
+        path: Type.String({ description: "文件路径（主目录内的绝对路径，或相对于 Agent 工作区的相对路径）" }),
         content: Type.String({ description: "写入内容" }),
         append: Type.Optional(Type.Boolean({ description: "true=追加，false=覆盖（默认）" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
-          return { content: [{ type: "text", text: "Error: write_file 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+        const allowedAgents = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (toolCtx.agentId && !allowedAgents.has(toolCtx.agentId)) {
+          return { content: [{ type: "text", text: "Error: write_file 是 Lucas/Andy/Lisa 专用工具" }], details: { error: "wrong_agent" } };
         }
 
         const { content, append = false } = params as { path: string; content: string; append?: boolean };
         let targetPath = (params as { path: string }).path;
 
-        const ANDY_WORKSPACE = join(process.env.HOME ?? "/", ".openclaw/workspace-andy");
+        const HOME = process.env.HOME ?? "/";
+
+        // 相对路径解析到当前 Agent 工作区
         if (!targetPath.startsWith("/")) {
-          targetPath = join(ANDY_WORKSPACE, targetPath);
+          const agentWorkspaces: Record<string, string> = {
+            [FRONTEND_AGENT_ID]: join(HOME, ".openclaw/workspace-lucas"),
+            [DESIGNER_AGENT_ID]: join(HOME, ".openclaw/workspace-andy"),
+            [IMPLEMENTOR_AGENT_ID]: join(HOME, ".openclaw/workspace-lisa"),
+          };
+          const workspace = agentWorkspaces[toolCtx.agentId ?? ""] ?? join(HOME, ".openclaw");
+          targetPath = join(workspace, targetPath);
         }
 
-        if (!targetPath.startsWith(ANDY_WORKSPACE + "/") && targetPath !== ANDY_WORKSPACE) {
+        // 路径必须在主目录内
+        if (!targetPath.startsWith(HOME + "/") && targetPath !== HOME) {
           return {
-            content: [{ type: "text", text: `❌ 路径越权：只能写入 workspace-andy/ 内的文件。目标路径：${targetPath}` }],
+            content: [{ type: "text", text: `❌ 路径越权：只能写入主目录内的文件。目标路径：${targetPath}` }],
             details: { error: "path_violation", target: targetPath },
           };
         }
@@ -9182,9 +9204,9 @@ const crewclawRoutingPlugin = {
 
           const lines = content.split("\n").length;
           const bytes = Buffer.byteLength(content, "utf8");
-          const displayPath = targetPath.replace(`${ANDY_WORKSPACE}/`, "");
+          const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
           return {
-            content: [{ type: "text", text: `✅ 已写入 workspace-andy/${displayPath}（${lines} 行，${bytes} 字节，${append ? "追加" : "覆盖"}）` }],
+            content: [{ type: "text", text: `✅ 已写入 ${displayPath}（${lines} 行，${bytes} 字节，${append ? "追加" : "覆盖"}）` }],
             details: { path: targetPath, lines, bytes, mode: append ? "append" : "overwrite" },
           };
         } catch (e) {

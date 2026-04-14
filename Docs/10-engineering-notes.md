@@ -932,3 +932,33 @@ const budgetPath = join(PROJECT_ROOT, "crewclaw-routing", "config", "context-bud
 
 **状态**：已修复
 **确认日期**：2026-04-14
+
+---
+
+### Watchdog LLM 探测导致 Gateway 自毁循环
+
+**场景**：gateway-watchdog 负责监控 Gateway 进程健康。原设计通过 Gateway 的 `/v1/chat/completions` 发送 `model: 'openclaw/lucas'` + `content: 'watchdog probe'` 验证 LLM 链路。
+
+**现象**：Gateway 反复被 kill -9 重启，每次重启后几分钟又崩溃。系统进入自毁循环。
+
+**根因**：
+1. watchdog probe 消息被 Lucas 当作用户消息处理
+2. Lucas 调用 `restart_service` 工具「修复」Gateway
+3. Gateway 被 kill -9 + 重启
+4. watchdog 下一轮发现 Gateway 无响应，再次重启
+5. 循环不止
+
+**设计缺陷**：watchdog 探测 Gateway，不应通过 Gateway 内部验证 Gateway（逻辑倒挂）。LLM 链路健康是 Gateway 自己的内部事务，不是 watchdog 的职责。watchdog 是 Main 的基础设施，独立于 Gateway（三角色主进程）。
+
+**修复**：
+1. watchdog probe 从 LLM 请求改为纯 `/health` HTTP GET（只检查进程存活）
+2. 在 `crewclaw-routing/index.ts` `before_prompt_build` 开头增加 watchdog probe 短路拦截：session key 含 `watchdog` + prompt 含 `watchdog probe` → `appendSystemContext` 注入「回复 watchdog OK，不调工具」
+3. 第二层防御：即使 /health 探测也只做 HTTP 层检查，不消耗 Agent token
+
+**设计原则**：
+- watchdog（Main 基础设施）独立于 Gateway（三角色主进程），不做 LLM 请求验证
+- 探测路径不能成为触发重启的信号源——那会把监控变成故障源
+- Gateway 的 LLM 链路健康由 Gateway 自己管理，watchdog 只看进程是否活着
+
+**状态**：已修复
+**确认日期**：2026-04-14
