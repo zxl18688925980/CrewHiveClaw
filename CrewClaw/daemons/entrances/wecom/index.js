@@ -792,7 +792,7 @@ h1{font-size:18px;text-align:center;margin-bottom:8px;color:#fff}
 <button class="refresh-btn" onclick="loadData()" title="刷新">&#x21bb;</button>
 <script>
 const LAYER_COLORS={L0:'#2ecc71',L1:'#3498db',L2:'#e67e22',L3:'#9b59b6',L4:'#e74c3c'};
-const LAYER_NAMES={L0:'L0 基础设施',L1:'L1 行为质量',L2:'L2 Engineering Anything',L3:'L3 组织协作进化',L4:'L4 系统自进化'};
+const LAYER_NAMES={L0:'L0 Agent基础设施',L1:'L1 Agent行为质量',L2:'L2 Engineering Anything',L3:'L3 组织协作进化',L4:'L4 系统自进化'};
 const PASS_TH={L0:3.0,L1:3.0,L2:2.5,L3:2.0,L4:2.0};
 let trendChart=null,barChart=null;
 async function loadData(){
@@ -2061,7 +2061,7 @@ PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
 ---
 
 **汇报格式（强制）**：所有推送给工程师的状态报告必须按 Lx 分层组织：
-## L0 基础设施
+## L0 Agent基础设施
 [各 PM2 进程名称+状态、Gateway、端口、数据量]
 ## L1 Agent 人格化
 [Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]
@@ -4619,7 +4619,7 @@ ${factsDesc}`;
     }
     const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-count);
     const layerKeys = ['L0', 'L1', 'L2', 'L3', 'L4'];
-    const layerLabels = { L0: 'L0 基础设施', L1: 'L1 行为质量', L2: 'L2 Engineering Anything', L3: 'L3 组织协作进化', L4: 'L4 系统自进化' };
+    const layerLabels = { L0: 'L0 Agent基础设施', L1: 'L1 Agent行为质量', L2: 'L2 Engineering Anything', L3: 'L3 组织协作进化', L4: 'L4 系统自进化' };
     const layerScores = {};
     for (const lk of layerKeys) layerScores[lk] = entries.map(e => e[lk]?.w ?? null);
     const overallScores = entries.map(e => e.overall);
@@ -6440,7 +6440,7 @@ async function runMainMonitorLoop() {
     let iterations = 0;
     let reply = '';
 
-    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。\n\n**汇报格式（强制）**：所有推送给工程师的消息必须按 Lx 分层组织：\n## L0 基础设施\n[各 PM2 进程名称+状态+运行时长+重启次数、Gateway 状态、关键端口]\n## L1 Agent 人格化\n[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]\n## L2 Engineering Anything\n[任务类型覆盖度、端到端交付成功率、交付物多样性、三角色流水线健康]\n## L3 组织协作进化\n[①成员画像/②协作关系图谱/③影子Agent演进/④跨成员感知蒸馏]\n## L4 系统自进化\n[系统层：AGENTS.md规则收敛+路由阈值进化+Andy巡检时效+Skill积累 | 模型层：DPO积累进度/本地路由比例/本地模型就绪]\n规则：某层无问题写 ✅ 无异常，不要省略该层。L0 必须包含具体进程状态和数据。\n\n可用评估工具：evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_system（依次调用 L0~L4）。';
+    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。\n\n**汇报格式（强制）**：所有推送给工程师的消息必须按 Lx 分层组织：\n## L0 Agent基础设施\n[各 PM2 进程名称+状态+运行时长+重启次数、Gateway 状态、关键端口]\n## L1 Agent 人格化\n[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]\n## L2 Engineering Anything\n[任务类型覆盖度、端到端交付成功率、交付物多样性、三角色流水线健康]\n## L3 组织协作进化\n[①成员画像/②协作关系图谱/③影子Agent演进/④跨成员感知蒸馏]\n## L4 系统自进化\n[系统层：AGENTS.md规则收敛+路由阈值进化+Andy巡检时效+Skill积累 | 模型层：DPO积累进度/本地路由比例/本地模型就绪]\n规则：某层无问题写 ✅ 无异常，不要省略该层。L0 必须包含具体进程状态和数据。\n\n可用评估工具：evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_system（依次调用 L0~L4）。';
     while (iterations++ < 10) {
       const response = await callMainModel(heartbeatSystem, messages);
 
