@@ -3050,3 +3050,50 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `Docs/00-project-overview.md`（evaluate 工具描述对齐）
 - `Docs/HomeAI Readme.md`（Lx 里程碑注释位置调整 + 表格格式）
 - `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v676 · L2 ClaudeCode 流水线体验对齐（2026-04-15）
+
+**干预类型**：L2 交付体验升级（第四机制）
+
+**背景**：L2 的三条可靠性机制（验证门/分层升级/进度反馈）已稳定运行，但用户视角的体验与 ClaudeCode CLI 7 阶段工作流存在系统性差距：Andy 探索阶段黑盒、需求澄清无强制检查、设计方案用户不可见、代码审查无结构、交付摘要无格式。本次以 ClaudeCode 7 阶段模型为基准，全面对齐。
+
+**变更清单**：
+
+1. **`runAndyPipeline`（index.ts）**：
+   - Exploration 阶段：Andy 启动前立即通知 Frontend Agent + 工程师「Andy 开始探索」（Discovery 可见性）
+   - 需求澄清4条件强制注入 Andy 消息（目标用户/成功标准/技术约束/范围），满足任意一条必须先调 `query_requirement_owner`
+
+2. **`trigger_lisa_implementation`（index.ts）**：
+   - 多方案通知：alternatives≥2 时保存 approaches.json + 通知 Frontend Agent（已有）
+   - 单方案设计摘要：alternatives<2 时也通知 Frontend Agent 方案/文件/AC（Architecture Design 可见性，补齐缺口）
+   - 软审批 gate：通过验证后向 Frontend Agent 发「即将修改N个文件」清单（Pre-implementation gate）
+
+3. **代码审查指引（index.ts）**：Andy 验收时附已修改文件前60行，并注入三维度审查指引（正确性/简洁性/规范），WARN/FAIL 强制调 `request_implementation_revision`
+
+4. **交付摘要格式（index.ts）**：TUI路径 / Coordinator路径 / Planning Mode路径三套 Lucas prompt 统一升级为4段结构（做了什么/修改位置/注意事项/建议下一步）
+
+5. **新工具 `select_spec_approach`（index.ts，Frontend Agent 专属）**：读取 approaches.json，叫停当前进行中实现，用用户选定方案重触发 Designer 流水线
+
+6. **`list_active_tasks` 升级（index.ts）**：每条任务新增当前阶段标签（andy_designing / lisa_implementing / andy_verifying）+ 已运行分钟数
+
+7. **修订早期预警（index.ts）**：`request_implementation_revision` 第 2 轮起自动通知工程师
+
+8. **Andy AGENTS.md**：明确 4 种必须先澄清的情形 + 多方案设计（alternatives 字段）格式规范
+
+**设计决策**：
+- 用户审批采用「告知 + 默认继续 + 事后可切换」而非「等待批准」，避免阻塞流水线
+- alternatives 保存为独立文件（approaches.json），供 select_spec_approach 读取，与 spec 解耦
+- 3维度代码审查通过在 responseText 注入指引实现，零延迟（不另起审查调用）
+
+**文档更新**：
+- `Docs/00-project-overview.md`：L2 表格 + 口诀 + 交付可靠性「三机制」改为「四机制」+ 新增「机制四：ClaudeCode 流水线体验对齐」详细节
+- `Docs/HomeAI Readme.md`：Andy 行补充多方案设计 + 需求澄清 + 三维度代码审查描述
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`
+- `~/.openclaw/workspace-andy/AGENTS.md`
+- `Docs/00-project-overview.md`
+- `Docs/HomeAI Readme.md`
+- `Docs/09-evolution-version.md`（本条目）
