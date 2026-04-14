@@ -4484,9 +4484,9 @@ ${factsDesc}`;
         try {
           const rewriteSystem = '你是一个家庭AI对话质量优化专家。给定一条错误的AI回复（bad_response），请改写为符合Lucas家庭助手人格的正确回复（good_response）。要求：诚实、温暖、中文、不虚报不幻觉。只输出改写后的回复内容，不要加任何前缀或解释。';
           const rewritePrompt = `用户消息：${entry.prompt}\n\n错误回复：${entry.bad_response}\n\n错误原因：${(entry.reasons || []).join('；')}`;
-          const goodResp = await callAgentModel('main', rewriteSystem, [{ role: 'user', content: rewritePrompt }], 300);
+          const goodResp = await callAgentModel('lucas', rewriteSystem, [{ role: 'user', content: rewritePrompt }], 600);
           entry.good_response = (goodResp || '').trim();
-          generated.push(pt);
+          if (entry.good_response) generated.push(pt); // 只有非空才计入成功
         } catch (e) {
           // 单条失败不中断
         }
