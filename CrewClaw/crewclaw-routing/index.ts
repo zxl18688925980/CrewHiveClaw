@@ -3212,6 +3212,8 @@ async function runAndyPipeline(params: {
           ...(params.lucasContext ? [`【Lucas 补充背景】${params.lucasContext}`] : []),
           ...(params.originalSymptom ? [`【用户原始症状（保留，传给 evaluator 验证根因用）】${params.originalSymptom}`] : []),
           ``,
+          `【澄清检查（优先）】如果症状描述不足以定位根因（例如"有时候不对""有个 bug"等模糊描述），先调 query_requirement_owner 问清楚复现步骤和预期行为，再往下走。`,
+          ``,
           `请按顺序完成以下步骤（工具调用不可跳过）：`,
           `0. 用 exec 读涉及文件，理解问题上下文。不要调用 research_task（那是技术调研，Bug 修复只需要读代码找根因）。`,
           `1. 基于代码理解，自己分析根因：问题在哪里、是什么导致的、怎么修。`,
@@ -3228,10 +3230,16 @@ async function runAndyPipeline(params: {
           ...(params.understandingSummary ? [`【Lucas 理解摘要】${params.understandingSummary}（这是 Lucas 对需求的理解，Andy 设计时以此为准，有偏差请先核实再出 spec）`] : []),
           ...(params.lucasContext ? [`【Lucas 补充背景】${params.lucasContext}（这是家人的真实情绪/时间需求/可接受替代方案，设计时优先考虑）`] : []),
           ``,
+          `【澄清检查（优先）】在做任何事之前，先判断以下 4 种情形是否成立；满足任意一条就先调 query_requirement_owner 问清楚，不要带着模糊假设往下走：`,
+          `  1. 目标用户不明确（谁用？在哪里用？什么设备？）`,
+          `  2. 成功标准有歧义（不知道什么算"做好了"，AC 写不出来）`,
+          `  3. 技术约束未确认（方案选择取决于用户偏好或未知限制）`,
+          `  4. 需求范围明显比描述大（表面简单，背后可能是完整子系统）`,
+          ``,
           `请按顺序完成以下步骤（工具调用不可跳过）：`,
           `0. 用 exec 读相关代码，确认集成点真实存在`,
           `1. 调用 research_task 调研技术背景和可行性`,
-          `2. 根据调研结论，直接输出完整 Implementation Spec（自己写，不需要外部工具）`,
+          `2. 根据调研结论，直接输出完整 Implementation Spec（自己写，不需要外部工具）；如有 ≥2 种合理方案，在 JSON 的 alternatives 里列出并说明推荐理由`,
           `3. 调用 trigger_lisa_implementation，传入 spec、user_id="${params.userId}"、requirement_id="${requirementId}"`,
           ``,
           `完成后用一句话总结规划方案。`,
@@ -6408,6 +6416,7 @@ const crewclawRoutingPlugin = {
             const phaseLabels: Record<string, string> = {
               andy_designing: "Andy 设计中",
               lisa_implementing: "Lisa 实现中",
+              andy_verifying: "Andy 验收中",
               completed: "已完成",
             };
             const taskLines = runningTasks.map(t => {
@@ -8594,7 +8603,7 @@ last_used: null
                       summary,
                       ``,
                       `【角色说明】你是技术验收方，不直接联系用户。验收完成后请输出固定格式（插件层提取后交给 Lucas 决定是否通知用户）：`,
-                      `Lucas交付：[用家人听得懂的语言描述：做了什么 / 注意事项（无则省略）/ 下次这类需求可以这样说]`,
+                      `Lucas交付：[用家人听得懂的语言，按以下四点组织（有内容才写，无则省略）：① 做了什么（一句话）② 修改了哪里/在哪里找到 ③ 注意事项 ④ 建议下一步]`,
                     ].join("\n");
                     const andyAggregateResult = await callGatewayAgent(DESIGNER_AGENT_ID, andyAggregatePrompt, 600_000, undefined, FRONTEND_AGENT_ID);
                     // 提取 Lucas交付：简报，告知 Lucas
@@ -8706,7 +8715,7 @@ last_used: null
                           : `有 ${failed} 个子任务失败，请查看详情决定后续。`,
                         ``,
                         `【角色说明】你是技术验收方。验收完成后请输出：`,
-                        `Lucas交付：[用家人听得懂的语言描述：做了什么 / 注意事项（无则省略）]`,
+                        `Lucas交付：[用家人听得懂的语言，按以下四点组织（有内容才写，无则省略）：① 做了什么（一句话）② 修改了哪里/在哪里找到 ③ 注意事项 ④ 建议下一步]`,
                       ].join("\n");
 
                       void notifyEngineer(
@@ -8887,6 +8896,65 @@ last_used: null
           }
         }
 
+        // ── 多方案通知：检测 alternatives，告知 Lucas/工程师，保存方案文件 ──────────
+        //
+        // Andy 设计了 ≥2 个方案时，系统通知 Lucas（Lucas 告知家人），
+        // 默认自动用 recommended_approach 继续，家人可通过 select_spec_approach 切换。
+        {
+          const altSpecMatch = p.spec.match(/```json\s*([\s\S]*?)```/);
+          if (altSpecMatch) {
+            try {
+              const altSpecData = JSON.parse(altSpecMatch[1]) as Record<string, unknown>;
+              type AltEntry = { id: string; title: string; tradeoffs?: string };
+              const alts = altSpecData.alternatives as AltEntry[] | undefined;
+              const recommended = altSpecData.recommended_approach as string | undefined;
+              const reason = altSpecData.recommended_reason as string | undefined;
+              if (alts && alts.length >= 2) {
+                const altLines = alts.map(a =>
+                  `  [${a.id}] ${a.title}${a.tradeoffs ? `\n      ${a.tradeoffs}` : ""}`
+                ).join("\n");
+                // 通报工程师
+                void notifyEngineer(
+                  `【${p.requirement_id ?? "?"}】Andy 设计了 ${alts.length} 个方案，推荐 ${recommended ?? alts[0]?.id ?? "A"}：\n${altLines}${reason ? `\n推荐理由：${reason}` : ""}`,
+                  "pipeline", DESIGNER_AGENT_ID,
+                );
+                // 保存方案文件，供 select_spec_approach 工具读取
+                const approachesDir = join(PROJECT_ROOT, "data/pipeline", p.requirement_id ?? `req_${Date.now()}`);
+                mkdirSync(approachesDir, { recursive: true });
+                writeFileSync(join(approachesDir, "approaches.json"), JSON.stringify({
+                  reqId: p.requirement_id,
+                  fullSpec: p.spec,
+                  alternatives: alts,
+                  recommended: recommended ?? alts[0]?.id ?? "A",
+                  reason,
+                  submittedBy: requestorId,
+                  submittedAt: nowCST(),
+                }, null, 2));
+                // 告知 Lucas，由 Lucas 决定是否转达家人
+                if (requestorId && requestorId !== "unknown") {
+                  void callGatewayAgent(
+                    FRONTEND_AGENT_ID,
+                    [
+                      `【Andy 方案选择 · ${p.requirement_id ?? "?"}】`,
+                      `Andy 设计了 ${alts.length} 个方案，自动选用推荐方案【${recommended ?? alts[0]?.id ?? "A"}】开始实现。`,
+                      ``,
+                      `方案概要：`,
+                      ...alts.map(a => `  [${a.id}] ${a.title}${a.tradeoffs ? `（${a.tradeoffs.slice(0, 60)}）` : ""}`),
+                      ``,
+                      reason ? `推荐理由：${reason}` : "",
+                      ``,
+                      `用户 ID：${requestorId}`,
+                      `如果用户问起方案，可以解释上面的选择逻辑。如果用户明确想换方案，你可以调用 select_spec_approach 工具切换（传入 requirement_id 和方案 ID）。`,
+                    ].filter(s => s !== "").join("\n"),
+                    30_000, undefined, DESIGNER_AGENT_ID,
+                  ).catch(() => {});
+                }
+              }
+            } catch (_altE) { /* 不阻塞主流程 */ }
+          }
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         // ── Andy spec SFT 积累：每次通过验证的 spec 写入训练队列 ───────────────────
         try {
           const reqId2 = p.requirement_id ?? "";
@@ -9050,6 +9118,18 @@ last_used: null
               success = !!lisaResponse;
             }
             if (lisaResponse && !lisaBypassedOpencode) {
+              // ── 阶段推进：lisa_implementing → andy_verifying ──────────────────
+              {
+                const phaseEntries = readTaskRegistry();
+                const phaseEntry = phaseEntries.find(e => e.id === reqId);
+                if (phaseEntry) {
+                  phaseEntry.currentPhase = "andy_verifying";
+                  try { writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(phaseEntries, null, 2), "utf8"); } catch (_e) {}
+                }
+              }
+              void notifyEngineer(`【${reqId}】Lisa 实现完成，进入 Andy 验收阶段`, "pipeline", IMPLEMENTOR_AGENT_ID);
+              // ─────────────────────────────────────────────────────────────────
+
               // ── 独立验证门（Claude Code 模式：做完跑测试，不靠自述）──────────
               let specData: Record<string, unknown> | null = null;
               try {
@@ -9179,8 +9259,12 @@ last_used: null
                   "【验收任务】开发团队刚完成了一个任务，请用自然的语气告知结果。",
                   `【Lisa 交付报告】\n${lisaResponse}`,
                   `【接收对象】${requestorId}${requestorId.startsWith("visitor:") ? "（访客，用专业但友好的语气，不叫家人称呼）" : "（请根据你对这位家庭成员的了解，调整语气和侧重点）"}`,
-                  "请简洁回复（不超过 150 字）：做了什么（一句话）、怎么用或在哪里找到（如有）、有没有要注意的（如有）。",
-                  requestorId.startsWith("visitor:") ? "语气专业友好，不要技术术语，不要加标题或符号。" : "语气像家人说话，不要技术术语，不要加标题或符号。",
+                  "请按以下四个维度组织回复（有内容才说，没有则跳过；总长不超过 200 字，语气自然，不加标题符号）：",
+                  "① 做了什么（一句话点明核心功能变化）",
+                  "② 修改了哪里 / 在哪里找到（文件名/功能入口，用户能感知的位置）",
+                  "③ 注意事项（有副作用或使用前提则说，没有就不说）",
+                  "④ 建议下一步（如果有明显的后续动作，提一句；没有就不说）",
+                  requestorId.startsWith("visitor:") ? "语气专业友好，不要技术术语。" : "语气像家人说话，不要技术术语。",
                 ].join("\n\n");
                 const lucasAcceptance = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 120_000, undefined, DESIGNER_AGENT_ID);
                 if (lucasAcceptance) {
@@ -9209,6 +9293,48 @@ last_used: null
               } catch (_e) {
                 responseText = lisaResponse;
               }
+              // ── 代码审查证据（Andy 对照 spec AC 做真实技术验收）─────────────
+              // 从 integration_points 读取已修改文件前60行，附在 responseText 末尾
+              // 这样 Andy 看到工具返回时有真实代码，而不只是 Lisa 的文字自述
+              try {
+                const ceSpecM = p.spec.match(/```json\s*([\s\S]*?)```/);
+                if (ceSpecM) {
+                  const ceSpecData = JSON.parse(ceSpecM[1]) as Record<string, unknown>;
+                  const ceIps = (ceSpecData.integration_points ?? []) as Array<{file?: string; action?: string}>;
+                  const NEW_ACTIONS_CE = ["新增", "create", "新建", "创建"];
+                  const ceModFiles = ceIps
+                    .filter(ip => !!ip.file && !NEW_ACTIONS_CE.some(x => (ip.action ?? "").includes(x)))
+                    .slice(0, 2); // 最多附 2 个文件，控制 token
+                  if (ceModFiles.length > 0) {
+                    const snippets: string[] = [];
+                    for (const ip of ceModFiles) {
+                      if (!ip.file) continue;
+                      const fp = ip.file.startsWith("/") ? ip.file : join(PROJECT_ROOT, ip.file);
+                      if (existsSync(fp)) {
+                        try {
+                          const fc = readFileSync(fp, "utf8");
+                          const preview = fc.split("\n").slice(0, 60).join("\n");
+                          snippets.push(`\n**${ip.file}**（截取前60行）：\n\`\`\`\n${preview}\n\`\`\``);
+                        } catch (_snipE) {}
+                      }
+                    }
+                    if (snippets.length > 0) {
+                      responseText += [
+                        `\n\n【代码变更验证 · 三维审查】请对以下已修改文件按三个维度逐项核查，每个维度给出 PASS / WARN / FAIL 结论：`,
+                        ``,
+                        `**维度1 · 正确性**：AC 是否逐条满足？有无逻辑错误、边界遗漏、返回值错误？`,
+                        `**维度2 · 简洁性**：有无不必要的复杂度、重复代码、过度设计？实现是否与 spec 描述的最小范围一致？`,
+                        `**维度3 · 项目规范**：命名、错误处理、注释风格是否与项目现有代码保持一致？`,
+                        ``,
+                        `⚠️ 任意维度结论为 WARN 或 FAIL → 必须调 request_implementation_revision，说明具体问题和修改要求。`,
+                        `全部 PASS → 调 trigger_lisa_integration 或 notify_engineer 报告验收通过。`,
+                        `${snippets.join("")}`,
+                      ].join("\n");
+                    }
+                  }
+                }
+              } catch (_ce) { /* 不阻塞主流程 */ }
+              // ─────────────────────────────────────────────────────────────────
               } // end verification-gate success block
             } else {
               // lisaResponse 为空（Lisa 无响应），保持默认的失败消息
@@ -11248,6 +11374,113 @@ last_used: null
         return {
           content: [{ type: "text", text: `🚫 已叫停任务：${target.requirement.slice(0, 80)}` }],
           details: { cancelled: true, taskId: target.id, status: target.status },
+        };
+      },
+    }));
+
+    // ── select_spec_approach：Lucas 切换 Andy 设计方案 ───────────────────────
+    api.registerTool((toolCtx) => ({
+      label: "切换设计方案",
+      name: "select_spec_approach",
+      description: [
+        "Lucas 专属工具：当 Andy 提供了多个设计方案时，选择非推荐方案重新触发实现。",
+        "适用场景：家人说「用另一个方案」「我想要那个更复杂的方案」「用方案 B」。",
+        "传入原始需求 ID（req_xxx）和想要的方案 ID（如 A / B / C）。",
+        "工具会叫停当前正在进行的实现，并用所选方案重新触发 Andy 流水线。",
+        "如果任务已完成或需求 ID 找不到对应的多方案文件，会给出说明。",
+      ].join("\n"),
+      parameters: Type.Object({
+        requirement_id: Type.String({ description: "原始需求 ID（req_xxx），从进行中任务列表获取" }),
+        choice: Type.String({ description: "想要选择的方案 ID，如 A、B、C（大小写均可）" }),
+        reason: Type.Optional(Type.String({ description: "选择该方案的原因（可选），帮助 Andy 更好理解偏好" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: `❌ select_spec_approach 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        }
+        const p = params as { requirement_id: string; choice: string; reason?: string };
+        const choiceId = p.choice.toUpperCase().trim();
+
+        // 读取方案文件
+        const approachesPath = join(PROJECT_ROOT, "data", "pipeline", p.requirement_id, "approaches.json");
+        let approachesData: {
+          reqId: string;
+          fullSpec: string;
+          alternatives: Array<{ id: string; title: string; tradeoffs: string }>;
+          recommended: string;
+          reason: string;
+          submittedBy: string;
+          submittedAt: string;
+        } | null = null;
+        try {
+          const raw = readFileSync(approachesPath, "utf8");
+          approachesData = JSON.parse(raw);
+        } catch (_e) {
+          return {
+            content: [{ type: "text", text: `⚠️ 未找到需求「${p.requirement_id}」的多方案记录。该需求可能只有一个方案，或需求 ID 有误。` }],
+            details: { found: false },
+          };
+        }
+
+        // 找到所选方案
+        const chosen = approachesData!.alternatives.find(a => a.id.toUpperCase() === choiceId);
+        if (!chosen) {
+          const ids = approachesData!.alternatives.map(a => a.id).join(" / ");
+          return {
+            content: [{ type: "text", text: `⚠️ 方案「${choiceId}」不存在。可用方案：${ids}。` }],
+            details: { found: false },
+          };
+        }
+
+        // 如果已经是推荐方案，提示无需切换
+        if (choiceId === approachesData!.recommended.toUpperCase()) {
+          return {
+            content: [{ type: "text", text: `ℹ️ 方案「${choiceId}」就是 Andy 推荐的方案，当前流水线已在按此方案执行，无需切换。` }],
+            details: { switched: false, alreadyRecommended: true },
+          };
+        }
+
+        // 叫停当前正在进行的任务（如果还在跑）
+        const entries = readTaskRegistry();
+        const running = entries.find(e => e.id === p.requirement_id && (e.status === "running" || e.status === "queued"));
+        if (running) {
+          markTaskStatus(p.requirement_id, "cancelled");
+          // 同时从队列中删除
+          try {
+            const queueEntries = readJsonlEntries(TASK_QUEUE_FILE);
+            const remaining = queueEntries.filter(e => (e as { taskId?: string }).taskId !== p.requirement_id);
+            writeFileSync(TASK_QUEUE_FILE, remaining.map(e => JSON.stringify(e)).join("\n") + (remaining.length > 0 ? "\n" : ""), "utf8");
+          } catch (_e) {}
+        }
+
+        // 构造方案切换背景，重触发 Andy
+        const originalEntry = entries.find(e => e.id === p.requirement_id);
+        const requirement = originalEntry?.requirement ?? approachesData!.reqId;
+        const submittedBy = approachesData!.submittedBy;
+        const lucasContext = [
+          `【方案切换】用户明确要求使用方案 ${choiceId}：${chosen.title}`,
+          `方案权衡：${chosen.tradeoffs}`,
+          p.reason ? `切换原因：${p.reason}` : "",
+          `原需求 ID：${p.requirement_id}（已叫停）。请按方案 ${choiceId} 重新设计并触发实现，不要再列多方案。`,
+        ].filter(Boolean).join("\n");
+
+        void notifyEngineer(
+          `【${p.requirement_id}】Lucas 切换方案 → ${choiceId}（${chosen.title}）${running ? "，原任务已叫停" : ""}`,
+          "pipeline",
+          FRONTEND_AGENT_ID
+        );
+
+        // 异步重触发，不阻塞回复
+        void runAndyPipeline({
+          requirement,
+          intentType: "feature",
+          userId: submittedBy,
+          lucasContext,
+        });
+
+        return {
+          content: [{ type: "text", text: `✅ 已切换到方案 ${choiceId}：${chosen.title}。Andy 将按新方案重新设计，完成后会通知你。` }],
+          details: { switched: true, choiceId, title: chosen.title, previousReqId: p.requirement_id },
         };
       },
     }));
