@@ -142,6 +142,16 @@ function resolveFile(
   params:    SessionParams,
   resolvers: ContextResolvers["file"],
 ): string {
+  // findRelevantMemories（ClaudeCode memdir 对齐，轻量版）：
+  // optional=true 的 static-file，若 query 未命中任一 keyword，跳过注入（节省 token）
+  if (src.optional && src.queryMode === "static-file" && src.keywords && src.keywords.length > 0) {
+    const prompt = params.prompt.toLowerCase();
+    const matched = src.keywords.some(kw => prompt.includes(kw.toLowerCase()));
+    if (!matched) {
+      return ""; // keyword miss → 跳过此文件
+    }
+  }
+
   switch (src.queryMode) {
     case "user-profile":
       return resolvers["user-profile"](params.userId);

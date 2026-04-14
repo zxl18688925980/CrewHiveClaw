@@ -104,6 +104,9 @@ export interface FileSource {
   label:     string;
   inject:    InjectMode;
   tier?:     0 | 1 | 2 | 3;  // 上下文预算分层（默认 2）
+  // findRelevantMemories：optional=true 的文件仅在 query 命中 keywords 时注入（ClaudeCode memdir 对齐）
+  optional?: boolean;
+  keywords?: string[];  // 命中任意一个关键词即注入，不命中则跳过
 }
 
 export type ContextSource = ChromaSource | KuzuSource | FileSource;
@@ -335,12 +338,15 @@ export const contextSources: Record<string, ContextSource[]> = {
   // ── Andy ───────────────────────────────────────────────────────────────
   andy: [
     // 项目背景：HomeAI 是什么、组织四角色、V字流水线、里程碑（前世今生）
+    // optional：只在讨论项目定位/里程碑/角色分工时注入（findRelevantMemories 轻量对齐）
     {
       source: "file", id: "background",
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-andy/BACKGROUND.md",
       label: "项目背景", inject: "append-system",
       tier: 1,
+      optional: true,
+      keywords: ["项目背景", "里程碑", "角色分工", "HomeAI", "HiveClaw", "CrewClaw", "L0", "L1", "L2", "L3", "L4", "愿景", "演进"],
     },
 
     // 工作规则：工具调用铁律 + 输出标准 + 家庭 Web 约束（OpenClaw 原生只注入全局模板，这里补注 Andy 专属规则）
@@ -362,12 +368,15 @@ export const contextSources: Record<string, ContextSource[]> = {
     },
 
     // 设计积累：已验证的设计原则 + 踩过的坑 + 判断规则（蒸馏自 decisions 集合）
+    // optional：只在讨论设计/架构/实现问题时注入
     {
       source: "file", id: "design-memory",
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-andy/MEMORY.md",
       label: "设计积累", inject: "append-system",
       tier: 1,
+      optional: true,
+      keywords: ["设计", "架构", "原则", "踩坑", "经验", "判断", "spec", "规范", "约束", "技术债", "优化"],
     },
 
     // 设计决策规则：「遇到 X 做 Y 不做 Z」判断规则（架构/Spec/降级设计，来自真实踩坑）
@@ -453,12 +462,15 @@ export const contextSources: Record<string, ContextSource[]> = {
   // ── Lisa ───────────────────────────────────────────────────────────────
   lisa: [
     // 项目背景：HomeAI 是什么、组织四角色、流水线、里程碑（前世今生）
+    // optional：只在讨论项目定位/里程碑/L系能力时注入
     {
       source: "file", id: "background",
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lisa/BACKGROUND.md",
       label: "项目背景", inject: "append-system",
       tier: 1,
+      optional: true,
+      keywords: ["项目背景", "里程碑", "HomeAI", "HiveClaw", "CrewClaw", "L0", "L1", "L2", "L3", "L4", "愿景", "演进", "流水线"],
     },
 
     // 工作规则：交付标准 + 自验证策略 + 家庭 Web 规范（OpenClaw 原生只注入全局模板，这里补注 Lisa 专属规则）
@@ -480,12 +492,15 @@ export const contextSources: Record<string, ContextSource[]> = {
     },
 
     // 实现积累：已验证的实现模式 + 技术踩坑 + 工程品味判断（蒸馏自 decisions/code_history 集合）
+    // optional：只在讨论具体实现/技术方案时注入
     {
       source: "file", id: "impl-memory",
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lisa/MEMORY.md",
       label: "实现积累", inject: "append-system",
       tier: 1,
+      optional: true,
+      keywords: ["实现", "代码", "技术", "踩坑", "模式", "约束", "工程", "spec", "优化", "bug", "修复", "重构"],
     },
 
     // 平台约束专用通道：只召回 type=constraint 条目，独立于决策记忆，不竞争 topK 名额

@@ -1,6 +1,6 @@
 {
   "maxContextChars": 40000,
-  "dryRun": true,
+  "dryRun": false,
   "tiers": {
     "0": { "maxChars": null },
     "1": { "maxChars": 10000 },

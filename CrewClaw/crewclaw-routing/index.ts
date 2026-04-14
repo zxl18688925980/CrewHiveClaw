@@ -1178,6 +1178,38 @@ function queryCausalFacts(userId: string): { value: string; context: string }[] 
   }
 }
 
+// MAGMA Phase 2：因果多跳召回（2 跳链）
+// 当查询含因果意图词时触发，沿 causal_relation 边遍历 A→B→C 推理链
+function detectCausalQuery(query: string): boolean {
+  return /为什么|为何|原因|怎么会|导致|因为|是因|什么导|怎么导/.test(query);
+}
+
+function queryCausalFactsMultiHop(userId: string): { chain: string; context: string }[] {
+  try {
+    // 2 跳：A--causal-->B--causal-->C，返回完整推理链
+    const cypher = `MATCH (p:Entity {id: $userId})-[f1:Fact {relation: 'causal_relation'}]->(m:Entity)-[f2:Fact {relation: 'causal_relation'}]->(t:Entity)
+                    WHERE f1.valid_until IS NULL AND f2.valid_until IS NULL
+                    RETURN m.name, f1.context, t.name, f2.context LIMIT 6`;
+    const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
+    const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
+    const result = spawnSync(
+      KUZU_PYTHON3,
+      [scriptPath, cypher, JSON.stringify({ userId })],
+      { encoding: "utf8", timeout: 4000 },
+    );
+    if (result.status !== 0 || !result.stdout?.trim()) return [];
+    const rows = JSON.parse(result.stdout.trim()) as unknown[][];
+    return rows
+      .filter(row => row[0] && row[2])
+      .map(row => ({
+        chain: `${String(row[0])} → ${String(row[2])}`,
+        context: [row[1], row[3]].filter(Boolean).join(" / "),
+      }));
+  } catch (_e) {
+    return [];
+  }
+}
+
 // ── 主动注入：查询指定人物的 Kuzu 蒸馏事实（current_status / recent_concern / key_event）────
 // 当 prompt 提到家庭成员时，主动注入该人的最新蒸馏事实到 appendSystemContext。
 // 与 relationship-network 互补：relationship-network 按 userId 静态查所有关系人，
@@ -1552,6 +1584,15 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
         prompt:         prompt.slice(0, 500),
         response:       response.slice(0, 500),
         entityTags,
+        // MemPalace hall_type：记忆类型分类，供按类型过滤检索
+        // hall_events(任务/事件) / hall_facts(偏好/习惯) / hall_discoveries(新知) / hall_preferences(个人喜好)
+        hall_type: (() => {
+          const combined = `${prompt} ${response}`;
+          if (meta.intent === "dev_or_complex") return "hall_events";
+          if (/发现|原来|学到|了解到|知道了|没想到/.test(combined)) return "hall_discoveries";
+          if (/喜欢|不喜欢|习惯|讨厌|偏好|比较喜|最爱|不爱/.test(combined)) return "hall_preferences";
+          return "hall_facts";
+        })(),
         // 分块元数据：同一对话的多个 chunk 共享 parentConvId
         ...(chunks.length > 1 ? { parentConvId: baseId, chunkIndex: i } : {}),
       }, embedding);
@@ -4123,6 +4164,11 @@ const ANDY_SPEC_FINETUNE_QUEUE = join(PROJECT_ROOT, "data/learning/andy-spec-fin
 // sessionId → requirementId，供 proc.on("close") 回填 outcome
 const opencodeReqIdMap = new Map<string, string>();
 
+// ── session_todo：Andy/Lisa 会话内任务分解（Hermes todo_tool 对齐）──────────────
+// sessionKey → TodoItem[]，会话结束自动清理（无需持久化，per-session）
+interface TodoItem { id: string; content: string; status: "pending" | "in_progress" | "done" | "cancelled" }
+const sessionTodoMap = new Map<string, TodoItem[]>();
+
 // 延迟任务队列：非紧急需求在空闲时段批量执行
 const TASK_QUEUE_FILE = join(PROJECT_ROOT, "data/learning/task-queue.jsonl");
 // 空闲时段：22:00 ~ 次日 8:00（可通过环境变量覆盖）
@@ -6620,6 +6666,25 @@ const crewclawRoutingPlugin = {
           `只需提供 skill_name + description + content，frontmatter 自动生成。局部修改用 patch，删除用 delete。\n` +
           `Skill 不维护是负债——过时的 Skill 立即覆盖更新。`
         );
+      }
+
+      // ── session_todo 状态注入（Andy/Lisa，Hermes todo_tool 对齐）────────────
+      // 有进行中任务时注入，让 Agent 保持任务感知，不遗忘当轮进度
+      if (ctx.agentId === DESIGNER_AGENT_ID || ctx.agentId === IMPLEMENTOR_AGENT_ID) {
+        const _todos = sessionTodoMap.get(ctx.sessionKey ?? "");
+        if (_todos && _todos.length > 0) {
+          const STATUS_ICON: Record<string, string> = {
+            pending: "⬜", in_progress: "🔄", done: "✅", cancelled: "🚫",
+          };
+          const activeItems = _todos.filter(t => t.status !== "done" && t.status !== "cancelled");
+          if (activeItems.length > 0) {
+            const lines = _todos.map(t => `${STATUS_ICON[t.status] ?? "⬜"} [${t.id}] ${t.content}`);
+            appendSystem.push(
+              `【当前任务进度】\n${lines.join("\n")}\n` +
+              `（用 session_todo 更新进度；全部完成时状态会自动清除）`
+            );
+          }
+        }
       }
 
       if (prepend.length === 0 && appendSystem.length === 0) return;
@@ -12091,20 +12156,66 @@ last_used: null
             parts.push(`【相关话题事实】\n${topicLines.join("\n")}`);
           }
           if (recallUserId) {
-            const causalFacts = queryCausalFacts(recallUserId);
-            if (causalFacts.length > 0) {
-              const lines = causalFacts.map(cf => `• ${cf.value}${cf.context ? `：${cf.context}` : ""}`);
-              parts.push(`【因果关系】\n${lines.join("\n")}`);
+            if (detectCausalQuery(query)) {
+              // MAGMA Phase 2：因果查询 → 2跳推理链 + 1跳事实
+              const multiHop = queryCausalFactsMultiHop(recallUserId);
+              const onehop   = queryCausalFacts(recallUserId);
+              const lines: string[] = [];
+              if (multiHop.length > 0) {
+                lines.push(...multiHop.map(mh => `• 推理链：${mh.chain}${mh.context ? `（${mh.context}）` : ""}`));
+              }
+              if (onehop.length > 0) {
+                lines.push(...onehop.map(cf => `• ${cf.value}${cf.context ? `：${cf.context}` : ""}`));
+              }
+              if (lines.length > 0) parts.push(`【因果推理链】\n${lines.join("\n")}`);
+            } else {
+              const causalFacts = queryCausalFacts(recallUserId);
+              if (causalFacts.length > 0) {
+                const lines = causalFacts.map(cf => `• ${cf.value}${cf.context ? `：${cf.context}` : ""}`);
+                parts.push(`【因果关系】\n${lines.join("\n")}`);
+              }
             }
           }
           if (results.length > 0) {
-            const lines = results.map(r => {
-              const meta = r.metadata as { prompt?: string; response?: string; userId?: string; source?: string; timestamp?: string };
-              const who  = meta.source === "group" ? "（群聊）" : meta.userId ? `（${meta.userId} 私聊）` : "";
-              const ts   = toCST(meta.timestamp);
-              return `[${ts}${who}]\nUser: ${meta.prompt ?? ""}\nLucas: ${meta.response ?? ""}`;
-            });
-            parts.push(`找到 ${results.length} 条语义相关对话：\n\n${lines.join("\n---\n")}`);
+            // ── Hermes session_search 对齐：按 sessionId 聚类后摘要召回 ──────────
+            // 按 sessionId 分组（无 sessionId 的归 "anonymous"）
+            const sessionGroups = new Map<string, typeof results>();
+            for (const r of results) {
+              const sid = (r.metadata as { sessionId?: string }).sessionId || "anonymous";
+              if (!sessionGroups.has(sid)) sessionGroups.set(sid, []);
+              sessionGroups.get(sid)!.push(r);
+            }
+            // 取最多 3 个 session，每 session 最多 3 条记录
+            const topSessions = [...sessionGroups.entries()].slice(0, 3);
+            const rawLines: string[] = [];
+            for (const [_sid, recs] of topSessions) {
+              for (const r of recs.slice(0, 3)) {
+                const meta = r.metadata as { prompt?: string; response?: string; userId?: string; source?: string; timestamp?: string };
+                const who  = meta.source === "group" ? "（群聊）" : meta.userId ? `（${meta.userId}）` : "";
+                const ts   = toCST(meta.timestamp);
+                rawLines.push(`[${ts}${who}] User: ${meta.prompt ?? ""}\nLucas: ${meta.response ?? ""}`);
+              }
+            }
+            // 若结果 ≥ 4 条（多 session），用 lucas 模型做一次摘要压缩（3s 超时）
+            if (topSessions.length >= 2 && rawLines.length >= 4) {
+              try {
+                const summaryPrompt = `以下是关于「${query}」的历史对话片段，请用2-3句话提炼最相关的事实和结论，去掉重复内容：\n\n${rawLines.join("\n---\n").slice(0, 2000)}`;
+                const summaryResp = await Promise.race([
+                  callAgentModel("lucas", summaryPrompt, 300),
+                  new Promise<string>((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000)),
+                ]);
+                if (summaryResp && summaryResp.length > 20) {
+                  parts.push(`【语义相关对话摘要（${results.length} 条 / ${topSessions.length} 个会话）】\n${summaryResp}`);
+                } else {
+                  parts.push(`找到 ${results.length} 条语义相关对话：\n\n${rawLines.join("\n---\n")}`);
+                }
+              } catch (_e) {
+                // 摘要失败 fallback 原始输出
+                parts.push(`找到 ${results.length} 条语义相关对话：\n\n${rawLines.join("\n---\n")}`);
+              }
+            } else {
+              parts.push(`找到 ${results.length} 条语义相关对话：\n\n${rawLines.join("\n---\n")}`);
+            }
           }
           if (parts.length === 0) {
             // ── 盲区蒸馏：记忆空白时按需触发蒸馏，下次对话 inject.md 会更新 ──
@@ -12742,6 +12853,96 @@ last_used: null
       },
     }));
 
+
+    // ── session_todo：Andy/Lisa 会话内任务分解追踪（Hermes todo_tool 对齐）──────
+    //
+    // 会话级 todo list，Andy 分解复杂 spec 任务 / Lisa 追踪实现步骤。
+    // 状态只存 sessionTodoMap（内存），不持久化——会话结束自动清空。
+    // before_prompt_build 在有活跃任务时自动注入状态，保持任务感知。
+
+    api.registerTool((toolCtx) => ({
+      label: "会话任务清单（Andy/Lisa）",
+      name: "session_todo",
+      description: [
+        "管理当前会话的任务分解清单。Andy 用于分解复杂 spec 步骤，Lisa 用于追踪实现子任务。",
+        "action=write：提交完整清单（替换），todos 为 [{id, content, status}] 数组。",
+        "action=update：更新单条任务状态，提供 item_id + status（pending/in_progress/done/cancelled）。",
+        "action=read：读取当前清单（无副作用）。",
+        "action=clear：清空整个清单（任务全部完成时调用）。",
+        "status 含义：pending=未开始 / in_progress=进行中 / done=已完成 / cancelled=已取消。",
+        "系统在每轮开始时自动注入有活跃任务的清单，无需手动 read。",
+      ].join("\n"),
+      parameters: Type.Object({
+        action: Type.String({ description: '"write" | "update" | "read" | "clear"' }),
+        todos: Type.Optional(Type.Array(Type.Object({
+          id:      Type.String(),
+          content: Type.String(),
+          status:  Type.Optional(Type.String()),
+        }), { description: 'action=write 时提供完整 todo 列表' })),
+        item_id: Type.Optional(Type.String({ description: 'action=update 时目标任务 id' })),
+        status:  Type.Optional(Type.String({ description: 'action=update 时新状态' })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const ALLOWED = new Set([DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (!ALLOWED.has(toolCtx.agentId ?? "")) {
+          return { content: [{ type: "text", text: "❌ session_todo 仅 Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+        }
+        const p = params as { action: string; todos?: { id: string; content: string; status?: string }[]; item_id?: string; status?: string };
+        const sessionKey = toolCtx.sessionKey ?? toolCtx.agentId ?? "default";
+        const VALID_STATUS = new Set(["pending", "in_progress", "done", "cancelled"]);
+
+        if (p.action === "clear") {
+          sessionTodoMap.delete(sessionKey);
+          return { content: [{ type: "text", text: "✅ 任务清单已清空。" }], details: { cleared: true } };
+        }
+
+        if (p.action === "read") {
+          const items = sessionTodoMap.get(sessionKey) ?? [];
+          if (items.length === 0) return { content: [{ type: "text", text: "当前没有任何任务。" }], details: { count: 0 } };
+          const STATUS_ICON: Record<string, string> = { pending: "⬜", in_progress: "🔄", done: "✅", cancelled: "🚫" };
+          const lines = items.map(t => `${STATUS_ICON[t.status] ?? "⬜"} [${t.id}] ${t.content}`);
+          return { content: [{ type: "text", text: lines.join("\n") }], details: { count: items.length, items } };
+        }
+
+        if (p.action === "write") {
+          if (!Array.isArray(p.todos) || p.todos.length === 0) {
+            return { content: [{ type: "text", text: "❌ write 操作需要提供 todos 数组。" }], details: { error: "missing_todos" } };
+          }
+          const items: TodoItem[] = p.todos.map(t => ({
+            id:      t.id.slice(0, 32),
+            content: t.content.slice(0, 200),
+            status:  VALID_STATUS.has(t.status ?? "") ? (t.status as TodoItem["status"]) : "pending",
+          }));
+          // 去重：同 id 保留最后一条
+          const seen = new Map<string, TodoItem>();
+          for (const item of items) seen.set(item.id, item);
+          sessionTodoMap.set(sessionKey, [...seen.values()]);
+          const pending = [...seen.values()].filter(t => t.status !== "done" && t.status !== "cancelled").length;
+          return { content: [{ type: "text", text: `✅ 清单已更新，共 ${seen.size} 条，${pending} 条待完成。` }], details: { count: seen.size, pending } };
+        }
+
+        if (p.action === "update") {
+          if (!p.item_id || !p.status || !VALID_STATUS.has(p.status)) {
+            return { content: [{ type: "text", text: "❌ update 需要提供有效的 item_id 和 status。" }], details: { error: "invalid_params" } };
+          }
+          const items = sessionTodoMap.get(sessionKey) ?? [];
+          const idx = items.findIndex(t => t.id === p.item_id);
+          if (idx < 0) {
+            return { content: [{ type: "text", text: `❌ 找不到任务 id="${p.item_id}"。` }], details: { error: "not_found" } };
+          }
+          items[idx].status = p.status as TodoItem["status"];
+          sessionTodoMap.set(sessionKey, items);
+          // 全部完成时自动提示清空
+          const allDone = items.every(t => t.status === "done" || t.status === "cancelled");
+          const msg = allDone
+            ? `✅ [${p.item_id}] → ${p.status}。所有任务已完成，可调用 clear 清空清单。`
+            : `✅ [${p.item_id}] → ${p.status}。`;
+          return { content: [{ type: "text", text: msg }], details: { updated: p.item_id, status: p.status, allDone } };
+        }
+
+        return { content: [{ type: "text", text: `❌ 未知 action: ${p.action}` }], details: { error: "unknown_action" } };
+      },
+    }));
 
   },
 };
