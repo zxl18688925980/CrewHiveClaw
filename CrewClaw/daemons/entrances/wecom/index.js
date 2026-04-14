@@ -6858,7 +6858,7 @@ app.listen(PORT, () => {
     logger.info('Main 监控循环已注册', { intervalHours: MAIN_MONITOR_INTERVAL_MS / 3600000, 协议: '告警级别3紧急/告警级别2日报/告警级别1静默' });
   }
 
-  // 启动 Andy HEARTBEAT 巡检循环（L2 进化循环，启动后延迟 15 分钟首次触发，之后每 24 小时）
+  // 启动 Andy HEARTBEAT 巡检循环（L4 系统自我演化，启动后延迟 15 分钟首次触发，之后每 24 小时）
   setTimeout(() => {
     runAndyHeartbeatLoop();
     setInterval(runAndyHeartbeatLoop, ANDY_HEARTBEAT_INTERVAL_MS);
