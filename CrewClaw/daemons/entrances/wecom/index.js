@@ -2353,8 +2353,9 @@ const MAIN_TOOLS = [
         title: { type: 'string', description: '改进点标题（一句话，≤40字）' },
         description: { type: 'string', description: '详细描述：发现了什么问题、影响是什么、建议如何处理' },
         priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'low: 优化机会 | medium: 影响体验但不紧急 | high: 架构缺口或持续积累的系统性问题' },
+        action_type: { type: 'string', enum: ['agents_md', 'code_fix', 'readme', 'observe'], description: '建议干预类型——agents_md: 行为问题（幻觉承诺/回复风格/工具滥用），改 AGENTS.md 行为规则可修 | code_fix: 功能缺失/工具 bug/插件逻辑错误，需改代码 | readme: 架构级调整，需修正 Readme 正朔再刷新 Agent 认知 | observe: 信号尚弱，先积累数据再判断，暂不干预' },
       },
-      required: ['title', 'description', 'priority'],
+      required: ['title', 'description', 'priority', 'action_type'],
     },
   },
 ];
@@ -2851,7 +2852,7 @@ async function executeMainTool(toolName, toolInput) {
   if (toolName === 'log_improvement_task') {
     const tasksPath = path.join(HOMEAI_ROOT, 'Data', 'main-pending-tasks.json');
     try {
-      const { title, description, priority = 'medium' } = toolInput;
+      const { title, description, priority = 'medium', action_type = 'observe' } = toolInput;
       if (!title || !description) return '错误：title 和 description 必填';
 
       // 读取现有任务文件（不存在则初始化）
@@ -2884,6 +2885,7 @@ async function executeMainTool(toolName, toolInput) {
         id,
         createdAt: nowCST(),
         priority,
+        action_type,
         title,
         description,
         status: 'pending',
@@ -2893,7 +2895,8 @@ async function executeMainTool(toolName, toolInput) {
 
       fs.mkdirSync(path.dirname(tasksPath), { recursive: true });
       fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
-      return `✅ 已记录改进任务 [${id}]：${title}（优先级：${priority}）`;
+      const actionLabels = { agents_md: '改AGENTS.md', code_fix: '改代码', readme: '改Readme', observe: '只观察' };
+      return `✅ 已记录改进任务 [${id}]：${title}（优先级：${priority} | 建议动作：${actionLabels[action_type] ?? action_type}）`;
     } catch (e) {
       return `log_improvement_task 失败：${e.message}`;
     }

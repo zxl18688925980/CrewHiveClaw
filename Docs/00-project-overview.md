@@ -1352,7 +1352,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `evaluate_l4`          | 系统自我演化状态（两层）：【系统层】进化信号（skill-candidates + dpo-candidates 积累量）、知识内化（蒸馏产出 + codebase_patterns）、Skill 积累（三角色总数）+ 三阶段机制运转状态（Phase 1 draft 自动生成率 / Phase 2 usage 覆盖率 / Phase 3 迭代+废弃统计）、Andy 巡检时效（距上次 HEARTBEAT 小时数）+ Skill 健康审计产出、**AGENTS.md 规则收敛度**（三角色合计规则行数，lower_better，越少说明行为越内化到权重）、**路由阈值进化**（route-events.jsonl 近 200 条本地路由占比，越高说明本地模型承担越多）；【模型层】按 pattern_type 分组统计 dpo-candidates.jsonl 积累量（⚪/🟡/🔴，距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势、本地模型就绪状态；**模型能力评估（evaluate_local_model）**：Kuzu 家人事实自动生成知识题（0.4 权重）+ ChromaDB 真实对话测对话能力（0.6 权重），零硬编码，第二个部署有数据即可运行 |
 | `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`），业主发「系统评估」即触发 |
 | `update_heartbeat`     | 追加监控观察（`append_observation`）/ 标记日报已发（`mark_daily_sent`，清空待汇总观察）|
-| `log_improvement_task` | 记录监控发现的系统改进点到 `data/main-pending-tasks.json`；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
+| `log_improvement_task` | 记录监控发现的系统改进点到 `data/main-pending-tasks.json`；必填 `action_type`（`agents_md` 改行为规则 / `code_fix` 改代码 / `readme` 改正朔刷新认知 / `observe` 积累数据再判断），工程师收到任务即知推荐动作；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
 
 典型远程调试流程：改完插件代码 → `restart_gateway` → `test_lucas` → 确认修复，全程企业微信完成。
 
