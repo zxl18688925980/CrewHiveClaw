@@ -2798,8 +2798,10 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - ✅ `docs/HomeAI Readme.md` line 150：Lx 里程碑引用段落
 - ✅ `docs/00-project-overview.md` §七 核心定义表 + 说明文字（lines 290-335）
 - ✅ `docs/00-project-overview.md` 散落引用：结晶路径/学习闭环/Andy 原则/记忆系统图（~6 处）
-- ⬜ `docs/00-project-overview.md` §八「L2：系统自进化」整节改 L4 + L4 行为内化节对齐 + watchdog 描述 + HEARTBEAT 标签 + 其他散落引用
-- ⬜ Agent 认知文件刷新（四角色全刷）
+- ✅ `docs/00-project-overview.md` §八「L4 系统层自我演化」整节改 L4 + L4 模型层内化节对齐 + watchdog 描述 + HEARTBEAT 标签 + 其他散落引用（~30 处）
+- ✅ Agent 认知文件刷新（四角色全刷：Main/Andy/Lisa/Lucas AGENTS.md + Andy/Lisa HEARTBEAT.md + Andy DESIGN-PRINCIPLES.md）
+- ✅ evaluate_l2/l4 代码重构：L2 只留 Vibe Anything 指标，L4 拆系统层（S1-S5）+ 模型层（M1-M3）
+- ✅ MAIN_SYSTEM_PROMPT + HEARTBEAT 提示 Lx 分层标签对齐
 
 ### 2. Watchdog probe 自毁循环修复
 

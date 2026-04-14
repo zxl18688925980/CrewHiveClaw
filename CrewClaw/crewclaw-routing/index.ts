@@ -3164,26 +3164,27 @@ async function runAndyPipeline(params: {
       } else {
         // ── Andy 未触发 Lisa：自动重触发机制 ──────────────────────────────
         // 根因：DeepSeek R1 完成分析+写 spec 但忘记调用 trigger_lisa_implementation
-        // 检测 Andy 响应中是否包含 spec JSON 块（```json ... ```），
-        // 有则构造精简 prompt 让 Andy 只做一件事：调用 trigger_lisa_implementation
+        // 不依赖响应格式检测（R1 输出不稳定），只看结果：collab 文件不存在 = 需要重触发
+        // 重触发策略：优先提取已有 spec 直接传入；无 spec 则用原始需求重新开始
         const specJsonMatch = (andyResponse ?? "").match(/```json\s*([\s\S]*?)```/);
-        const hasSpec = specJsonMatch && specJsonMatch[1].includes("integration_points");
+        const hasSpec = !!(specJsonMatch && specJsonMatch[1].trim().length > 20);
 
-        if (hasSpec) {
-          // 自动重触发：Andy 已有完整 spec，只差最后一步工具调用
-          void notifyEngineer(`流水线自动重触发 [${requirementId}]\nAndy 输出了完整 spec 但未调用 trigger_lisa_implementation，自动补救中`, "pipeline", FRONTEND_AGENT_ID);
-          const extractedSpec = specJsonMatch![1];
-          (async () => {
-            try {
-              const retryPrompt = [
+        void notifyEngineer(`流水线自动重触发 [${requirementId}]\nAndy 未调用 trigger_lisa_implementation（无协作线程文件），自动补救中`, "pipeline", FRONTEND_AGENT_ID);
+
+        (async () => {
+          try {
+            let retryPrompt: string;
+            if (hasSpec) {
+              // Andy 输出了 spec 但忘了调工具：直接把 spec 喂回去
+              retryPrompt = [
                 `【自动重触发 · 需求 ID: ${requirementId}】`,
-                `你上一轮完成了方案设计并输出了 Implementation Spec，但忘记调用 trigger_lisa_implementation。`,
+                `你上一轮完成了方案设计，但忘记调用 trigger_lisa_implementation。`,
                 `现在只需要做一件事：调用 trigger_lisa_implementation。`,
                 ``,
-                `你的完整 spec 如下，直接作为 trigger_lisa_implementation 的 spec 参数传入（不要修改）：`,
+                `你的完整 spec 如下，直接作为 spec 参数传入（不要修改）：`,
                 ``,
                 `\`\`\`json`,
-                extractedSpec,
+                specJsonMatch![1],
                 `\`\`\``,
                 ``,
                 `其他参数：`,
@@ -3192,32 +3193,43 @@ async function runAndyPipeline(params: {
                 ``,
                 `立即调用 trigger_lisa_implementation，不需要做其他任何事。`,
               ].join("\n");
-              await callGatewayAgent(DESIGNER_AGENT_ID, retryPrompt, 600_000, undefined, FRONTEND_AGENT_ID);
+            } else {
+              // 无可提取的 spec：用原始需求重新开始，但强调只需要调工具
+              retryPrompt = [
+                `【自动重触发 · 需求 ID: ${requirementId}】`,
+                `你上一轮处理了这个需求但没有触发实现。请重新处理：`,
+                ``,
+                `需求：${params.requirement}`,
+                ...(params.lucasContext ? [`背景：${params.lucasContext}`] : []),
+                ``,
+                `步骤：`,
+                `1. 确认技术可行性和集成点`,
+                `2. 输出 Implementation Spec`,
+                `3. 调用 trigger_lisa_implementation，传入 spec、user_id="${params.userId}"、requirement_id="${requirementId}"`,
+                ``,
+                `第 3 步不可跳过。`,
+              ].join("\n");
+            }
 
-              // 重触发后再次验证
-              const threadFile2 = join(AGENT_THREAD_DIR, `andy-to-lisa:${requirementId}_collab.json`);
-              if (existsSync(threadFile2)) {
-                markTaskStatus(requirementId, "completed");
-                void notifyEngineer(`自动重触发成功 [${requirementId}] Lisa 已启动`, "pipeline", FRONTEND_AGENT_ID);
-              } else {
-                markTaskStatus(requirementId, "failed");
-                void notifyEngineer(`自动重触发失败 [${requirementId}] Andy 仍未调用 trigger_lisa_implementation，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
-                // fallthrough 到 Lucas 决策
-                await runLucasPipelineFallback(requirementId, params);
-              }
-            } catch (retryErr) {
-              const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            await callGatewayAgent(DESIGNER_AGENT_ID, retryPrompt, 600_000, undefined, FRONTEND_AGENT_ID);
+
+            // 重触发后再次验证
+            const threadFile2 = join(AGENT_THREAD_DIR, `andy-to-lisa:${requirementId}_collab.json`);
+            if (existsSync(threadFile2)) {
+              markTaskStatus(requirementId, "completed");
+              void notifyEngineer(`自动重触发成功 [${requirementId}] Lisa 已启动`, "pipeline", FRONTEND_AGENT_ID);
+            } else {
               markTaskStatus(requirementId, "failed");
-              void notifyEngineer(`自动重触发异常 [${requirementId}] ${retryErrMsg.slice(0, 200)}，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
+              void notifyEngineer(`自动重触发失败 [${requirementId}] Andy 仍未调用 trigger_lisa_implementation，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
               await runLucasPipelineFallback(requirementId, params);
             }
-          })();
-        } else {
-          // 无 spec 内容：Andy 可能没有完成设计，走 Lucas 决策路径
-          markTaskStatus(requirementId, "failed");
-          void notifyEngineer(`流水线异常 [${requirementId}]\nAndy 响应但未输出 spec 且未触发 Lisa（无协作线程文件）`, "pipeline", FRONTEND_AGENT_ID);
-          void runLucasPipelineFallback(requirementId, params);
-        }
+          } catch (retryErr) {
+            const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            markTaskStatus(requirementId, "failed");
+            void notifyEngineer(`自动重触发异常 [${requirementId}] ${retryErrMsg.slice(0, 200)}，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
+            await runLucasPipelineFallback(requirementId, params);
+          }
+        })();
       }
     }
   } catch (e: unknown) {
@@ -7053,15 +7065,32 @@ const crewclawRoutingPlugin = {
         if (nowTs - lastProactiveDispatchAt >= PROACTIVE_DISPATCH_COOLDOWN_MS) {
           void (async () => {
             try {
-              if (!existsSync(TASK_QUEUE_FILE)) return;
-              const queuedTasks = readJsonlEntries(TASK_QUEUE_FILE);
+              // 优先读 queue file，fallback 读 registry queued 任务
+              let queuedTasks: Record<string, unknown>[] = [];
+              if (existsSync(TASK_QUEUE_FILE)) {
+                queuedTasks = readJsonlEntries(TASK_QUEUE_FILE);
+              }
+              // queue file 为空时，从 registry 补救 status=queued 的孤儿任务
+              if (queuedTasks.length === 0) {
+                const orphaned = readTaskRegistry().filter(t => t.status === "queued");
+                if (orphaned.length > 0) {
+                  queuedTasks = orphaned.map(t => ({
+                    requirement: t.requirement,
+                    intentType: "develop_feature",
+                    requestorId: t.submittedBy ?? "unknown",
+                    originalSymptom: t.requirement,
+                    taskId: t.id,
+                  }));
+                  logger.info(`[Dispatch] queue file 为空，从 registry 补救 ${queuedTasks.length} 个孤儿任务`);
+                }
+              }
               if (queuedTasks.length === 0) return;
               // 检查负载：有 running 任务时不抢占（Andy/Lisa 正在工作）
               const activeTasks = readTaskRegistry().filter(t => t.status === "running");
               if (activeTasks.length > 0) return;
               // 条件满足：立即排干队列，不等 22:00
               lastProactiveDispatchAt = nowTs;
-              writeFileSync(TASK_QUEUE_FILE, "", "utf8");
+              if (existsSync(TASK_QUEUE_FILE)) writeFileSync(TASK_QUEUE_FILE, "", "utf8");
               logger.info(`[Dispatch] 主动排干任务队列：${queuedTasks.length} 个任务，系统空闲，由对话结束触发`);
               void notifyEngineer(
                 `🚀 [主动调度] Lucas 对话结束，发现 ${queuedTasks.length} 个积压任务，系统空闲，主动启动处理（6h 冷却）`,
