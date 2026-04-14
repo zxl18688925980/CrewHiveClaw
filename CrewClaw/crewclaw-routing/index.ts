@@ -30,7 +30,7 @@
  *   cancel_task：Lucas 专属，叫停排队或进行中任务（pre-Lisa 检查点阻断实现）
  */
 
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, existsSync, unlinkSync, renameSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, existsSync, unlinkSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { spawn, execSync, spawnSync } from "node:child_process";
@@ -2818,15 +2818,21 @@ async function spawnParallelLisa(
     try {
       // 并行子任务不重试：retry 在并发上下文里会叠出更多 Lisa 会话；失败直接记录，由 Andy 决策下一步
       const result = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, lisaPrompt, 600_000, threadId, DESIGNER_AGENT_ID);
+      // 并行子任务也走独立验证门
+      const subSpecJson: Record<string, unknown> = {
+        integration_points: (subSpec.files_owned ?? []).map((f: string) => ({ file: f, action: "新增" })),
+      };
+      const vResult = verifyLisaDelivery(subSpecJson);
+      const verifySummary = vResult.passed ? "" : ` [验证: ${vResult.summary}]`;
       writeFileSync(
         join(pipelineDir, `${taskId}.json`),
-        JSON.stringify({ taskId, title, status: "completed", result, timestamp: nowCST() }, null, 2),
+        JSON.stringify({ taskId, title, status: "completed", result, verification: vResult.summary, timestamp: nowCST() }, null, 2),
       );
       appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
         timestamp: nowCST(), source: "coordinator", reqId, taskId, content: result,
       });
-      void notifyEngineer(`【${reqId}·${taskId}】✅ ${title} 完成`, "pipeline", IMPLEMENTOR_AGENT_ID);
-      return { taskId, title, result, success: true };
+      void notifyEngineer(`【${reqId}·${taskId}】${vResult.passed ? "✅" : "⚠️"} ${title}${verifySummary}`, "pipeline", IMPLEMENTOR_AGENT_ID);
+      return { taskId, title, result: result + verifySummary, success: vResult.passed };
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       writeFileSync(
@@ -2839,6 +2845,106 @@ async function spawnParallelLisa(
   });
 
   return Promise.all(tasks);
+}
+
+// ── L2 Planning Mode：自动任务分解 ─────────────────────────────────────────
+//
+// 当 spec JSON 含 planning_mode: true 时，用 DeepSeek Chat 将 spec 自动分解为 sub_specs，
+// 然后复用 spawnParallelLisa 并行执行，完成后自动集成（不需要 Andy 手动调 trigger_lisa_integration）。
+//
+// 与 Coordinator 模式的区别：
+//   Coordinator → Andy 手动写 sub_specs（精确控制，适合架构师主导的大特性）
+//   Planning Mode → 系统自动分解 sub_specs（快速响应，适合中等复杂度需求的自动处理）
+
+async function decomposeToSubSpecs(
+  specJson: Record<string, unknown>,
+  reqId: string,
+): Promise<SubSpecTask[]> {
+  const title = (specJson.title as string) ?? reqId;
+  const solution = (specJson.solution as string) ?? "";
+  const integrationPoints = (specJson.integration_points ?? []) as Array<{ file: string; target: string; action?: string }>;
+  const acceptanceCriteria = (specJson.acceptance_criteria ?? []) as Array<{ id: string; given: string; then: string }>;
+  const outOfScope = (specJson.out_of_scope ?? []) as string[];
+
+  // 按 integration_points 的 action 和文件路径做结构性分解（不依赖 LLM）
+  // 每个独立文件（或紧密耦合的文件组）成为一个 sub-task
+  const NEW_FILE_ACTIONS = ["新增", "create", "新建", "创建"];
+
+  // 按 files_owned 分组：同目录的文件归为一个 sub-task
+  const fileGroups: Map<string, Array<{ file: string; target: string; action?: string }>> = new Map();
+  for (const ip of integrationPoints) {
+    const dir = ip.file.replace(/\/[^/]+$/, ""); // 取目录部分
+    if (!fileGroups.has(dir)) fileGroups.set(dir, []);
+    fileGroups.get(dir)!.push(ip);
+  }
+
+  // 如果只有一个文件组（任务太小不需要分解），不触发 Planning Mode
+  if (fileGroups.size <= 1) {
+    return [];
+  }
+
+  const subSpecs: SubSpecTask[] = [];
+  let taskIdx = 0;
+
+  for (const [dir, ips] of fileGroups) {
+    taskIdx++;
+    const taskId = `${reqId}_task${String(taskIdx).padStart(3, "0")}`;
+    const filesOwned = ips.map(ip => ip.file);
+
+    // 过滤出与这个文件组相关的 AC
+    const relatedAC = acceptanceCriteria.filter(ac => {
+      const acText = `${ac.given} ${ac.then}`;
+      return filesOwned.some(f => acText.includes(f) || acText.includes(f.replace(/.*\//, "")));
+    });
+    // 如果没有直接匹配的 AC，给这个 sub-task 分配所有未分配的 AC（兜底）
+    const assignedAC = relatedAC.length > 0 ? relatedAC : acceptanceCriteria.slice(0);
+
+    subSpecs.push({
+      task_id: taskId,
+      title: `${dir.split("/").pop()} 模块`,
+      files_owned: filesOwned,
+      provides_interfaces: ips.map(ip => ({
+        name: ip.target,
+        file: ip.file,
+      })),
+      depends_on_interfaces: [],
+      acceptance_criteria: assignedAC.map(ac => ({
+        id: ac.id,
+        given: ac.given,
+        then: ac.then,
+      })),
+      out_of_scope: outOfScope,
+    });
+  }
+
+  // 接口依赖推断：如果 sub-task B 的 AC 提到了 sub-task A 的文件，B depends_on A
+  for (let i = 0; i < subSpecs.length; i++) {
+    const deps: Array<{ name: string; file: string; provided_by: string }> = [];
+    for (let j = 0; j < subSpecs.length; j++) {
+      if (i === j) continue;
+      const acs = (subSpecs[i].acceptance_criteria ?? []) as Array<{ given: string; then: string }>;
+      const otherFiles = subSpecs[j].files_owned ?? [];
+      for (const ac of acs) {
+        const acText = `${ac.given} ${ac.then}`;
+        for (const f of otherFiles) {
+          if (acText.includes(f) || acText.includes(f.replace(/.*\//, ""))) {
+            if (!deps.some(d => d.provided_by === subSpecs[j].task_id)) {
+              deps.push({
+                name: (subSpecs[j].provides_interfaces?.[0] as { name?: string })?.name ?? subSpecs[j].task_id,
+                file: f,
+                provided_by: subSpecs[j].task_id,
+              });
+            }
+          }
+        }
+      }
+    }
+    if (deps.length > 0) {
+      subSpecs[i].depends_on_interfaces = deps;
+    }
+  }
+
+  return subSpecs;
 }
 
 // ── Channel 回调路径解析 ──────────────────────────────────────────────
@@ -3425,6 +3531,8 @@ async function launchOpenCodeBackground(
       if (ipFiles.length > 0) opencodeSpecFiles.set(sessionId, ipFiles);
     }
   } catch (_e) { /* spec 格式不规范，跳过 */ }
+  // 记录 requirementId 供 proc.on("close") 回填 outcome
+  if (_taskRequirementId) opencodeReqIdMap.set(sessionId, _taskRequirementId);
   // 持久化启动记录（重启后可检测孤儿 session）
   persistOpencodeSession(sessionId, {
     pid: proc.pid,
@@ -3486,6 +3594,54 @@ async function launchOpenCodeBackground(
         outputSnippet: outputSnippet.slice(-300),
       });
     } catch (_e) { /* 持久化失败不阻塞通知 */ }
+
+    // ── Andy spec SFT 队列：回填 outcome ──────────────────────────────────────
+    // 用 requirementId 在队列文件中找到对应条目，写入 exitCode + specMatchRate + 标记 eligible
+    try {
+      const reqId4 = opencodeReqIdMap.get(sessionId) ?? "";
+      opencodeReqIdMap.delete(sessionId);
+      if (reqId4 && existsSync(ANDY_SPEC_FINETUNE_QUEUE)) {
+        const lines4 = readFileSync(ANDY_SPEC_FINETUNE_QUEUE, "utf8")
+          .split("\n")
+          .filter(Boolean);
+        // 找到最新一条 requirementId 匹配且 outcome 为 null 的条目
+        let targetIdx = -1;
+        for (let i = lines4.length - 1; i >= 0; i--) {
+          try {
+            const e = JSON.parse(lines4[i]) as Record<string, unknown>;
+            if (e.requirementId === reqId4 && e.outcome === null) {
+              targetIdx = i;
+              break;
+            }
+          } catch (_e3) { /* 解析失败跳过 */ }
+        }
+        if (targetIdx >= 0) {
+          const specFiles4 = opencodeSpecFiles.get(sessionId) ?? [];
+          let specMatchRate = 0;
+          if (specFiles4.length > 0) {
+            try {
+              const diffOut4 = execSync("git diff --name-only HEAD", {
+                cwd: projectRoot, timeout: 8_000,
+              }).toString().trim();
+              const gitDiffFiles4 = diffOut4 ? diffOut4.split("\n").filter(Boolean) : [];
+              const hits = specFiles4.filter(sf =>
+                gitDiffFiles4.some(gf =>
+                  gf.includes(sf.replace(/^.*\//, "")) || sf.includes(gf.replace(/^.*\//, ""))
+                )
+              ).length;
+              specMatchRate = Math.round((hits / specFiles4.length) * 100) / 100;
+            } catch (_e4) { /* git diff 失败静默 */ }
+          }
+          try {
+            const entry4 = JSON.parse(lines4[targetIdx]) as Record<string, unknown>;
+            entry4.outcome = { exitCode: code, specMatchRate, timestamp: nowCST() };
+            entry4.eligibleForTraining = code === 0 && specMatchRate >= 0.5;
+            lines4[targetIdx] = JSON.stringify(entry4);
+            writeFileSync(ANDY_SPEC_FINETUNE_QUEUE, lines4.join("\n") + "\n", "utf8");
+          } catch (_e5) { /* 写入失败静默 */ }
+        }
+      }
+    } catch (_e) { /* 回填失败不阻塞通知 */ }
 
     // ── Spec vs 实际变更文件交叉核对（对抗性验证）────────────────────────────
     // 对比 spec integration_points 预期文件 vs git diff 实际变更文件，
@@ -3854,6 +4010,60 @@ function runProjectCompileCheck(): CompileCheckResult {
   }
 }
 
+// ── Lisa 交付独立验证门 ──────────────────────────────────────────────
+//
+// Claude Code 的可靠性核心：做完不靠自述，跑测试验证。
+// translate：Lisa 说"做完了"不算，插件层独立检查文件变更 + 编译。
+// 不通过 → 自动重试一次 → 仍不通过 → 带证据通知 Andy。
+//
+interface VerifyResult {
+  passed: boolean;
+  changedFiles: string[];
+  hasErrors: boolean;
+  errors: string;
+  missingTargetFiles: string[];
+  summary: string;
+}
+
+const NEW_FILE_ACTIONS = ["新增", "create", "新建", "创建"];
+
+function verifyLisaDelivery(specJson: Record<string, unknown> | null): VerifyResult {
+  const compile = runProjectCompileCheck();
+
+  const missingFiles: string[] = [];
+  if (specJson) {
+    const ips = (specJson.integration_points ?? []) as Array<{ file?: string; action?: string }>;
+    for (const ip of ips) {
+      if (ip.file && ip.action && NEW_FILE_ACTIONS.includes(ip.action)) {
+        const fullPath = ip.file.startsWith("/") ? ip.file : join(PROJECT_ROOT, ip.file);
+        if (!existsSync(fullPath)) missingFiles.push(ip.file);
+      }
+    }
+  }
+
+  const passed = !compile.hasErrors
+    && (compile.changedFiles.length > 0 || missingFiles.length === 0)
+    && missingFiles.length === 0;
+
+  const parts: string[] = [];
+  if (compile.hasErrors) parts.push(`编译错误: ${compile.errors.slice(0, 500)}`);
+  if (compile.changedFiles.length === 0 && missingFiles.length === 0) {
+    parts.push("git diff 未检测到文件变更");
+  }
+  if (missingFiles.length > 0) {
+    parts.push(`spec 要求新增但未找到的文件: ${missingFiles.join(", ")}`);
+  }
+
+  return {
+    passed,
+    changedFiles: compile.changedFiles,
+    hasErrors: compile.hasErrors,
+    errors: compile.errors,
+    missingTargetFiles: missingFiles,
+    summary: passed ? "✅ 验证通过" : `❌ 验证未通过: ${parts.join("; ")}`,
+  };
+}
+
 function buildAndyVerificationPrompt(spec: string, lisaReport: string): string {
   return [
     "【验收任务】Lisa 刚完成代码实现，请对照 spec 做设计意图校验。",
@@ -3883,6 +4093,10 @@ const FINETUNE_QUEUE_FILE    = join(PROJECT_ROOT, "data/learning/finetune-queue.
 const DPO_CANDIDATES_FILE   = join(PROJECT_ROOT, "data/learning/dpo-candidates.jsonl");
 const FINETUNE_THRESHOLD     = 0.6;
 const FINETUNE_QUEUE_TRIGGER = 100;
+// Andy spec SFT 积累队列：每次通过验证的 spec 写入，回填 outcome 后 eligibleForTraining=true
+const ANDY_SPEC_FINETUNE_QUEUE = join(PROJECT_ROOT, "data/learning/andy-spec-finetune-queue.jsonl");
+// sessionId → requirementId，供 proc.on("close") 回填 outcome
+const opencodeReqIdMap = new Map<string, string>();
 
 // 延迟任务队列：非紧急需求在空闲时段批量执行
 const TASK_QUEUE_FILE = join(PROJECT_ROOT, "data/learning/task-queue.jsonl");
@@ -5153,6 +5367,8 @@ const crewclawRoutingPlugin = {
     const sessionVisitorPrivacyCorrections = new Map<string, string>();
     // 承诺幻觉纠正（false_commitment 检测到但未调工具 → 下一轮注入针对性纠正）
     const sessionFalseCommitCorrections = new Map<string, string>();
+    // L1 Skill 提醒：agent_end 检测到 5+ 工具调用时写入，下一轮 before_prompt_build 注入提醒
+    const sessionSkillReminders = new Map<string, { toolCount: number; tools: string[] }>();
 
     // ── Gateway 资源池实例（插件生命周期内全局共享）──────────────────────────
     // Lucas 专属保留槽位，其余 agent 使用共享竞争槽位
@@ -5780,6 +5996,9 @@ const crewclawRoutingPlugin = {
         if ((_lucasBehavioralRules as Record<string, unknown>).styleRule) {
           appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).styleRule as string);
         }
+        if ((_lucasBehavioralRules as Record<string, unknown>).progressRule) {
+          appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).progressRule as string);
+        }
 
         // ── 工具调用幻觉纠正注入（上一轮检测到幻觉时注入，打断传播链条）──────────
         // 幻觉从原理上无法消灭，但可以在下一轮上下文里纠正，阻止链条蔓延。
@@ -6246,6 +6465,47 @@ const crewclawRoutingPlugin = {
             }
           }
         } catch (_e) { /* 静默 */ }
+        // ── Andy HEARTBEAT：Skill 使用统计注入（Phase 2）──
+        // 从 skill-usage.jsonl 统计最近 7 天各 Skill 的使用频率和成功率，
+        // Andy 在 HEARTBEAT 中执行 Skill 健康审计。
+        try {
+          const suPath = join(DATA_DIR, "learning", "skill-usage.jsonl");
+          if (existsSync(suPath)) {
+            const suLines = readFileSync(suPath, "utf8").split("\n").filter(l => l.trim());
+            const sevenDaysAgo = agoCST(7 * 24 * 3600 * 1000);
+            const recentLines = suLines.filter(l => {
+              try { return (JSON.parse(l).timestamp ?? "") >= sevenDaysAgo; } catch (_e) { return false; }
+            });
+            if (recentLines.length > 0) {
+              // 按 skillName 聚合
+              const stats: Record<string, { loaded: number; used: number; completed: number; skipped: number }> = {};
+              for (const l of recentLines) {
+                try {
+                  const j = JSON.parse(l);
+                  if (!stats[j.skillName]) stats[j.skillName] = { loaded: 0, used: 0, completed: 0, skipped: 0 };
+                  if (j.action === "completed") stats[j.skillName].completed++;
+                  else if (j.action === "used") stats[j.skillName].used++;
+                  else if (j.action === "skipped") stats[j.skillName].skipped++;
+                  stats[j.skillName].loaded++;
+                } catch (_e) { /* skip */ }
+              }
+              const summary = Object.entries(stats).map(([name, s]) => {
+                const total = s.loaded;
+                const successRate = total > 0 ? (s.completed / total * 100).toFixed(0) : "0";
+                return `· ${name}: 使用${total}次 完成率${successRate}% (完成${s.completed}/部分${s.used}/跳过${s.skipped})`;
+              }).join("\n");
+              appendSystem.push(
+                `【Skill 使用统计（最近 7 天）】\n` +
+                `请审查以下 Skill 健康状况：\n` +
+                `· 使用0次且创建超7天 → 标记 status=deprecated\n` +
+                `· 完成率<30%且使用>5次 → 需要迭代更新步骤\n` +
+                `· trigger_count高但usage_count低 → description 不准确需修改\n` +
+                `· **生态优先检查（固化前必做）**：draft 状态的 Skill 标记 active 前，先用 openclaw skills list 和 clawhub search 检查 OpenClaw 生态是否已有覆盖。生态已有 → 直接用现有方案，不新建 Skill。\n` +
+                summary
+              );
+            }
+          }
+        } catch (_e) { /* 静默 */ }
         // ── Andy HEARTBEAT：Lucas 知识投喂注入（按时序，不受语义竞争）──────────────
         try {
           const sevenDaysAgo = agoCST(7 * 24 * 3600 * 1000);
@@ -6316,6 +6576,24 @@ const crewclawRoutingPlugin = {
             }
           }
         } catch (_e) { /* 静默 */ }
+      }
+
+      // ── L1 Skill 提醒消费（三角色通用）─────────────────────────────
+      // agent_end 检测到 5+ 工具调用 → sessionSkillReminders 写入 → 本轮读取注入并清除
+      // 参考 Hermes SKILLS_GUIDANCE："After completing a complex task (5+ tool calls),
+      // save the approach as a skill."弱模型需要显式提醒才不会遗漏。
+      const _skillReminder = sessionSkillReminders.get(ctx.sessionKey ?? "");
+      if (_skillReminder) {
+        sessionSkillReminders.delete(ctx.sessionKey ?? "");
+        const _agentLabel = ctx.agentId === FRONTEND_AGENT_ID ? "Lucas"
+          : ctx.agentId === DESIGNER_AGENT_ID ? "Andy"
+          : ctx.agentId === IMPLEMENTOR_AGENT_ID ? "Lisa" : ctx.agentId;
+        appendSystem.push(
+          `【L1 Skill 提醒】上轮你调用了 ${_skillReminder.toolCount} 次工具（${_skillReminder.tools.slice(0, 5).join("、")}）完成了复杂任务。\n` +
+          `如果这个做法可复用，考虑用 skill_manage(action='create') 把它保存为 Skill，下次遇到类似场景直接复用。\n` +
+          `只需提供 skill_name + description + content，frontmatter 自动生成。局部修改用 patch，删除用 delete。\n` +
+          `Skill 不维护是负债——过时的 Skill 立即覆盖更新。`
+        );
       }
 
       if (prepend.length === 0 && appendSystem.length === 0) return;
@@ -6424,6 +6702,75 @@ const crewclawRoutingPlugin = {
         }
       }
     });
+
+    // ── Skill 草稿自动写入（Phase 1：低阈值自动触发）───────────────────────────
+    // Hermes 启示：2 次工具调用即触发 Skill 草稿生成，不等人/Agent 手动创建
+    // 幂等：已存在 draft 草稿则更新 trigger_count/last_seen；已 active 的不覆盖
+    function writeSkillDraft(agentId: string, comboKey: string, actionTools: string[], triggerContext: string): void {
+      try {
+        const home = process.env.HOME ?? "/";
+        const hash6 = comboKey.split("").reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(16).replace("-", "a").slice(0, 6);
+        const skillName = `auto-${comboKey.replace(/\+/g, "-").slice(0, 40)}-${hash6}`;
+        const skillDir = join(home, `.openclaw/workspace-${agentId}/skills/${skillName}`);
+        const skillFile = join(skillDir, "SKILL.md");
+        const now = nowCST();
+        const today = now.slice(0, 10);
+
+        if (existsSync(skillFile)) {
+          // 已存在：更新 frontmatter 计数（不覆盖 active 内容）
+          const existing = readFileSync(skillFile, "utf8");
+          const fmMatch = existing.match(/^---\n([\s\S]*?)\n---/);
+          if (fmMatch) {
+            const fm = fmMatch[1];
+            // 如果已经是 active 状态，不覆盖
+            if (fm.includes("status: active")) return;
+            const newFm = fm
+              .replace(/trigger_count: \d+/, (_m, _o, s: string) => {
+                const count = parseInt(s.match(/trigger_count: (\d+)/)?.[1] ?? "1");
+                return `trigger_count: ${count + 1}`;
+              })
+              .replace(/last_seen: .*/, `last_seen: ${today}`)
+              .replace(/usage_count: \d+/, "usage_count: 0")
+              .replace(/success_count: \d+/, "success_count: 0")
+              .replace(/last_used: .*/, "last_used: null");
+            const updated = existing.replace(fmMatch[1], newFm);
+            writeFileSync(skillFile, updated, "utf8");
+          }
+          return;
+        }
+
+        // 新建 Skill 草稿
+        mkdirSync(skillDir, { recursive: true });
+        const toolDescriptions = actionTools.map(t => `- ${t}: 根据上下文自动推断`).join("\n");
+        const content = `---
+name: ${skillName}
+description: 基于多次操作自动生成。${actionTools.join(" → ")} 组合工作流。
+status: draft
+created_from: auto-detect
+trigger_count: 1
+first_seen: ${today}
+last_seen: ${today}
+usage_count: 0
+success_count: 0
+last_used: null
+---
+
+## 触发条件
+当需要 ${actionTools.join("、")} 配合使用的场景出现时，参考此 skill。
+
+## 操作步骤
+${toolDescriptions}
+
+## 注意事项
+此 Skill 由系统自动生成草稿。经过验证后应标记为 status: active。
+**固化前必查**：标记 active 前，先用 \`openclaw skills list\` 和 \`clawhub search\` 检查 OpenClaw 生态是否已有覆盖。生态已有 → 直接用，不自建。
+`;
+        writeFileSync(skillFile, content, "utf8");
+        logger.info(`[skill-draft] auto-created ${skillName} for ${agentId}`);
+      } catch (_e) {
+        logger.warn(`[skill-draft] failed to write skill draft for ${agentId}: ${(_e as Error).message}`);
+      }
+    }
 
     // Lucas 额外：写入记忆文件（跨会话记忆积累）
     // 从 messages 提取最后一对 user/assistant 消息，覆盖整个 tool-calling 中间过程。
@@ -6763,20 +7110,22 @@ const crewclawRoutingPlugin = {
         }
       }
 
-      // ── 自动结晶信号：Lucas 多工具组合 → skill-candidates（基础设施层，不依赖模型判断）──
-      // 触发条件：Lucas 在一次请求中调用了 ≥3 个不同行动工具（排除查询类和常见工作流组合）
+      // ── 自动结晶信号：三角色多工具组合 → skill-candidates + 自动写 Skill 草稿（基础设施层）──
+      // Phase 1：≥2 个行动工具触发，自动写 Skill 草稿到 workspace skills 目录
       // 去重策略：同一 comboKey 在 7 天内只记录一次，防止高频请求撑爆文件
-      if (ctx.agentId === FRONTEND_AGENT_ID && !isTestSession) {
-        const LOOKUP_ONLY_TOOLS = new Set(["recall_memory", "query_member_profile", "list_active_tasks"]);
+      const SKILL_AGENT_IDS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+      if (SKILL_AGENT_IDS.has(ctx.agentId) && !isTestSession) {
+        const LOOKUP_ONLY_TOOLS = new Set(["recall_memory", "query_member_profile", "list_active_tasks", "read_file", "list_files", "search_codebase"]);
         const actionTools = Object.keys(toolUseCounts).filter(t => !LOOKUP_ONLY_TOOLS.has(t));
-        if (actionTools.length >= 3) {
+        if (actionTools.length >= 2) {
           const comboKey = [...actionTools].sort().join("+");
           const skillCandidatesFile = join(PROJECT_ROOT, "data/learning/skill-candidates.jsonl");
-          // 7 天去重：同 comboKey 7 天内不重复写
+          // 7 天去重：同 agentId + comboKey 7 天内不重复写
           const existing = readJsonlEntries(skillCandidatesFile);
           const cutoff = Date.now() - 7 * 24 * 3_600_000;
           const recentDup = existing.some((e: Record<string, unknown>) =>
             e.source === "auto_detect" &&
+            e.agentId === ctx.agentId &&
             e.pattern_name === `工具组合：${comboKey}` &&
             typeof e.timestamp === "string" &&
             new Date(e.timestamp).getTime() > cutoff
@@ -6785,16 +7134,322 @@ const crewclawRoutingPlugin = {
             appendJsonl(skillCandidatesFile, {
               timestamp: nowCST(),
               source: "auto_detect",
+              agentId: ctx.agentId,
               pattern_name: `工具组合：${comboKey}`,
-              description: `Lucas 在一次对话中调用了 ${actionTools.length} 个工具（${comboKey}）。触发内容：${actualPrompt.slice(0, 120)}`,
+              description: `${ctx.agentId} 在一次对话中调用了 ${actionTools.length} 个工具（${comboKey}）。触发内容：${actualPrompt.slice(0, 120)}`,
               tool_combo: toolUseCounts,
               suggested_form: "unknown",
               status: "pending",
             });
           }
+          // 自动写 Skill 草稿到 workspace skills 目录（幂等：已存在则更新 frontmatter 计数）
+          writeSkillDraft(ctx.agentId, comboKey, actionTools, actualPrompt);
         }
       }
 
+      // ── L1 Skill 提醒：5+ 工具调用 → 下一轮提醒 Agent 考虑写 Skill ──────────
+      // 参考 Hermes SKILLS_GUIDANCE："After completing a complex task (5+ tool calls),
+      // save the approach as a skill."弱模型需要显式提醒才会主动写。
+      if (SKILL_AGENT_IDS.has(ctx.agentId) && !isTestSession) {
+        const _totalActionTools = Object.keys(toolUseCounts)
+          .filter(t => !new Set(["recall_memory", "query_member_profile", "list_active_tasks", "read_file", "list_files", "search_codebase"]).has(t))
+          .length;
+        if (_totalActionTools >= 5) {
+          sessionSkillReminders.set(ctx.sessionKey ?? `${ctx.agentId}:skill-reminder`, {
+            toolCount: Object.values(toolUseCounts).reduce((s, n) => s + n, 0),
+            tools: Object.keys(toolUseCounts),
+          });
+        }
+      }
+
+      // ── Phase 2：Skill 使用追踪 → skill-usage.jsonl ────────────────────────
+      // 对比本轮 toolUseCounts 与各 Skill 步骤工具列表，推断使用状态
+      if (SKILL_AGENT_IDS.has(ctx.agentId) && !isTestSession) {
+        try {
+          const skillUsageFile = join(PROJECT_ROOT, "data/learning/skill-usage.jsonl");
+          const home = process.env.HOME ?? "/";
+          const skillsDir = join(home, `.openclaw/workspace-${ctx.agentId}/skills`);
+          if (existsSync(skillsDir)) {
+            const toolSet = new Set(Object.keys(toolUseCounts));
+            const entries = readdirSync(skillsDir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (!entry.isDirectory()) continue;
+              const skillMd = join(skillsDir, entry.name, "SKILL.md");
+              if (!existsSync(skillMd)) continue;
+              const skillContent = readFileSync(skillMd, "utf8");
+              // 跳过 deprecated Skill
+              if (skillContent.includes("status: deprecated")) continue;
+              // 从操作步骤中提取工具名（## 操作步骤 下的 "- toolName:" 格式）
+              const stepsMatch = skillContent.match(/## 操作步骤\n([\s\S]*?)(?=\n##|\n---|$)/);
+              const stepTools = new Set<string>();
+              if (stepsMatch) {
+                for (const line of stepsMatch[1].split("\n")) {
+                  const m = line.match(/-\s+(\w+):/);
+                  if (m) stepTools.add(m[1]);
+                }
+              }
+              // 判断使用状态
+              let action: "completed" | "used" | "skipped" = "skipped";
+              if (stepTools.size > 0) {
+                const matched = [...stepTools].filter(t => toolSet.has(t)).length;
+                if (matched === stepTools.size) action = "completed";
+                else if (matched > 0) action = "used";
+              }
+              const today = nowCST().slice(0, 10);
+              appendJsonl(skillUsageFile, {
+                timestamp: nowCST(),
+                agentId: ctx.agentId,
+                skillName: entry.name,
+                action,
+                sessionId: ctx.sessionKey?.slice(0, 20),
+                toolsActuallyCalled: Object.keys(toolUseCounts),
+                outcome: event.success ? "success" : "failed",
+              });
+              // 更新 Skill frontmatter（usage_count / success_count / last_used）
+              if (action !== "skipped") {
+                const fmMatch = skillContent.match(/^(---\n[\s\S]*?\n---)/);
+                if (fmMatch) {
+                  const fm = fmMatch[1];
+                  const usageMatch = fm.match(/usage_count: (\d+)/);
+                  const successMatch = fm.match(/success_count: (\d+)/);
+                  const newUsage = (parseInt(usageMatch?.[1] ?? "0") + 1).toString();
+                  const newSuccess = (parseInt(successMatch?.[1] ?? "0") + (action === "completed" ? 1 : 0)).toString();
+                  const updatedFm = fm
+                    .replace(/usage_count: \d+/, `usage_count: ${newUsage}`)
+                    .replace(/success_count: \d+/, `success_count: ${newSuccess}`)
+                    .replace(/last_used: .*/, `last_used: ${today}`);
+                  writeFileSync(skillMd, skillContent.replace(fmMatch[1], updatedFm), "utf8");
+                }
+              }
+            }
+          }
+        } catch (_e) {
+          logger.warn(`[skill-usage] tracking failed for ${ctx.agentId}: ${(_e as Error).message}`);
+        }
+      }
+
+      // ── Phase 3：Skill 偏差检测 + 自动迭代 + 废弃 ──────────────────────────
+      // 对比 Skill 步骤工具与本轮实际工具调用，检测偏差并自动迭代/废弃
+      if (SKILL_AGENT_IDS.has(ctx.agentId) && !isTestSession) {
+        try {
+          const home = process.env.HOME ?? "/";
+          const skillsDir = join(home, `.openclaw/workspace-${ctx.agentId}/skills`);
+          const suPath = join(PROJECT_ROOT, "data/learning/skill-usage.jsonl");
+          const scPath = join(PROJECT_ROOT, "data/learning/skill-candidates.jsonl");
+          if (existsSync(skillsDir)) {
+            const toolSet = new Set(Object.keys(toolUseCounts));
+            const entries = readdirSync(skillsDir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (!entry.isDirectory()) continue;
+              const skillMd = join(skillsDir, entry.name, "SKILL.md");
+              if (!existsSync(skillMd)) continue;
+              const skillContent = readFileSync(skillMd, "utf8");
+              const fmMatch = skillContent.match(/^---\n([\s\S]*?)\n---/);
+              if (!fmMatch) continue;
+              const fm = fmMatch[1];
+              // 只对 active/draft/needs-update 状态的 Skill 做检测
+              if (fm.includes("status: deprecated")) continue;
+              // 跳过刚创建的（first_seen == today）
+              const firstSeenMatch = fm.match(/first_seen: (\S+)/);
+              if (firstSeenMatch && firstSeenMatch[1] === nowCST().slice(0, 10)) continue;
+
+              // 偏差检测：如果 Skill 步骤工具 < 50% 被实际使用
+              const stepsMatch = skillContent.match(/## 操作步骤\n([\s\S]*?)(?=\n##|\n---|$)/);
+              if (stepsMatch) {
+                const stepTools = new Set<string>();
+                for (const line of stepsMatch[1].split("\n")) {
+                  const m = line.match(/-\s+(\w+):/);
+                  if (m) stepTools.add(m[1]);
+                }
+                if (stepTools.size > 0) {
+                  const matched = [...stepTools].filter(t => toolSet.has(t)).length;
+                  const coverage = matched / stepTools.size;
+                  if (coverage < 0.5 && toolSet.size > 0) {
+                    // 记录偏差到 skill-usage.jsonl
+                    appendJsonl(suPath, {
+                      timestamp: nowCST(),
+                      agentId: ctx.agentId,
+                      skillName: entry.name,
+                      action: "deviated",
+                      expected_tools: [...stepTools],
+                      actual_tools: [...toolSet],
+                      coverage: coverage.toFixed(2),
+                    });
+                    // 统计偏差次数
+                    if (existsSync(suPath)) {
+                      const suLines = readFileSync(suPath, "utf8").split("\n").filter(l => l.trim());
+                      const sevenDaysAgo = agoCST(7 * 24 * 3600 * 1000);
+                      const deviationCount = suLines.filter(l => {
+                        try {
+                          const j = JSON.parse(l);
+                          return j.skillName === entry.name && j.action === "deviated" && j.timestamp >= sevenDaysAgo;
+                        } catch (_e) { return false; }
+                      }).length;
+                      if (deviationCount >= 3) {
+                        // 自动迭代：用最常见的实际工具组合重写步骤
+                        const recentActualTools: Record<string, number> = {};
+                        for (const l of suLines) {
+                          try {
+                            const j = JSON.parse(l);
+                            if (j.skillName === entry.name && (j.action === "completed" || j.action === "used") && j.timestamp >= sevenDaysAgo) {
+                              for (const t of (j.toolsActuallyCalled ?? [])) {
+                                recentActualTools[t] = (recentActualTools[t] ?? 0) + 1;
+                              }
+                            }
+                          } catch (_e) { /* skip */ }
+                        }
+                        // 取 top 工具作为新步骤
+                        const topTools = Object.entries(recentActualTools)
+                          .sort((a, b) => b[1] - a[1])
+                          .slice(0, 5)
+                          .map(([t]) => t);
+                        if (topTools.length >= 2) {
+                          const newSteps = topTools.map(t => `- ${t}: 根据实际使用模式自动更新`).join("\n");
+                          const iterationMatch = fm.match(/iteration_count: (\d+)/);
+                          const iterationCount = parseInt(iterationMatch?.[1] ?? "0") + 1;
+                          const today = nowCST().slice(0, 10);
+                          // 更新 frontmatter
+                          let newFm = fm
+                            .replace(/status: \w+/, "status: active")
+                            .replace(/iteration_count: \d+/, `iteration_count: ${iterationCount}`);
+                          if (!newFm.includes("iteration_count:")) newFm += `\niteration_count: ${iterationCount}`;
+                          if (!newFm.includes("last_iterated:")) newFm += `\nlast_iterated: ${today}`;
+                          else newFm = newFm.replace(/last_iterated: .*/, `last_iterated: ${today}`);
+                          // 更新步骤
+                          const newContent = skillContent
+                            .replace(fmMatch[1], newFm)
+                            .replace(/## 操作步骤\n[\s\S]*?(?=\n##|\n---|$)/, `## 操作步骤\n${newSteps}\n`);
+                          writeFileSync(skillMd, newContent, "utf8");
+                          logger.info(`[skill-iterate] auto-updated ${entry.name} for ${ctx.agentId} (iteration ${iterationCount})`);
+                          // 记录到 skill-candidates 供审计
+                          appendJsonl(scPath, {
+                            timestamp: nowCST(),
+                            source: "auto_iterate",
+                            agentId: ctx.agentId,
+                            pattern_name: entry.name,
+                            description: `Skill 自动迭代第 ${iterationCount} 次，新步骤：${topTools.join(" → ")}`,
+                            status: "done",
+                          });
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              // 废弃检测：usage_count=0 且创建超 30 天
+              const usageMatch = fm.match(/usage_count: (\d+)/);
+              const usageCount = parseInt(usageMatch?.[1] ?? "0");
+              const createdFromMatch = fm.match(/created_from: (\S+)/);
+              const firstSeen = firstSeenMatch?.[1];
+              if (usageCount === 0 && createdFromMatch?.[1] === "auto-detect" && firstSeen) {
+                const ageDays = (Date.now() - new Date(firstSeen).getTime()) / (24 * 3600 * 1000);
+                if (ageDays > 30) {
+                  const newFm = fm.replace(/status: \w+/, "status: deprecated");
+                  writeFileSync(skillMd, skillContent.replace(fmMatch[1], newFm), "utf8");
+                  logger.info(`[skill-deprecate] auto-deprecated ${entry.name} for ${ctx.agentId} (0 usage in ${Math.floor(ageDays)} days)`);
+                }
+              }
+            }
+          }
+        } catch (_e) {
+          logger.warn(`[skill-phase3] failed for ${ctx.agentId}: ${(_e as Error).message}`);
+        }
+      }
+
+      // ── Phase 3：Andy/Lisa Skill 自动积累 ─────────────────────────────────
+      // Andy spec 编写流程 → spec-{topic} Skill
+      if (ctx.agentId === DESIGNER_AGENT_ID && !isTestSession) {
+        const wroteFile = (toolUseCounts["write_file"] ?? 0) > 0;
+        const searched = (toolUseCounts["search_codebase"] ?? 0) > 0;
+        if (wroteFile && searched && event.success) {
+          try {
+            // 从最后 assistant 消息中提取 topic（取前 30 字做 skill name）
+            const topicSlug = actualPrompt.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "-").slice(0, 30).replace(/-+/g, "-").replace(/^-|-$/g, "");
+            if (topicSlug.length >= 3) {
+              const hash6 = topicSlug.split("").reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(16).replace("-", "a").slice(0, 6);
+              const skillName = `spec-${topicSlug}-${hash6}`;
+              const home = process.env.HOME ?? "/";
+              const skillDir = join(home, `.openclaw/workspace-andy/skills/${skillName}`);
+              const skillFile = join(skillDir, "SKILL.md");
+              if (!existsSync(skillFile)) {
+                mkdirSync(skillDir, { recursive: true });
+                const today = nowCST().slice(0, 10);
+                writeFileSync(skillFile, `---
+name: ${skillName}
+description: Andy spec 编写模式。${topicSlug}。
+status: active
+created_from: auto-spec-pattern
+trigger_count: 1
+first_seen: ${today}
+last_seen: ${today}
+usage_count: 0
+success_count: 0
+last_used: null
+---
+
+## 触发条件
+收到 ${topicSlug} 类型的设计需求时，参考此模式。
+
+## 操作步骤
+1. search_codebase: 搜索现有实现确认集成点
+2. write_file: 编写结构化 Implementation Spec
+
+## 注意事项
+此 Skill 由 Andy spec 编写流程自动积累。
+`, "utf8");
+                logger.info(`[skill-andy-accumulate] created spec skill ${skillName}`);
+              }
+            }
+          } catch (_e) { /* 静默 */ }
+        }
+      }
+
+      // Lisa 实现流程 → impl-{topic} Skill
+      if (ctx.agentId === IMPLEMENTOR_AGENT_ID && !isTestSession) {
+        const usedOpencode = (toolUseCounts["run_opencode"] ?? 0) + (toolUseCounts["get_opencode_result"] ?? 0) > 0;
+        if (usedOpencode && event.success) {
+          try {
+            const topicSlug = actualPrompt.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "-").slice(0, 30).replace(/-+/g, "-").replace(/^-|-$/g, "");
+            if (topicSlug.length >= 3) {
+              const hash6 = topicSlug.split("").reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(16).replace("-", "a").slice(0, 6);
+              const skillName = `impl-${topicSlug}-${hash6}`;
+              const home = process.env.HOME ?? "/";
+              const skillDir = join(home, `.openclaw/workspace-lisa/skills/${skillName}`);
+              const skillFile = join(skillDir, "SKILL.md");
+              if (!existsSync(skillFile)) {
+                mkdirSync(skillDir, { recursive: true });
+                const today = nowCST().slice(0, 10);
+                writeFileSync(skillFile, `---
+name: ${skillName}
+description: Lisa 实现模式。${topicSlug}。
+status: active
+created_from: auto-impl-pattern
+trigger_count: 1
+first_seen: ${today}
+last_seen: ${today}
+usage_count: 0
+success_count: 0
+last_used: null
+---
+
+## 触发条件
+收到 ${topicSlug} 类型的实现任务时，参考此模式。
+
+## 操作步骤
+1. read_file: 读取 spec 和相关代码文件
+2. run_opencode: 使用 opencode 执行实现
+3. get_opencode_result: 获取并检查实现结果
+
+## 注意事项
+此 Skill 由 Lisa 实现流程自动积累。
+`, "utf8");
+                logger.info(`[skill-lisa-accumulate] created impl skill ${skillName}`);
+              }
+            }
+          } catch (_e) { /* 静默 */ }
+        }
+      }
       // ── Lisa edit-tool 路径 codebase_observation ──────────────────────────────
       // Lisa 有时选择直接用 edit/write 工具而非 run_opencode（工程判断）。
       // run_opencode 路径由 proc.on("close") 写入；edit 路径没有此钩子，在 agent_end 补写。
@@ -7499,7 +8154,7 @@ const crewclawRoutingPlugin = {
                 lucasBrief,
                 "",
                 `用户 ID：${requestorId}`,
-                "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展（不是必须推送）。",
+                "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展。如果用户之前问过这个任务或说过「做好了告诉我」，请主动告知。",
               ].join("\n"),
               60_000,
               undefined,
@@ -7825,6 +8480,13 @@ const crewclawRoutingPlugin = {
         "     格式：[{ \"file\": \"CrewHiveClaw/CrewClaw/crewclaw-routing/index.ts\", \"symbol\": \"callGatewayAgent\" }]",
         "     infrastructure 层会 grep 验证 symbol 确实存在 —— 不读代码就写不出能通过验证的 symbol。",
         "     纯新建文件（integration_points 全是 action:新增）时 code_evidence 可为空数组。",
+        "",
+        "【执行模式】spec JSON 中的顶层字段决定执行路径：",
+        "  - 无特殊标记 → 单 Lisa 串行实现（默认）",
+        "  - use_coordinator: true + sub_specs[] → Coordinator 并行模式（Andy 手动拆分）",
+        "  - planning_mode: true → Planning Mode（系统自动按 integration_points 文件目录分组并行执行）",
+        "    触发条件：integration_points 涉及 ≥2 个不同目录的文件",
+        "    适合：中等复杂度需求（3~8 个文件改动），Andy 不需要手动写 sub_specs",
       ].join("\n"),
       parameters: Type.Object({
         spec: Type.String({
@@ -7983,6 +8645,115 @@ const crewclawRoutingPlugin = {
           }
         }
 
+        // ── Planning Mode 检测 ──────────────────────────────────────────
+        // spec JSON 含 planning_mode: true 时，自动分解为 sub_specs 并行执行
+        {
+          const planningJsonMatch = p.spec.match(/```json\s*([\s\S]*?)```/);
+          if (planningJsonMatch) {
+            try {
+              const specData = JSON.parse(planningJsonMatch[1]) as Record<string, unknown>;
+              if (specData.planning_mode === true) {
+                const reqId = p.requirement_id ?? `req_${Date.now()}`;
+
+                // 自动分解
+                const subSpecs = await decomposeToSubSpecs(specData, reqId);
+                if (subSpecs.length <= 1) {
+                  // 不够拆分（只有 1 个文件组）→ 降级为普通单 Lisa 路径
+                  void notifyEngineer(
+                    `【${reqId}】Planning Mode 降级为单 Lisa：集成点不足（${subSpecs.length} 组），无需并行分解`,
+                    "pipeline", IMPLEMENTOR_AGENT_ID,
+                  );
+                } else {
+                  // 告知 Lucas
+                  if (requestorId && requestorId !== "unknown") {
+                    void callGatewayAgent(
+                      FRONTEND_AGENT_ID,
+                      [
+                        `【Andy 设计完成 · ${reqId}（Planning Mode）】`,
+                        `系统自动将需求分解为 ${subSpecs.length} 个独立子任务并行执行：${subSpecs.map(s => s.title).join(" / ")}`,
+                        ``,
+                        `用户 ID：${requestorId}`,
+                        `根据用户当前状态，决定是否告知进展（不是必须推送）。`,
+                      ].join("\n"),
+                      60_000,
+                      undefined,
+                      DESIGNER_AGENT_ID,
+                    );
+                  }
+                  void notifyEngineer(
+                    `【${reqId}】Planning Mode 启动：自动分解为 ${subSpecs.length} 个子任务：${subSpecs.map(s => s.title).join(" / ")}`,
+                    "pipeline", IMPLEMENTOR_AGENT_ID,
+                  );
+
+                  // 异步并行执行
+                  (async () => {
+                    try {
+                      const results = await spawnParallelLisa(subSpecs, reqId);
+                      const succeeded = results.filter(r => r.success).length;
+                      const failed = results.filter(r => !r.success).length;
+
+                      const summary = [
+                        `【Planning Mode 完成报告】需求 ${reqId}`,
+                        `共 ${results.length} 个子任务：${succeeded} 成功 / ${failed} 失败`,
+                        `结果文件：data/pipeline/${reqId}/`,
+                        ``,
+                        ...results.map(r =>
+                          `[${r.success ? "✅" : "❌"}] ${r.taskId}（${r.title}）\n${r.result.slice(0, 600)}`
+                        ),
+                        ``,
+                        failed === 0
+                          ? `所有子任务完成，请综合验收。`
+                          : `有 ${failed} 个子任务失败，请查看详情决定后续。`,
+                        ``,
+                        `【角色说明】你是技术验收方。验收完成后请输出：`,
+                        `Lucas交付：[用家人听得懂的语言描述：做了什么 / 注意事项（无则省略）]`,
+                      ].join("\n");
+
+                      void notifyEngineer(
+                        `【${reqId}】Planning Mode 并行完成：${succeeded}成功/${failed}失败，Andy验收中`,
+                        "pipeline", IMPLEMENTOR_AGENT_ID,
+                      );
+
+                      // Andy 验收
+                      const andyResult = await callGatewayAgent(DESIGNER_AGENT_ID, summary, 600_000, undefined, FRONTEND_AGENT_ID);
+
+                      // 提取 Lucas交付：简报
+                      if (requestorId && requestorId !== "unknown") {
+                        const deliveryMatch = (andyResult ?? "").match(/Lucas交付[：:]\s*([\s\S]+?)(?:\n\n|\n[^\s]|$)/);
+                        const brief = deliveryMatch?.[1]?.trim()
+                          ?? `Planning Mode 完成（${succeeded}/${results.length} 子任务成功）`;
+                        void callGatewayAgent(
+                          FRONTEND_AGENT_ID,
+                          [
+                            `【Andy 验收完成 · ${reqId}（Planning Mode）】`,
+                            brief,
+                            ``,
+                            `用户 ID：${requestorId}`,
+                            `根据用户当前状态，选择合适的时机告知用户。`,
+                          ].join("\n"),
+                          60_000,
+                          undefined,
+                          DESIGNER_AGENT_ID,
+                        );
+                      }
+                    } catch (e) {
+                      const errMsg = e instanceof Error ? e.message : String(e);
+                      void notifyEngineer(`【${reqId}】Planning Mode 执行异常：${errMsg.slice(0, 300)}`, "pipeline", DESIGNER_AGENT_ID);
+                    }
+                  })();
+
+                  return {
+                    content: [{ type: "text", text: `✅ Planning Mode 已启动：自动分解为 ${subSpecs.length} 个子任务并行执行。完成后 Andy 会验收。` }],
+                    details: { mode: "planning", reqId, taskCount: subSpecs.length, subTasks: subSpecs.map(s => ({ id: s.task_id, title: s.title })) },
+                  };
+                }
+              }
+            } catch (_e) {
+              // JSON 解析失败，继续普通路径
+            }
+          }
+        }
+
         // ② Spec 集成点静态验证：提取 JSON 块，检查 integration_points 文件真实存在
         // exists=false 或文件不在磁盘上 → 阻断，要求 Andy 先修正 spec
         {
@@ -8116,6 +8887,46 @@ const crewclawRoutingPlugin = {
           }
         }
 
+        // ── Andy spec SFT 积累：每次通过验证的 spec 写入训练队列 ───────────────────
+        try {
+          const reqId2 = p.requirement_id ?? "";
+          const taskEntry2 = reqId2
+            ? readTaskRegistry().find((e) => e.id === reqId2)
+            : undefined;
+          const specJsonMatch2 = p.spec.match(/```json\s*([\s\S]*?)```/);
+          let specQuality2 = {
+            hasIntegrationPoints: false,
+            hasAcceptanceCriteria: false,
+            hasCodeEvidence: false,
+            integrationPointCount: 0,
+          };
+          if (specJsonMatch2) {
+            try {
+              const sd2 = JSON.parse(specJsonMatch2[1]) as Record<string, unknown>;
+              const ips2  = (sd2.integration_points  ?? []) as unknown[];
+              const acs2  = (sd2.acceptance_criteria ?? []) as unknown[];
+              const ce2   = (sd2.code_evidence        ?? []) as unknown[];
+              specQuality2 = {
+                hasIntegrationPoints:  ips2.length > 0,
+                hasAcceptanceCriteria: acs2.length > 0,
+                hasCodeEvidence:       ce2.length  > 0,
+                integrationPointCount: ips2.length,
+              };
+            } catch (_e2) { /* spec JSON 解析失败，跳过质量字段 */ }
+          }
+          appendJsonl(ANDY_SPEC_FINETUNE_QUEUE, {
+            id: `asq-${Date.now()}-${reqId2 || "unknown"}`,
+            createdAt: nowCST(),
+            requirementId: reqId2,
+            requirement: taskEntry2?.requirement ?? "",
+            lucasContext: taskEntry2?.lucasContext ?? "",
+            spec: p.spec,
+            specQuality: specQuality2,
+            outcome: null,
+            eligibleForTraining: false,
+          });
+        } catch (_e) { /* 不阻塞流水线 */ }
+
         // ① Andy→Lucas 设计摘要：立即通知 Lucas Andy 已出方案，不等 Lisa 完成
         // fire-and-forget，不阻塞工具返回
         const specPreview = p.spec
@@ -8158,7 +8969,7 @@ const crewclawRoutingPlugin = {
               `Andy 已完成方案设计，Lisa 即将开始实现。方案摘要：${specPreview}`,
               ``,
               `用户 ID：${requestorId}`,
-              `根据你对用户当前状态的判断，决定是否告知进展（不是必须推送）。`,
+              `根据你对用户当前状态的判断，决定是否告知进展（不是必须推送）。如果用户之前问过这个任务或说过「做好了告诉我」，请主动告知。`,
             ].join("\n"),
             60_000,
             undefined,
@@ -8239,6 +9050,51 @@ const crewclawRoutingPlugin = {
               success = !!lisaResponse;
             }
             if (lisaResponse && !lisaBypassedOpencode) {
+              // ── 独立验证门（Claude Code 模式：做完跑测试，不靠自述）──────────
+              let specData: Record<string, unknown> | null = null;
+              try {
+                const specM = p.spec.match(/```json\s*([\s\S]*?)```/);
+                if (specM) specData = JSON.parse(specM[1]) as Record<string, unknown>;
+              } catch { /* spec 解析失败不影响主流程 */ }
+
+              const verify1 = verifyLisaDelivery(specData);
+              if (!verify1.passed) {
+                log("pipeline", `[verify] first check failed: ${verify1.summary}`);
+                // 自动重试一次：附验证失败信息重新触发 Lisa
+                const retryMsg = [
+                  "【自动重试 · 交付验证失败】",
+                  `上一次实现未通过独立验证：${verify1.summary}`,
+                  verify1.hasErrors ? `\n编译错误详情:\n${verify1.errors.slice(0, 800)}` : "",
+                  verify1.missingTargetFiles.length > 0 ? `\n以下新增文件未找到: ${verify1.missingTargetFiles.join(", ")}` : "",
+                  "\n请确保：1) 实际修改或创建了文件 2) 代码能通过编译 3) 所有新增文件确实存在",
+                  `\n原始 spec:\n${p.spec.slice(0, 1500)}`,
+                ].join("\n");
+                try {
+                  lisaResponse = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, retryMsg, 600_000, threadId, DESIGNER_AGENT_ID);
+                  const verify2 = verifyLisaDelivery(specData);
+                  if (!verify2.passed) {
+                    log("pipeline", `[verify] retry also failed: ${verify2.summary}`);
+                    // 二次验证仍失败 → 通知 Andy 带具体证据
+                    void callGatewayAgent(DESIGNER_AGENT_ID, [
+                      `【Lisa 交付验证失败 · ${reqId}】（自动重试后仍未通过）`,
+                      `验证结果：${verify2.summary}`,
+                      `建议：spec 中新增的文件路径是否正确？集成点是否真实存在？考虑简化 spec 后重新触发。`,
+                      `Spec 摘要：${p.spec.slice(0, 300)}`,
+                    ].join("\n"), 180_000, threadId, FRONTEND_AGENT_ID).catch(() => {});
+                    responseText = `Lisa 实现验证失败（自动重试后仍未通过）：${verify2.summary}`;
+                    success = false;
+                  }
+                } catch (retryErr) {
+                  log("pipeline", `[verify] retry exception: ${retryErr}`);
+                  responseText = `Lisa 重试异常: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`;
+                  success = false;
+                }
+              }
+              // ── 验证门结束 ──────────────────────────────────────────────
+
+              if (!success) {
+                // 验证失败 → 跳过后续 corpus/capability/验收，走失败路径
+              } else {
               appendJsonl(join(PROJECT_ROOT, "data/corpus/lisa-corpus.jsonl"), {
                 timestamp: nowCST(),
                 role: IMPLEMENTOR_AGENT_ID,
@@ -8320,11 +9176,11 @@ const crewclawRoutingPlugin = {
               // Step 6：Lucas 验收重包装（与 runAndyPipeline 保持一致）
               try {
                 const lucasPrompt = [
-                  "【验收任务】开发团队刚完成了一个任务，请用自然的家人语气告知结果。",
+                  "【验收任务】开发团队刚完成了一个任务，请用自然的语气告知结果。",
                   `【Lisa 交付报告】\n${lisaResponse}`,
-                  `【接收对象】${requestorId}（请根据你对这位家庭成员的了解，调整语气和侧重点）`,
+                  `【接收对象】${requestorId}${requestorId.startsWith("visitor:") ? "（访客，用专业但友好的语气，不叫家人称呼）" : "（请根据你对这位家庭成员的了解，调整语气和侧重点）"}`,
                   "请简洁回复（不超过 150 字）：做了什么（一句话）、怎么用或在哪里找到（如有）、有没有要注意的（如有）。",
-                  "语气像家人说话，不要技术术语，不要加标题或符号。",
+                  requestorId.startsWith("visitor:") ? "语气专业友好，不要技术术语，不要加标题或符号。" : "语气像家人说话，不要技术术语，不要加标题或符号。",
                 ].join("\n\n");
                 const lucasAcceptance = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 120_000, undefined, DESIGNER_AGENT_ID);
                 if (lucasAcceptance) {
@@ -8353,6 +9209,7 @@ const crewclawRoutingPlugin = {
               } catch (_e) {
                 responseText = lisaResponse;
               }
+              } // end verification-gate success block
             } else {
               // lisaResponse 为空（Lisa 无响应），保持默认的失败消息
               // 不覆盖 responseText，保持 "❌ Lisa 实现失败"
@@ -8368,14 +9225,15 @@ const crewclawRoutingPlugin = {
             void (async () => {
               try {
                 await callGatewayAgent(DESIGNER_AGENT_ID, [
-                  `【Lisa 实现失败 · ${reqId}】Lisa 在实现你的 spec 时${isTimeout ? "超时（10分钟未完成）" : `遇到异常：${errMsg.slice(0, 150)}`}。`,
+                  `【Lisa 实现失败 · ${reqId}】`,
+                  `失败类型：${isTimeout ? "超时（10分钟未完成）" : `异常：${errMsg.slice(0, 200)}`}`,
                   `Spec 摘要：${p.spec.slice(0, 300)}`,
                   ``,
-                  `请你决定下一步（选一个行动）：`,
-                  `1. spec 太复杂可以拆小 → 调用 trigger_lisa_implementation 提交简化版`,
-                  `2. 需要了解具体阻塞原因 → 调用 consult_lisa`,
-                  `3. 需要 Lucas 向用户澄清需求 → 调用 query_requirement_owner`,
-                  `4. 判断是技术环境问题 → 调用 notify_engineer`,
+                  `建议按以下顺序尝试（从最轻量开始）：`,
+                  `1. 【简化 spec】减少 integration_points 数量，拆成两个独立任务 → trigger_lisa_implementation 提交简化版`,
+                  `2. 【换方案】当前方案行不通，用 alternative 方案重写 spec → trigger_lisa_implementation 全新 spec`,
+                  `3. 【了解阻塞】需要更多上下文 → consult_lisa 问 Lisa 具体卡在哪`,
+                  `4. 【上报】需求本身有矛盾或技术上不可行 → query_requirement_owner 让 Lucas 告知用户`,
                 ].join("\n"), 180_000, threadId, FRONTEND_AGENT_ID);
               } catch (_e) { /* 静默，不阻塞主流程 */ }
             })();
@@ -8792,7 +9650,7 @@ const crewclawRoutingPlugin = {
               `【Andy 决策回复 · Lisa 遇阻回路 · ${p.requirement_id}]`,
               `Andy 对 Lisa 遇阻的回复：${(andyReply ?? "无回复").slice(0, 200)}`,
               issueTask?.submittedBy ? `用户 ID：${issueTask.submittedBy}` : "",
-              "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展。",
+              "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展。如果用户之前问过这个任务，请主动告知。",
             ].filter(Boolean).join("\n"), 20_000, undefined, IMPLEMENTOR_AGENT_ID);
           }
           void addDecisionMemory({
@@ -8910,7 +9768,7 @@ const crewclawRoutingPlugin = {
           writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(revTaskEntries, null, 2), "utf8");
         }
 
-        const message = [
+        let message = [
           `【验收修订请求·第 ${revCount + 1} 轮】需求 ${p.requirement_id}`,
           ``,
           `Andy 在验收时发现以下问题，请针对性修复（不需要重新实现整个需求）：`,
@@ -8926,6 +9784,12 @@ const crewclawRoutingPlugin = {
           `2) 修改内容摘要`,
           `3) 编译 / 验证结果`,
         ].join("\n");
+
+        // 第 2 轮起加提示：同一问题反复出现可能是 spec 设计问题
+        if (revCount >= 1) {
+          message += "\n\n【系统提示】这是第 2+ 轮修订，同样的问题反复出现可能意味着 spec 设计本身有问题。"
+            + "如果这次修订仍不能解决，建议简化 spec 或换方案，用 trigger_lisa_implementation 重新实现。";
+        }
 
         try {
           const lisaReply = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, message, 600_000, threadId, FRONTEND_AGENT_ID);
@@ -11040,6 +11904,530 @@ const crewclawRoutingPlugin = {
             details: { error: String(e) },
           };
         }
+      },
+    }));
+
+    // ── skill_manage：三角色共享，L1 Skill 自主管理专用工具 ──────────────────
+    //
+    // 参考 Hermes skill_manager_tool.py 设计：弱模型（DeepSeek/MiniMax/本地模型）
+    // 用通用 write_file 写 SKILL.md 时容易漏 frontmatter、格式不对、路径写错。
+    // 专用工具封装这些细节：frontmatter 自动生成、原子写入、路径安全、模糊 patch。
+    //
+    // 框架层机制——任何 CrewClaw 实例的三角色均可使用。
+    //
+    // 动作：create / edit / patch / delete / write_file / remove_file
+    // 路径安全：只允许写入 ~/.openclaw/workspace-{agent}/skills/ 目录。
+
+    api.registerTool((toolCtx) => ({
+      label: "Skill 管理（L1 自主管理）",
+      name: "skill_manage",
+      description: [
+        "L1 Skill 自主管理工具：创建、修改、删除 Skill。",
+        "触发场景（参考 Hermes SKILLS_GUIDANCE）：",
+        "- 完成复杂任务（调了 5+ 工具）→ 保存做法为 Skill",
+        "- 克服了棘手问题/错误 → 保存解法",
+        "- 被纠正了做法，新方法更好 → 更新 Skill",
+        "- 同类问题第 2 次碰到，且做法稳定 → 固化为 Skill",
+        "动作说明：",
+        "- create：创建或覆盖 Skill，必须提供 skill_name + description + content（frontmatter 自动生成）",
+        "- edit：全量重写已有 Skill 的正文（保留 frontmatter 自动更新），用于重大改版",
+        "- patch：对已有 Skill 做局部文本替换（oldText → newText），支持模糊匹配（空格/缩进差异自动归一化）",
+        "- delete：删除指定 Skill 及其所有辅助文件",
+        "- write_file：在 Skill 目录下写入辅助文件（模板/参考/脚本等）",
+        "- remove_file：删除 Skill 目录下的辅助文件",
+        "分类：create 时可指定 category 参数，Skill 按子目录组织。",
+        "发现已有 Skill 过时或不准 → 立即用 create 覆盖或 patch 修改。不维护的 Skill 是负债。",
+      ].join("\n"),
+      parameters: Type.Object({
+        action: Type.Unsafe<string>({
+          enum: ["create", "edit", "patch", "delete", "write_file", "remove_file"],
+          description: "操作类型：create=创建/覆盖, edit=全量重写正文, patch=局部替换, delete=删除, write_file=辅助文件写入, remove_file=辅助文件删除",
+        }),
+        skill_name: Type.String({ description: "Skill 名称（小写字母数字和连字符，如 homework-reminder，最长 64 字符）" }),
+        description: Type.Optional(Type.String({ description: "Skill 一句话描述（create 时必填）" })),
+        category: Type.Optional(Type.String({ description: "分类（create 可选），如 'coding'/'communication'/'workflow'，按子目录组织" })),
+        content: Type.Optional(Type.String({ description: "Skill 正文内容，不含 frontmatter（create/edit 时必填）。Markdown 格式" })),
+        oldText: Type.Optional(Type.String({ description: "要替换的旧文本（patch 时必填）" })),
+        newText: Type.Optional(Type.String({ description: "替换成的新文本（patch 时必填，空字符串表示删除）" })),
+        replace_all: Type.Optional(Type.Boolean({ description: "patch 时是否替换所有匹配（默认只替换第一个）" })),
+        file_path: Type.Optional(Type.String({ description: "辅助文件相对路径（write_file/remove_file 时必填），如 'templates/prompt.txt'" })),
+        file_content: Type.Optional(Type.String({ description: "辅助文件内容（write_file 时必填）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const p = params as {
+          action: string; skill_name: string; description?: string; category?: string;
+          content?: string; oldText?: string; newText?: string; replace_all?: boolean;
+          file_path?: string; file_content?: string;
+        };
+        const agentId = toolCtx.agentId ?? "";
+        // 仅三角色可用
+        const SKILL_ALLOWED_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (!SKILL_ALLOWED_AGENTS.has(agentId)) {
+          return { content: [{ type: "text", text: "❌ skill_manage 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+        }
+        // 名称验证（Hermes 风格：^[a-z0-9][a-z0-9._-]*$，最长 64 字符）
+        if (!/^[a-z0-9][a-z0-9._-]*$/.test(p.skill_name)) {
+          return {
+            content: [{ type: "text", text: `❌ Skill 名称格式错误："${p.skill_name}"。只允许小写字母、数字、点、下划线、连字符，且以字母或数字开头。` }],
+            details: { error: "invalid_name", name: p.skill_name },
+          };
+        }
+        if (p.skill_name.length > 64) {
+          return {
+            content: [{ type: "text", text: `❌ Skill 名称过长（${p.skill_name.length} 字符），上限 64。` }],
+            details: { error: "name_too_long", name: p.skill_name },
+          };
+        }
+        const HOME = process.env.HOME ?? "/";
+        const agentWorkspaceMap: Record<string, string> = {
+          [FRONTEND_AGENT_ID]: "lucas",
+          [DESIGNER_AGENT_ID]: "andy",
+          [IMPLEMENTOR_AGENT_ID]: "lisa",
+        };
+        const agentLabel = agentWorkspaceMap[agentId] ?? agentId;
+        const skillsDir = join(HOME, `.openclaw/workspace-${agentLabel}/skills`);
+        // category 支持：按子目录组织
+        const skillDir = p.category
+          ? join(skillsDir, p.category, p.skill_name)
+          : join(skillsDir, p.skill_name);
+        const skillPath = join(skillDir, "SKILL.md");
+
+        // ── 辅助函数：原子写入 ──────────────────────────────────────
+        const atomicWrite = (targetPath: string, data: string) => {
+          mkdirSync(dirname(targetPath), { recursive: true });
+          const tmpPath = `${targetPath}.tmp.${Date.now()}`;
+          try {
+            writeFileSync(tmpPath, data, "utf8");
+            renameSync(tmpPath, targetPath);
+          } catch (e) {
+            try { unlinkSync(tmpPath); } catch (_e) { /* ignore */ }
+            throw e;
+          }
+        };
+
+        // ── 辅助函数：模糊 patch（归一化空格/缩进后匹配）──────────────
+        const fuzzyPatch = (existing: string, oldText: string, newText: string, replaceAll: boolean): { result: string; matchCount: number; fuzzy: boolean } => {
+          // 1. 精确匹配
+          if (existing.includes(oldText)) {
+            return { result: replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText), matchCount: replaceAll ? existing.split(oldText).length - 1 : 1, fuzzy: false };
+          }
+          // 2. 模糊匹配：归一化空格后查找
+          const normalize = (s: string) => s.split("\n").map(l => l.trim()).filter(l => l.length > 0).join("\n");
+          const normExisting = normalize(existing);
+          const normOld = normalize(oldText);
+          if (normExisting.includes(normOld)) {
+            // 找到归一化匹配 → 在原文中定位并替换
+            // 策略：逐行归一化匹配，找到起始行后做替换
+            const existingLines = existing.split("\n");
+            const oldLines = oldText.split("\n");
+            const normOldLines = oldLines.map(l => l.trim().toLowerCase());
+            let matchCount = 0;
+            let result = existing;
+            // 从后往前替换，保持行号不变
+            for (let i = existingLines.length - normOldLines.length; i >= 0; i--) {
+              let match = true;
+              for (let j = 0; j < normOldLines.length; j++) {
+                if (existingLines[i + j].trim().toLowerCase() !== normOldLines[j]) { match = false; break; }
+              }
+              if (match) {
+                const before = existingLines.slice(0, i);
+                const after = existingLines.slice(i + oldLines.length);
+                const newLines = newText.split("\n");
+                // 保持原缩进风格：取被替换块首行缩进
+                const leadingSpaces = existingLines[i].match(/^(\s*)/)?.[1] ?? "";
+                const indentedNewLines = newLines.map(l => l.trim() ? leadingSpaces + l : l);
+                existingLines.splice(i, oldLines.length, ...indentedNewLines);
+                matchCount++;
+                if (!replaceAll) break;
+              }
+            }
+            if (matchCount > 0) {
+              result = existingLines.join("\n");
+            }
+            return { result, matchCount, fuzzy: true };
+          }
+          return { result: existing, matchCount: 0, fuzzy: false };
+        };
+
+        try {
+          // ── create：创建或覆盖 Skill ─────────────────────────────
+          if (p.action === "create") {
+            if (!p.description?.trim()) {
+              return { content: [{ type: "text", text: "❌ create 必须提供 description（一句话说明 Skill 用途）。" }], details: { error: "missing_description" } };
+            }
+            if (!p.content?.trim()) {
+              return { content: [{ type: "text", text: "❌ create 必须提供 content（Skill 正文：触发条件+步骤+注意事项）。" }], details: { error: "missing_content" } };
+            }
+            // 内容大小限制（100K 字符）
+            if (p.content.length > 100_000) {
+              return { content: [{ type: "text", text: `❌ content 超过 100K 字符限制（当前 ${p.content.length}）。请精简内容。` }], details: { error: "content_too_large" } };
+            }
+            const now = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" });
+            const fmLines = [
+              "---",
+              `name: ${p.skill_name}`,
+              `description: ${p.description.trim()}`,
+              `status: active`,
+              `created_from: agent_manual`,
+              `created_at: ${now}`,
+              `agent: ${agentId}`,
+            ];
+            if (p.category) fmLines.push(`category: ${p.category}`);
+            fmLines.push("---", "", p.content.trim(), "");
+            const fullContent = fmLines.join("\n");
+            atomicWrite(skillPath, fullContent);
+            const displayPath = skillPath.startsWith(HOME) ? `~/${skillPath.slice(HOME.length + 1)}` : skillPath;
+            return {
+              content: [{ type: "text", text: `✅ Skill 已创建：${p.skill_name}${p.category ? `（分类：${p.category}）` : ""}\n路径：${displayPath}\n描述：${p.description.trim()}` }],
+              details: { action: "create", name: p.skill_name, path: skillPath, category: p.category },
+            };
+          }
+
+          // ── edit：全量重写正文（保留 frontmatter 结构）───────────────
+          if (p.action === "edit") {
+            if (!p.content?.trim()) {
+              return { content: [{ type: "text", text: "❌ edit 必须提供 content（新的 Skill 正文）。" }], details: { error: "missing_content" } };
+            }
+            if (!existsSync(skillPath)) {
+              return { content: [{ type: "text", text: `❌ Skill "${p.skill_name}" 不存在，无法 edit。请先 create。` }], details: { error: "not_found", name: p.skill_name } };
+            }
+            if (p.content.length > 100_000) {
+              return { content: [{ type: "text", text: `❌ content 超过 100K 字符限制（当前 ${p.content.length}）。请精简内容。` }], details: { error: "content_too_large" } };
+            }
+            const existing = readFileSync(skillPath, "utf8");
+            // 保留原 frontmatter，更新 updated_at
+            const fmMatch = existing.match(/^(---\n[\s\S]*?\n---)/);
+            const now = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" });
+            let newFm = fmMatch ? fmMatch[1] : "---\n---";
+            if (newFm.includes("updated_at:")) {
+              newFm = newFm.replace(/updated_at:.*(\n|$)/, `updated_at: ${now}\n`);
+            } else {
+              newFm = newFm.replace(/---\s*$/, `updated_at: ${now}\n---`);
+            }
+            const fullContent = `${newFm}\n\n${p.content.trim()}\n`;
+            atomicWrite(skillPath, fullContent);
+            return {
+              content: [{ type: "text", text: `✅ Skill "${p.skill_name}" 已全量重写（edit）。` }],
+              details: { action: "edit", name: p.skill_name, path: skillPath },
+            };
+          }
+
+          // ── patch：局部文本替换（支持模糊匹配 + replace_all）────────
+          if (p.action === "patch") {
+            if (!p.oldText) {
+              return { content: [{ type: "text", text: "❌ patch 必须提供 oldText（要替换的旧文本）。" }], details: { error: "missing_oldText" } };
+            }
+            if (p.newText === undefined || p.newText === null) {
+              return { content: [{ type: "text", text: "❌ patch 必须提供 newText（替换成的新文本，空字符串表示删除）。" }], details: { error: "missing_newText" } };
+            }
+            if (!existsSync(skillPath)) {
+              return { content: [{ type: "text", text: `❌ Skill "${p.skill_name}" 不存在，无法 patch。请先 create。` }], details: { error: "not_found", name: p.skill_name } };
+            }
+            const existing = readFileSync(skillPath, "utf8");
+            const replaceAll = p.replace_all === true;
+            const { result, matchCount, fuzzy } = fuzzyPatch(existing, p.oldText, p.newText, replaceAll);
+            if (matchCount === 0) {
+              // 模糊提示：展示文件前 500 字符供参考
+              const preview = existing.length > 500 ? existing.slice(0, 500) + "\n..." : existing;
+              return {
+                content: [{ type: "text", text: `❌ 未找到 oldText 在 Skill "${p.skill_name}" 中（精确+模糊匹配均失败）。\n\n文件内容预览：\n\`\`\`\n${preview}\n\`\`\`\n\n请参照预览内容重新指定 oldText，确保文本与文件中完全一致。` }],
+                details: { error: "text_not_found", name: p.skill_name },
+              };
+            }
+            // 更新 frontmatter updated_at
+            const now = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" });
+            let patchedResult = result;
+            if (patchedResult.includes("updated_at:")) {
+              patchedResult = patchedResult.replace(/updated_at:.*(\n|$)/, `updated_at: ${now}\n`);
+            } else {
+              patchedResult = patchedResult.replace(/---\s*$/, `updated_at: ${now}\n---`);
+            }
+            atomicWrite(skillPath, patchedResult);
+            return {
+              content: [{ type: "text", text: `✅ Skill "${p.skill_name}" 已更新（patch，${matchCount} 处替换${fuzzy ? "，模糊匹配" : ""}${replaceAll ? "，全部替换" : ""}）。` }],
+              details: { action: "patch", name: p.skill_name, path: skillPath, matchCount, fuzzy },
+            };
+          }
+
+          // ── delete：删除 Skill 目录及所有辅助文件 ──────────────────
+          if (p.action === "delete") {
+            if (!existsSync(skillDir)) {
+              return { content: [{ type: "text", text: `❌ Skill "${p.skill_name}" 不存在，无法删除。` }], details: { error: "not_found", name: p.skill_name } };
+            }
+            rmSync(skillDir, { recursive: true, force: true });
+            return {
+              content: [{ type: "text", text: `✅ Skill "${p.skill_name}" 已删除（含所有辅助文件）。` }],
+              details: { action: "delete", name: p.skill_name },
+            };
+          }
+
+          // ── write_file：写入辅助文件（模板/参考/脚本等）──────────────
+          if (p.action === "write_file") {
+            if (!p.file_path) {
+              return { content: [{ type: "text", text: "❌ write_file 必须提供 file_path（辅助文件相对路径，如 'templates/prompt.txt'）。" }], details: { error: "missing_file_path" } });
+            }
+            if (p.file_content === undefined || p.file_content === null) {
+              return { content: [{ type: "text", text: "❌ write_file 必须提供 file_content。" }], details: { error: "missing_file_content" } };
+            }
+            // 安全检查：禁止路径穿越
+            if (p.file_path.includes("..") || p.file_path.startsWith("/")) {
+              return { content: [{ type: "text", text: `❌ file_path 不允许路径穿越或绝对路径：${p.file_path}` }], details: { error: "path_traversal" } };
+            }
+            // 确保 Skill 目录存在（可以先于 create 辅助文件）
+            mkdirSync(skillDir, { recursive: true });
+            const auxPath = join(skillDir, p.file_path);
+            // 确保最终路径仍在 skillDir 内
+            if (!auxPath.startsWith(skillDir + "/") && auxPath !== skillDir) {
+              return { content: [{ type: "text", text: `❌ 辅助文件路径越权：${p.file_path}` }], details: { error: "path_violation" } };
+            }
+            // 大小限制 1MiB
+            if (p.file_content.length > 1_048_576) {
+              return { content: [{ type: "text", text: `❌ 辅助文件超过 1MiB 限制（当前 ${(p.file_content.length / 1024).toFixed(0)}KB）。` }], details: { error: "file_too_large" } };
+            }
+            atomicWrite(auxPath, p.file_content);
+            return {
+              content: [{ type: "text", text: `✅ Skill "${p.skill_name}" 辅助文件已写入：${p.file_path}（${p.file_content.length} 字节）` }],
+              details: { action: "write_file", name: p.skill_name, file_path: p.file_path },
+            };
+          }
+
+          // ── remove_file：删除辅助文件 ─────────────────────────────
+          if (p.action === "remove_file") {
+            if (!p.file_path) {
+              return { content: [{ type: "text", text: "❌ remove_file 必须提供 file_path。" }], details: { error: "missing_file_path" } });
+            }
+            if (p.file_path.includes("..") || p.file_path.startsWith("/")) {
+              return { content: [{ type: "text", text: `❌ file_path 不允许路径穿越或绝对路径：${p.file_path}` }], details: { error: "path_traversal" } };
+            }
+            const auxPath = join(skillDir, p.file_path);
+            if (!auxPath.startsWith(skillDir + "/")) {
+              return { content: [{ type: "text", text: `❌ 辅助文件路径越权：${p.file_path}` }], details: { error: "path_violation" } };
+            }
+            // 不允许删除 SKILL.md（用 edit/create 替代）
+            if (auxPath === skillPath || p.file_path === "SKILL.md") {
+              return { content: [{ type: "text", text: "❌ 不能删除 SKILL.md（用 create 覆盖或 edit 重写）。" }], details: { error: "protected_file" } };
+            }
+            if (!existsSync(auxPath)) {
+              // 列出已有辅助文件供参考
+              const auxFiles: string[] = [];
+              try {
+                const entries = readdirSync(skillDir, { withFileTypes: true, recursive: true }) as Array<{ name: string; isFile(): boolean; isDirectory(): boolean; path?: string }>;
+                for (const entry of entries) {
+                  const rel = entry.path
+                    ? join(entry.path, entry.name).slice(skillDir.length + 1)
+                    : entry.name;
+                  if (entry.isFile() && rel !== "SKILL.md") auxFiles.push(rel);
+                }
+              } catch (_e) { /* ignore */ }
+              const hint = auxFiles.length > 0 ? `\n\n已有辅助文件：\n${auxFiles.map(f => `- ${f}`).join("\n")}` : "\n\n该 Skill 目录下没有辅助文件。";
+              return {
+                content: [{ type: "text", text: `❌ 辅助文件不存在：${p.file_path}${hint}` }],
+                details: { error: "file_not_found", name: p.skill_name },
+              };
+            }
+            unlinkSync(auxPath);
+            return {
+              content: [{ type: "text", text: `✅ Skill "${p.skill_name}" 辅助文件已删除：${p.file_path}` }],
+              details: { action: "remove_file", name: p.skill_name, file_path: p.file_path },
+            };
+          }
+
+          return {
+            content: [{ type: "text", text: `❌ 未知 action："${p.action}"。支持：create / edit / patch / delete / write_file / remove_file。` }],
+            details: { error: "invalid_action", action: p.action },
+          };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return { content: [{ type: "text", text: `❌ Skill 操作失败：${msg}` }], details: { error: msg } };
+        }
+      },
+    }));
+
+    // ── skill_view：三角色共享，按需查看 Skill 完整内容 ────────────────
+    //
+    // Progressive disclosure：OpenClaw <available_skills> 只注入 name+description，
+    // Agent 需要查看完整内容时调用此工具，避免所有 Skill 全量注入浪费 token。
+
+    api.registerTool((toolCtx) => ({
+      label: "查看 Skill 内容",
+      name: "skill_view",
+      description: [
+        "查看指定 Skill 的完整内容（含 frontmatter 元数据和正文）。",
+        "当你在 <available_skills> 中看到感兴趣的 Skill，想了解具体步骤和注意事项时调用。",
+        "也可查看 Skill 目录下的辅助文件（模板、参考文档等）。",
+      ].join("\n"),
+      parameters: Type.Object({
+        skill_name: Type.String({ description: "Skill 名称" }),
+        file_path: Type.Optional(Type.String({ description: "辅助文件相对路径（不填则查看 SKILL.md 主文件）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const p = params as { skill_name: string; file_path?: string };
+        const agentId = toolCtx.agentId ?? "";
+        const SKILL_ALLOWED_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (!SKILL_ALLOWED_AGENTS.has(agentId)) {
+          return { content: [{ type: "text", text: "❌ skill_view 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+        }
+        const HOME = process.env.HOME ?? "/";
+        const agentWorkspaceMap: Record<string, string> = {
+          [FRONTEND_AGENT_ID]: "lucas",
+          [DESIGNER_AGENT_ID]: "andy",
+          [IMPLEMENTOR_AGENT_ID]: "lisa",
+        };
+        const agentLabel = agentWorkspaceMap[agentId] ?? agentId;
+        const skillsDir = join(HOME, `.openclaw/workspace-${agentLabel}/skills`);
+        // 搜索 Skill（可能在 category 子目录下）
+        let skillDir = join(skillsDir, p.skill_name);
+        if (!existsSync(join(skillDir, "SKILL.md"))) {
+          // 尝试在子目录中查找
+          try {
+            const entries = readdirSync(skillsDir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.isDirectory()) {
+                const candidate = join(skillsDir, entry.name, p.skill_name, "SKILL.md");
+                if (existsSync(candidate)) {
+                  skillDir = join(skillsDir, entry.name, p.skill_name);
+                  break;
+                }
+              }
+            }
+          } catch (_e) { /* ignore */ }
+        }
+        const targetPath = p.file_path
+          ? join(skillDir, p.file_path)
+          : join(skillDir, "SKILL.md");
+        // 安全检查
+        if (!targetPath.startsWith(skillDir + "/") && targetPath !== join(skillDir, "SKILL.md")) {
+          return { content: [{ type: "text", text: `❌ 路径越权。` }], details: { error: "path_violation" } };
+        }
+        if (!existsSync(targetPath)) {
+          // 列出 Skill 目录下所有文件
+          const files: string[] = [];
+          try {
+            const entries = readdirSync(skillDir, { withFileTypes: true, recursive: true }) as Array<{ name: string; isFile(): boolean; path?: string }>;
+            for (const entry of entries) {
+              if (entry.isFile()) {
+                const rel = entry.path
+                  ? join(entry.path, entry.name).slice(skillDir.length + 1)
+                  : entry.name;
+                files.push(rel);
+              }
+            }
+          } catch (_e) { /* ignore */ }
+          const hint = files.length > 0 ? `\n\nSkill "${p.skill_name}" 包含以下文件：\n${files.map(f => `- ${f}`).join("\n")}` : `\n\nSkill "${p.skill_name}" 不存在。`;
+          return { content: [{ type: "text", text: `❌ 文件不存在${hint}` }], details: { error: "not_found" } };
+        }
+        const content = readFileSync(targetPath, "utf8");
+        return {
+          content: [{ type: "text", text: content }],
+          details: { skill_name: p.skill_name, file_path: p.file_path ?? "SKILL.md" },
+        };
+      },
+    }));
+
+    // ── skills_list：三角色共享，列出可用 Skill 及元数据 ────────────────
+    //
+    // Agent 主动列举自己可用的 Skill，查看名称、描述、状态、辅助文件列表。
+    // 与 OpenClaw 原生 <available_skills> 互补：原生只注入当前 session 的，
+    // 此工具可全量列举（包括 deprecated 的）。
+
+    api.registerTool((toolCtx) => ({
+      label: "列出可用 Skill",
+      name: "skills_list",
+      description: [
+        "列出当前角色可用的所有 Skill，含名称、描述、状态、创建时间和辅助文件列表。",
+        "用于：了解有哪些 Skill 可用 / 查看 Skill 状态是否需要更新 / 审计 Skill 健康状况。",
+        "OpenClaw 系统提示中的 <available_skills> 只展示当前最相关的；此工具展示全量。",
+      ].join("\n"),
+      parameters: Type.Object({
+        include_deprecated: Type.Optional(Type.Boolean({ description: "是否包含已废弃的 Skill（默认不包含）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const p = params as { include_deprecated?: boolean };
+        const agentId = toolCtx.agentId ?? "";
+        const SKILL_ALLOWED_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (!SKILL_ALLOWED_AGENTS.has(agentId)) {
+          return { content: [{ type: "text", text: "❌ skills_list 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+        }
+        const HOME = process.env.HOME ?? "/";
+        const agentWorkspaceMap: Record<string, string> = {
+          [FRONTEND_AGENT_ID]: "lucas",
+          [DESIGNER_AGENT_ID]: "andy",
+          [IMPLEMENTOR_AGENT_ID]: "lisa",
+        };
+        const agentLabel = agentWorkspaceMap[agentId] ?? agentId;
+        const skillsDir = join(HOME, `.openclaw/workspace-${agentLabel}/skills`);
+        if (!existsSync(skillsDir)) {
+          return { content: [{ type: "text", text: "当前没有任何 Skill。" }], details: { count: 0 } };
+        }
+        // 递归扫描所有 SKILL.md（含 category 子目录）
+        const skills: Array<{
+          name: string; description: string; status: string;
+          category?: string; created_at?: string; updated_at?: string;
+          files: string[];
+        }> = [];
+        const scanDir = (dir: string, category?: string) => {
+          try {
+            const entries = readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (!entry.isDirectory()) continue;
+              const subDir = join(dir, entry.name);
+              const skillMd = join(subDir, "SKILL.md");
+              if (existsSync(skillMd)) {
+                const content = readFileSync(skillMd, "utf8");
+                // 解析 frontmatter
+                const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+                const fm: Record<string, string> = {};
+                if (fmMatch) {
+                  for (const line of fmMatch[1].split("\n")) {
+                    const kv = line.match(/^(\w+):\s*(.*)/);
+                    if (kv) fm[kv[1]] = kv[2].trim();
+                  }
+                }
+                if (!p.include_deprecated && fm.status === "deprecated") continue;
+                // 列出辅助文件
+                const auxFiles: string[] = [];
+                try {
+                  const auxEntries = readdirSync(subDir, { withFileTypes: true, recursive: true }) as Array<{ name: string; isFile(): boolean; path?: string }>;
+                  for (const ae of auxEntries) {
+                    if (ae.isFile()) {
+                      const rel = ae.path
+                        ? join(ae.path, ae.name).slice(subDir.length + 1)
+                        : ae.name;
+                      if (rel !== "SKILL.md") auxFiles.push(rel);
+                    }
+                  }
+                } catch (_e) { /* ignore */ }
+                skills.push({
+                  name: fm.name ?? entry.name,
+                  description: fm.description ?? "",
+                  status: fm.status ?? "active",
+                  category: fm.category ?? category,
+                  created_at: fm.created_at,
+                  updated_at: fm.updated_at,
+                  files: auxFiles,
+                });
+              } else {
+                // 可能是 category 子目录
+                scanDir(subDir, entry.name);
+              }
+            }
+          } catch (_e) { /* ignore */ }
+        };
+        scanDir(skillsDir);
+        if (skills.length === 0) {
+          return { content: [{ type: "text", text: "当前没有任何 Skill。" }], details: { count: 0 } };
+        }
+        const lines = skills.map(s => {
+          const statusIcon = s.status === "active" ? "✅" : s.status === "draft" ? "📝" : s.status === "deprecated" ? "❌" : "❓";
+          const catLabel = s.category ? `[${s.category}] ` : "";
+          const filesLabel = s.files.length > 0 ? `（辅助文件：${s.files.join(", ")}）` : "";
+          const updatedLabel = s.updated_at ? `，更新于 ${s.updated_at}` : "";
+          return `${statusIcon} **${s.name}**${catLabel} — ${s.description}${filesLabel}`;
+        });
+        return {
+          content: [{ type: "text", text: `当前有 ${skills.length} 个 Skill：\n\n${lines.join("\n")}` }],
+          details: { count: skills.length, skills },
+        };
       },
     }));
 

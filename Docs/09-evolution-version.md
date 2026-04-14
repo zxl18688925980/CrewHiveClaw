@@ -7,7 +7,7 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v668
+> **版本**: v673
 > **最后更新**: 2026-04-14
 
 ---
@@ -2830,3 +2830,159 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `docs/00-project-overview.md`（核心定义表 + 散落引用，部分完成）
 - `docs/09-evolution-version.md`（本条目）
 - `docs/10-engineering-notes.md`（watchdog 自毁循环约束追加）
+
+---
+
+## v670 · L1 Skill 固化三阶段机制落地 + Lx 定义刷新（2026-04-14）
+
+**干预类型**：L1 行为质量 + 自进化能力增强（Skill 自动结晶完整闭环）
+
+**背景**：当前 Skill 结晶管道断裂——`flag_for_skill` 从未被 Lucas 调用过，auto-detect 门槛过高（≥3 工具），87 条 auto_detect 候选全是噪声（全部 rejected）。参考 Hermes Agent 设计（2 次触发自动写 Skill 草稿、使用频率追踪、自动迭代/废弃），实现三阶段 Skill 固化机制。
+
+**变更清单**：
+
+1. **Phase 1：低阈值 + 自动写 Skill 草稿**
+   - auto-detect 阈值从 ≥3 → ≥2，覆盖三角色（Lucas/Andy/Lisa）
+   - 新增 `writeSkillDraft()` 函数：检测到 2+ 工具组合后自动写 `SKILL.md` 草稿到对应 agent workspace skills 目录
+   - 幂等设计：已存在 draft 则更新 trigger_count/last_seen；已 active 不覆盖
+   - frontmatter 含 status/created_from/trigger_count/first_seen/last_seen/usage_count/success_count/last_used
+   - Lucas AGENTS.md flag_for_skill 门槛同步降为 2 次
+
+2. **Phase 2：使用频率追踪 + frontmatter 扩展**
+   - 新增 `skill-usage.jsonl`：每轮 agent_end 追踪 Skill 加载/使用/完成/跳过状态
+   - 推断方式：对比 Skill 步骤工具与本轮 toolUseCounts，不依赖 Agent 自报
+   - frontmatter 自动更新 usage_count/success_count/last_used
+   - Andy HEARTBEAT 新增 Skill 使用统计预计算注入，含健康审计指导
+
+3. **Phase 3：自动迭代 + 废弃 + Andy/Lisa 积累**
+   - 偏差检测：Skill 步骤工具覆盖度 < 50% 记录为 deviated
+   - 自动迭代：偏差 ≥ 3 次后用最常见的实际工具组合重写步骤
+   - 废弃：usage_count=0 且 age>30 天自动标 deprecated
+   - Andy 自动积累：search_codebase + write_file 成功后自动创建 spec-{topic} Skill
+   - Lisa 自动积累：run_opencode + get_opencode_result 成功后自动创建 impl-{topic} Skill
+
+**同期完成**：Lx 五层定义刷新（v669-v670）
+- L1: 行为质量+自进化·好不好+自成长（记忆质量+输出质量+Skill固化）
+- L2: Engineering Anything·开发即交付——多Agent智能体协作框架Ready
+- L3: 组织级AI·带着人一起进化
+- L4: 系统自进化·架构自优化+模型本地内化
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（writeSkillDraft + auto-detect ≥2 + Skill 使用追踪 + 偏差检测 + 自动迭代 + 废弃 + Andy/Lisa 积累）
+- `~/.openclaw/workspace-lucas/AGENTS.md`（flag_for_skill 门槛 3→2）
+- `~/HomeAI/Data/learning/skill-usage.jsonl`（新建）
+- `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v671（2026-04-14）Andy compaction 修复 + L2 Planning Mode + Lucas 行为改进
+
+**背景**：Andy（DeepSeek R1）在处理复杂 spec 时持续超时/"No reply from agent"，根因是 `compaction.mode: "safeguard"` 在长上下文（31K token）时 compaction 本身超时导致 agent 被杀。修复后 Andy 能稳定运行 12+ 分钟。
+
+**1. Andy compaction 修复**
+- `openclaw.json` 中 `agents.defaults.compaction.mode` 从 `"safeguard"` 改为 `"default"`
+- 根因：safeguard 模式在上下文较长时触发 compaction，compaction 本身超时（约 2 分钟），导致 agent 被杀返回空结果
+- 修复后 Andy R1 能稳定运行 12+ 分钟完成推理
+
+**2. L2 Planning Mode**
+- `trigger_lisa_implementation` 新增 `planning_mode: true` 检测
+- 新增 `decomposeToSubSpecs()` 函数：按 `integration_points` 文件目录自动分组，结构化分解（无 LLM 调用）
+- 复用 `spawnParallelLisa()` 基础设施并行调度各子模块
+- 完成后 Andy 验收，退化处理（≤1 组自动降级为单 Lisa）
+- Andy AGENTS.md 新增「Planning Mode（自动并行）」节
+
+**3. Lucas 行为改进**
+- SOUL.md 加「能办事」「先做再说」性格描述 + 认知风格「解决问题导向」「深层理解」
+- AGENTS.md 禁止汇报体/反复求确认/车轱辘话规则
+- `lucas-behavioral-rules.json` 新增 `styleRule`：每轮强制注入「像家人聊天，不像做汇报」
+
+**4. Pipeline drain 修复**
+- `task-queue.jsonl` 为空时从 `task-registry.json` 补救 `status=queued` 的孤儿任务
+- 避免因 queue file 写入失败导致任务永远积压
+
+**5. Andy re-trigger 改进**
+- 不依赖 spec 格式检测，只看协作线程文件是否存在（无 collab 文件 = 需要重触发）
+- 减少对 Andy spec 格式的依赖
+
+**6. write_file 三角色共享**
+- 从 Andy 专属 + `workspace-andy/` 路径限制 → Lucas/Andy/Lisa 共享 + `$HOME/` 路径限制
+- CLAUDE.md 工具表：Andy（8专属）/ 共享（7）
+- before_tool_call 写入守卫：`workspace-andy/` → `$HOME/`
+
+**修改文件**：
+- `~/.openclaw/openclaw.json`（compaction mode）
+- `CrewClaw/crewclaw-routing/index.ts`（decomposeToSubSpecs + planning_mode 检测 + drain 改进 + re-trigger 改进 + write_file 共享）
+- `~/.openclaw/workspace-lucas/SOUL.md`（性格描述）
+- `~/.openclaw/workspace-lucas/AGENTS.md`（行为规则）
+- `~/.openclaw/workspace-lisa/behavioral-rules/lucas-behavioral-rules.json`（styleRule）
+- `~/.openclaw/workspace-andy/AGENTS.md`（Planning Mode 节）
+- `Docs/00-project-overview.md`（三种执行路径表 + Planning Mode 节 + write_file 共享 + drain 改进）
+- `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v672（2026-04-14）L2 交付可靠性三机制 + L3 设计 CrewClaw 框架化
+
+**背景**：向 Claude Code 学习——可靠性不靠模型强，靠工程结构保证。当前 L2 流水线 Lisa 说"做完了"但 `changedFiles: []`，基础设施层不独立验证。失败后线性重试同一方案。Lucas 进度反馈不够主动。
+
+**设计原则**：机制保证，不靠模型自觉。基础设施层验证，不依赖 Andy/Lisa 模型能力。所有组织成员（家人+访客）体验一致。
+
+**1. 交付验证门**
+- 新增 `verifyLisaDelivery()` 函数：组合 `runProjectCompileCheck()` + spec 新增文件存在性检查
+- `trigger_lisa_implementation` 单 Lisa 路径：Lisa 交付后独立验证 → 不通过自动重试一次 → 仍不通过带证据通知 Andy
+- `spawnParallelLisa` 并行子任务同步加验证：验证结果写入子任务 JSON
+
+**2. 失败分层升级**
+- Lisa 失败通知 Andy 的 prompt 改为分层建议：简化 spec → 换方案 → 了解阻塞 → 上报
+- `request_implementation_revision` 第 2 轮起追加系统提示：同一问题反复可能是 spec 设计问题
+
+**3. Lucas 进度反馈**
+- `lucas-behavioral-rules.json` 新增 `progressRule`：家人和访客一致的进度反馈指导
+- 中间通知 prompt 从被动改为有条件主动（用户问过就主动告知）
+- 访客交付提示词对齐：不叫家人称呼，用专业友好语气
+
+**4. L3 设计 CrewClaw 框架化**
+- 00-project-overview L2 定义：交付可靠性三机制写入框架层定义表
+- 00-project-overview L3 定义：从 HomeAI 视角改为 CrewClaw 框架视角（Frontend/Designer/Implementor）
+- 新增「交付可靠性三机制」节：框架/实例分离表
+- 实现记录节标题：从「HomeAI L3 实现记录」改为「CrewClaw L2/L3 框架机制 + HomeAI 实现记录」
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（verifyLisaDelivery + 验证门 + spawnParallelLisa 验证 + Andy 分层通知 + revision 提示 + progressRule 注入 + 通知 prompt + 访客语气）
+- `CrewClaw/crewclaw-routing/config/lucas-behavioral-rules.json`（progressRule）
+- `Docs/00-project-overview.md`（L2/L3 定义框架化 + 交付可靠性节 + 实现记录标题）
+- `Docs/09-evolution-version.md`（本条目）
+
+
+---
+
+## v673 · L3 成员理解机制框架化（2026-04-14）
+
+**干预类型**：文档刷新（L3 设计从 HomeAI 视角升级为 CrewClaw 框架视角）
+
+**背景**：L3 的成员理解能力（成员画像、关系图谱、影子 Agent、跨成员感知）此前描述绑在「家庭」上——家人档案、家庭关系、看家人情绪。业主指出这是通用组织机制，不是家庭专属：家庭理解家人的情绪与关系，企业理解员工的职责与协作偏好，学校理解学生的学情与社交动态。机制相同，内容由实例注入。
+
+**变更清单**：
+
+1. **00-project-overview.md L3 核心定义表**（line 297）：
+   - 从「组织理解力 + 协作优化」改为「组织成员理解 + 协作优化」，明确四层框架机制：成员画像/关系图谱/影子 Agent/跨成员感知
+   - 新增「框架 vs 实例」标注：机制=框架层，内容=实例层
+2. **00-project-overview.md L3 口诀版**（line 304）：
+   - 更新为四层机制的简洁表达
+3. **00-project-overview.md L2/L3 差别段**（line 335）：
+   - 新增「成员理解不是家庭专属——任何组织都需要理解成员」说明
+   - 三种实例场景对比：家庭/企业/学校
+4. **00-project-overview.md L3 详细节**（line 2791）：
+   - 新增「组织成员理解机制（四层框架）」完整节，含框架/实例对比表
+   - 「Lucas：跨成员协作中介」→「前端 Agent：跨成员协作中介」，示例同时给 HomeAI 和企业场景
+   - 与影子的分工描述去 Lucas 名
+5. **HomeAI Readme.md L3 里程碑**（line 150）：
+   - L3 描述更新为四层成员理解机制 + 「不是家庭专属」标注
+6. **09-evolution-version.md 版本号**：v670→v673
+
+**设计决策**：成员理解机制的框架/实例分离表明确——框架提供蒸馏管道、图谱遍历、影子创建、跨成员扫描；实例定义关系类型（spouse_of vs reports_to）、画像维度（情绪 vs 职级）、隐私规则（家庭隐私 vs 商业机密）。
+
+**修改文件**：
+- `Docs/00-project-overview.md`（L3 定义表 + 口诀 + 差别段 + 详细节）
+- `Docs/HomeAI Readme.md`（L3 里程碑）
+- `Docs/09-evolution-version.md`（本条目）

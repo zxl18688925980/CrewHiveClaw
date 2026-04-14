@@ -792,7 +792,7 @@ h1{font-size:18px;text-align:center;margin-bottom:8px;color:#fff}
 <button class="refresh-btn" onclick="loadData()" title="刷新">&#x21bb;</button>
 <script>
 const LAYER_COLORS={L0:'#2ecc71',L1:'#3498db',L2:'#e67e22',L3:'#9b59b6',L4:'#e74c3c'};
-const LAYER_NAMES={L0:'L0 基础设施',L1:'L1 行为质量',L2:'L2 自进化',L3:'L3 组织协作',L4:'L4 深度学习'};
+const LAYER_NAMES={L0:'L0 基础设施',L1:'L1 行为质量',L2:'L2 Engineering Anything',L3:'L3 组织级AI',L4:'L4 系统自进化'};
 const PASS_TH={L0:3.0,L1:3.0,L2:2.5,L3:2.0,L4:2.0};
 let trendChart=null,barChart=null;
 async function loadData(){
@@ -2065,12 +2065,12 @@ PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
 [各 PM2 进程名称+状态、Gateway、端口、数据量]
 ## L1 Agent 人格化
 [Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]
-## L2 Vibe Anything
-[任务类型覆盖度、端到端交付成功率、交付物多样性]
-## L3 组织协作
-[协作边/成员分身/关系蒸馏/访客影子]
-## L4 系统自我演化
-[系统层：进化信号/知识内化/Skill积累/Andy巡检时效 | 模型层：DPO积累/本地模型/Gemma 4]
+## L2 Engineering Anything
+[任务类型覆盖度、端到端交付成功率、交付物多样性、三角色流水线健康]
+## L3 组织级AI
+[①成员画像/②协作关系图谱/③影子Agent演进/④跨成员感知蒸馏]
+## L4 系统自进化
+[系统层：AGENTS.md规则收敛+路由阈值进化+Andy巡检时效 | 模型层：DPO积累/本地路由比例/本地模型就绪]
 规则：某层无问题写 ✅ 无异常，不要省略。L0 必须包含具体进程状态。
 
 系统评估工具（业主发「系统评估」时使用）：
@@ -2256,12 +2256,12 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l2',
-    description: '评估 L2（Vibe Anything · 开发即交付）：家人要什么，系统造什么——任务类型覆盖度 + 端到端交付成功率 + 交付物多样性。',
+    description: '评估 L2（Engineering Anything · 开发即交付）：三角色闭环交付力——任务类型覆盖度 + 端到端交付成功率 + 交付物多样性 + 三角色流水线健康（task-registry 状态分布）。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_l3',
-    description: '评估 L3（组织协作进化——组织运作越来越优化）：协作边积累、演进环记录、访客影子生命周期、关系蒸馏运行状态、成员增强效果。',
+    description: '评估 L3（组织级AI · 带着人一起进化）：四层机制——①成员画像（从交互蒸馏，inject.md质量）②关系图谱（Kuzu协作边）③影子Agent（演进环+访客Registry）④跨成员感知（关系蒸馏运行状态）。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -3555,7 +3555,7 @@ os._exit(0)
     let score = '✅';
     const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
 
-    // ── 维度 A：Vibe Anything（家人要什么，系统造什么）──
+    // ── 维度 A：Engineering Anything（三角色闭环交付力）──
 
     // A1. 任务类型覆盖度：从 task-registry + ChromaDB decisions 统计成功交付的不同类型
     let taskTypes = new Set();
@@ -3677,6 +3677,34 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // ── 维度 B：三角色流水线健康 ──
+    let pipelineCompleted = 0, pipelineFailed = 0, pipelineQueued = 0, pipelineCancelled = 0;
+    try {
+      const taskRegPath = path.join(learningDir, 'task-registry.json');
+      if (fs.existsSync(taskRegPath)) {
+        const tasks = JSON.parse(fs.readFileSync(taskRegPath, 'utf8'));
+        for (const t of tasks) {
+          if (t.status === 'completed' || t.status === 'delivered') pipelineCompleted++;
+          else if (t.status === 'failed') pipelineFailed++;
+          else if (t.status === 'queued' || t.status === 'in_progress') pipelineQueued++;
+          else if (t.status === 'cancelled') pipelineCancelled++;
+        }
+      }
+      const pipelineTotal = pipelineCompleted + pipelineFailed;
+      if (pipelineTotal === 0 && pipelineQueued === 0) {
+        results.push('⚪ 三角色流水线：尚无任务记录');
+      } else {
+        const healthRate = pipelineTotal > 0 ? Math.round(pipelineCompleted / pipelineTotal * 100) : 0;
+        const pipelineOk = pipelineTotal === 0 || healthRate >= 60;
+        const detail = `已完成:${pipelineCompleted} / 失败:${pipelineFailed} / 进行中+排队:${pipelineQueued} / 已取消:${pipelineCancelled}`;
+        results.push(`${pipelineOk ? '✅' : '⚠️'} 三角色流水线健康：${pipelineTotal > 0 ? healthRate + '%' : 'N/A'}（${detail}）`);
+        if (!pipelineOk && score === '✅') score = '⚠️';
+      }
+    } catch (e) {
+      results.push(`⚠️ 流水线健康检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
     // ── 数值评分 ──
     const _rub2 = loadRubric();
     const _L2I = _rub2?.layers?.L2?.items;
@@ -3686,6 +3714,10 @@ os._exit(0)
         if (r.includes('任务类型覆盖度')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l2s, _L2I, 'task_type_coverage', +m[1]); }
         if (r.includes('端到端交付成功率') && r.includes('=')) { const m = r.match(/= (\d+)%/); if (m) trackScore(_l2s, _L2I, 'delivery_success_rate', +m[1]); }
         if (r.includes('交付物多样性')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l2s, _L2I, 'deliverable_diversity', +m[1]); }
+        if (r.includes('三角色流水线健康')) {
+          const m = r.match(/健康：(\d+)%/);
+          trackScore(_l2s, _L2I, 'pipeline_health', m ? +m[1] : 0);
+        }
       }
       if (_l2s.length > 0) {
         const _wa = calcWeightedAvg(_l2s);
@@ -3695,14 +3727,44 @@ os._exit(0)
     }
 
     return `**L2 评估 ${score}**\n` +
-      `【Vibe Anything · 家人要什么，系统造什么】\n` + (results.length ? results.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据');
+      `【Engineering Anything · 三角色闭环交付力】\n` + (results.length ? results.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据');
   }
 
   if (toolName === 'evaluate_l3') {
-    const results = [];
+    // 四维度输出结构：D1成员画像 / D2关系图谱 / D3影子Agent / D4跨成员感知
+    const d1Results = [];  // ①成员画像
+    const d2Results = [];  // ②关系图谱
+    const d3Results = [];  // ③影子Agent
+    const d4Results = [];  // ④跨成员感知
     let score = '✅';
 
-    // 1. Kuzu 协作边积累（distill-relationship-dynamics.py 产出）
+    // ── ①成员画像：inject.md 文件质量（包含蒸馏信息的比例）──
+    let profileTotal = 0, profileWithDistilled = 0;
+    try {
+      const familyDir = path.join(process.env.HOME, '.openclaw', 'workspace-lucas', 'family');
+      if (!fs.existsSync(familyDir)) {
+        d1Results.push('⚪ 成员画像：family 目录不存在（档案未初始化）');
+      } else {
+        const injects = fs.readdirSync(familyDir).filter(f => f.endsWith('.inject.md'));
+        profileTotal = injects.length;
+        let withCollab = 0;
+        for (const inj of injects) {
+          const content = fs.readFileSync(path.join(familyDir, inj), 'utf8');
+          // 蒸馏信息标志：行为模式 / 沟通风格 / 协作关系 / 角色 / 关注点
+          const hasDistilled = /行为模式|沟通风格|协作关系|co_discusses|关注点|兴趣领域|工作状态/.test(content);
+          const hasCollab = /组织协作关系|协作边|co_discusses|requests_from/.test(content);
+          if (hasDistilled) profileWithDistilled++;
+          if (hasCollab) withCollab++;
+        }
+        const profilePct = profileTotal > 0 ? Math.round(profileWithDistilled / profileTotal * 100) : 0;
+        d1Results.push(`${profileWithDistilled > 0 ? '✅' : '⚪'} 成员画像：${profileTotal} 个档案，${profileWithDistilled} 个含蒸馏信息（${profilePct}%）`);
+        d1Results.push(`${withCollab > 0 ? '✅' : '⚪'} 协作关系注入：${withCollab}/${profileTotal} 个档案含协作关系信息`);
+      }
+    } catch (e) {
+      d1Results.push(`⚠️ 成员画像检查失败：${e.message.slice(0, 60)}`);
+    }
+
+    // ── ②关系图谱：Kuzu 协作边（distill-relationship-dynamics.py 产出）──
     const l3KuzuPath = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
     const l3KuzuScript = `
 import sys, json, os
@@ -3729,98 +3791,99 @@ os._exit(0)
       try { fs.unlinkSync(tmpL3); } catch (_) {}
       const ld = JSON.parse(l3Out);
       if (ld.error) {
-        results.push(`⚠️ Kuzu 协作边查询失败：${ld.error.slice(0, 80)}`);
+        d2Results.push(`⚠️ Kuzu 协作边查询失败：${ld.error.slice(0, 80)}`);
         if (score === '✅') score = '⚠️';
       } else {
         const c = ld.counts || {};
         const collabTotal = (c.co_discusses || 0) + (c.requests_from || 0) + (c.supports || 0) + (c.role_in_context || 0);
         const activeThreads = c.active_thread || 0;
-        results.push(`${collabTotal > 0 ? '✅' : '⚪'} 协作关系边：${collabTotal} 条（co_discusses:${c.co_discusses||0} / requests_from:${c.requests_from||0} / supports:${c.supports||0} / role_in_context:${c.role_in_context||0}）`);
-        results.push(`${activeThreads > 0 ? '✅' : '⚪'} 活跃话题线索（active_thread）：${activeThreads} 条`);
+        d2Results.push(`${collabTotal > 0 ? '✅' : '⚪'} 协作关系图谱边：${collabTotal} 条（co_discusses:${c.co_discusses||0} / requests_from:${c.requests_from||0} / supports:${c.supports||0} / role_in_context:${c.role_in_context||0}）`);
+        d2Results.push(`${activeThreads > 0 ? '✅' : '⚪'} 活跃话题线索（active_thread）：${activeThreads} 条`);
       }
     } catch (e) {
-      results.push(`⚠️ Kuzu L3 查询异常：${e.message.slice(0, 80)}`);
+      d2Results.push(`⚠️ Kuzu L3 查询异常：${e.message.slice(0, 80)}`);
       if (score === '✅') score = '⚠️';
     }
 
-    // 2. ChromaDB shadow_interactions（演进环记录）
+    // ── ③影子Agent：演进环记录 + 访客Registry ──
     try {
       const siResp = await fetch(`${CHROMA_API_BASE}/shadow_interactions`);
       if (!siResp.ok) {
-        results.push('⚪ shadow_interactions：集合不存在（关系蒸馏管道尚未运行）');
+        d3Results.push('⚪ shadow_interactions：集合不存在（演进环尚未运行）');
       } else {
         const { id: siId } = await siResp.json();
         const cntResp = await fetch(`${CHROMA_API_BASE}/${siId}/count`);
         const siCount = cntResp.ok ? await cntResp.json() : '?';
-        results.push(`${siCount > 0 ? '✅' : '⚪'} shadow_interactions：${siCount} 条演进环记录`);
+        d3Results.push(`${siCount > 0 ? '✅' : '⚪'} shadow_interactions：${siCount} 条演进环记录`);
       }
     } catch (e) {
-      results.push(`⚠️ shadow_interactions 检查失败：${e.message.slice(0, 60)}`);
+      d3Results.push(`⚠️ shadow_interactions 检查失败：${e.message.slice(0, 60)}`);
     }
-
-    // 3. 访客影子 Registry 状态
     try {
       const registryPath = path.join(HOMEAI_ROOT, 'Data', 'visitor-registry.json');
       if (!fs.existsSync(registryPath)) {
-        results.push('⚪ 访客 Registry：文件不存在（无访客）');
+        d3Results.push('⚪ 访客 Registry：文件不存在（无访客）');
       } else {
         const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
         const entries = Object.values(registry);
         const active   = entries.filter(e => e.shadow_status === 'active').length;
         const dormant  = entries.filter(e => e.shadow_status === 'dormant').length;
         const archived = entries.filter(e => e.shadow_status === 'archived').length;
-        results.push(`${entries.length > 0 ? '✅' : '⚪'} 访客影子：${entries.length} 个（active:${active} / dormant:${dormant} / archived:${archived}）`);
+        d3Results.push(`${entries.length > 0 ? '✅' : '⚪'} 访客影子：${entries.length} 个（active:${active} / dormant:${dormant} / archived:${archived}）`);
       }
     } catch (e) {
-      results.push(`⚠️ 访客 Registry 读取失败：${e.message.slice(0, 60)}`);
+      d3Results.push(`⚠️ 访客 Registry 读取失败：${e.message.slice(0, 60)}`);
     }
 
-    // 4. 关系蒸馏日志（distill-relationship-dynamics.log）
+    // ── ④跨成员感知：关系蒸馏运行状态 + 成员增强效果 ──
     try {
       const logPath = path.join(HOMEAI_ROOT, 'Logs', 'distill-relationship-dynamics.log');
       if (!fs.existsSync(logPath)) {
-        results.push('⚪ 关系蒸馏日志：尚无运行记录（每日凌晨 4am 触发）');
+        d4Results.push('⚪ 关系蒸馏日志：尚无运行记录（每日凌晨 4am 触发）');
       } else {
         const logContent = fs.readFileSync(logPath, 'utf8');
         const logLines = logContent.split('\n').filter(l => l.trim());
         const runMatches = logContent.match(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/g);
         const lastRun = runMatches ? runMatches[runMatches.length - 1] : '未知';
-        results.push(`✅ 关系蒸馏：上次运行 ${lastRun}，日志 ${logLines.length} 行`);
+        d4Results.push(`✅ 关系蒸馏：上次运行 ${lastRun}，日志 ${logLines.length} 行`);
       }
     } catch (e) {
-      results.push(`⚠️ 关系蒸馏日志读取失败：${e.message.slice(0, 60)}`);
+      d4Results.push(`⚠️ 关系蒸馏日志读取失败：${e.message.slice(0, 60)}`);
+    }
+    // 成员增强效果 = 档案中含协作信息比例（已在 D1 中统计，这里汇总结论）
+    if (profileTotal > 0) {
+      const enhancePct = Math.round(profileWithDistilled / profileTotal * 100);
+      d4Results.push(`${profileWithDistilled > 0 ? '✅' : '⚪'} 成员增强效果：${profileWithDistilled}/${profileTotal} 个档案含蒸馏画像（${enhancePct}%）`);
     }
 
-    // 5. 成员增强效果（inject.md 中协作关系节是否存在）
-    try {
-      const familyDir = path.join(process.env.HOME, '.openclaw', 'workspace-lucas', 'family');
-      if (fs.existsSync(familyDir)) {
-        const injects = fs.readdirSync(familyDir).filter(f => f.endsWith('.inject.md'));
-        let withCollab = 0;
-        for (const inj of injects) {
-          const content = fs.readFileSync(path.join(familyDir, inj), 'utf8');
-          if (content.includes('组织协作关系') || content.includes('协作边') || content.includes('co_discusses')) withCollab++;
-        }
-        results.push(`${withCollab > 0 ? '✅' : '⚪'} 成员增强效果：${withCollab}/${injects.length} 个档案含协作关系信息`);
-      }
-    } catch (e) {
-      // 非关键
-    }
-
-    // 数值评分
+    // ── 数值评分 ──
+    const allL3Results = [...d1Results, ...d2Results, ...d3Results, ...d4Results];
     const _rub3 = loadRubric();
     const _L3I = _rub3?.layers?.L3?.items;
     const _l3s = [];
     if (_L3I) {
-      for (const r of results) {
-        if (r.includes('协作关系边')) { const m = r.match(/(\d+) 条（/); if (m) trackScore(_l3s, _L3I, 'collab_edges', +m[1]); }
+      // D1 成员画像
+      for (const r of d1Results) {
+        if (r.includes('成员画像') && r.includes('%')) {
+          const m = r.match(/\((\d+)%\)/); if (m) trackScore(_l3s, _L3I, 'member_profile', +m[1]);
+        }
+      }
+      // D2 关系图谱
+      for (const r of d2Results) {
+        if (r.includes('协作关系图谱边')) { const m = r.match(/：(\d+) 条/); if (m) trackScore(_l3s, _L3I, 'collab_edges', +m[1]); }
+      }
+      // D3 影子Agent
+      for (const r of d3Results) {
         if (r.includes('shadow_interactions') || r.includes('演进环')) { const m = r.match(/(\d+) 条演进/); if (m) trackScore(_l3s, _L3I, 'shadow_interactions', +m[1]); }
         if (r.includes('访客影子') && r.includes('active')) {
           const m = r.match(/active:(\d+)/);
           trackScore(_l3s, _L3I, 'visitor_registry', (m && +m[1] > 0) ? 'active' : (r.includes('dormant') ? 'dormant_only' : 'none'));
         }
-        if (r.includes('关系蒸馏') && r.includes('运行')) trackScore(_l3s, _L3I, 'relationship_distill', r.trim().startsWith('✅') ? 'recent' : (r.includes('尚无') ? 'never' : 'exists'));
-        if (r.includes('成员增强效果')) { const m = r.match(/(\d+)\/(\d+)/); if (m) trackScore(_l3s, _L3I, 'member_enhancement', +m[2] > 0 ? Math.round(+m[1] / +m[2] * 100) : 0); }
+      }
+      // D4 跨成员感知
+      for (const r of d4Results) {
+        if (r.includes('关系蒸馏')) trackScore(_l3s, _L3I, 'relationship_distill', r.trim().startsWith('✅') ? 'recent' : (r.includes('尚无') ? 'never' : 'exists'));
+        if (r.includes('成员增强效果')) { const m = r.match(/\((\d+)%\)/); if (m) trackScore(_l3s, _L3I, 'member_enhancement', +m[1]); }
       }
       if (_l3s.length > 0) {
         const _wa = calcWeightedAvg(_l3s);
@@ -3828,7 +3891,14 @@ os._exit(0)
         score += ` · ${_wa.toFixed(1)}/5.0`;
       }
     }
-    return `**L3 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
+
+    // 分段输出
+    const l3Output = [];
+    if (d1Results.length > 0) { l3Output.push('── 【①成员画像·从交互蒸馏】 ──'); d1Results.forEach(r => l3Output.push(`  ${r}`)); }
+    if (d2Results.length > 0) { l3Output.push('── 【②关系图谱·Kuzu协作边】 ──'); d2Results.forEach(r => l3Output.push(`  ${r}`)); }
+    if (d3Results.length > 0) { l3Output.push('── 【③影子Agent·演进环+访客】 ──'); d3Results.forEach(r => l3Output.push(`  ${r}`)); }
+    if (d4Results.length > 0) { l3Output.push('── 【④跨成员感知·协作蒸馏】 ──'); d4Results.forEach(r => l3Output.push(`  ${r}`)); }
+    return `**L3 评估 ${score}**\n${l3Output.join('\n')}`;
   }
 
   if (toolName === 'evaluate_l4') {
@@ -3912,8 +3982,10 @@ os._exit(0)
           sysLayerResults.push('⚠️ Andy HEARTBEAT：存在但无「上次巡检」字段');
           if (score === '✅') score = '⚠️';
         } else {
-          const lastCheckStr = lastCheckMatch[1].trim().slice(0, 20);
-          const lastCheckDate = new Date(lastCheckStr.replace(' ', 'T') + '+08:00');
+          const lastCheckRaw = lastCheckMatch[1].trim();
+          const lastCheckStr = lastCheckRaw.slice(0, 19); // YYYY-MM-DDTHH:mm:ss
+          // 时间戳可能含毫秒和时区（如 2026-04-14T16:47:56.064+08:00），直接解析原始值
+          const lastCheckDate = new Date(lastCheckRaw.replace(' ', 'T'));
           andyHbHours = isNaN(lastCheckDate.getTime()) ? 9999 : (Date.now() - lastCheckDate.getTime()) / 3600000;
           const stale = andyHbHours > 30;
           sysLayerResults.push(`${stale ? '⚠️' : '✅'} Andy HEARTBEAT 上次巡检：${lastCheckStr}（${andyHbHours.toFixed(1)}h 前）`);
@@ -3925,25 +3997,55 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // S5. L4 系统层临时干预状态（Lucas AGENTS.md 幻觉禁令条数）
+    // S5. AGENTS.md 规则收敛度（规则总条数，越少说明越多行为内化到权重，不靠外部注入）
+    let totalAgentRules = 0;
     try {
-      const agentsPath = path.join(process.env.HOME, '.openclaw', 'workspace-lucas', 'AGENTS.md');
-      if (!fs.existsSync(agentsPath)) {
-        sysLayerResults.push('⚠️ Lucas AGENTS.md 不存在');
-        if (score === '✅') score = '⚠️';
-      } else {
-        const content = fs.readFileSync(agentsPath, 'utf8');
-        const halluLines = content.split('\n').filter(l =>
-          /幻觉|承诺幻觉|已提交|pretend|false.*commit|禁止.*承诺|不得.*承诺/i.test(l)
-        );
-        if (halluLines.length > 0) {
-          sysLayerResults.push(`✅ L4 系统层拦截：AGENTS.md 中有 ${halluLines.length} 行幻觉/承诺禁令`);
-        } else {
-          sysLayerResults.push('⚪ L4 系统层拦截：AGENTS.md 未检测到幻觉禁令');
+      const ocHome = path.join(process.env.HOME, '.openclaw');
+      for (const agentName of ['lucas', 'andy', 'lisa']) {
+        const agentsPath = path.join(ocHome, `workspace-${agentName}`, 'AGENTS.md');
+        if (fs.existsSync(agentsPath)) {
+          const content = fs.readFileSync(agentsPath, 'utf8');
+          // 统计规则行：以 - / * / 数字. 开头的非空行
+          const ruleLines = content.split('\n').filter(l => /^\s*[-*]\s|^\s*\d+\.\s/.test(l)).length;
+          totalAgentRules += ruleLines;
         }
       }
+      // lower_better：规则多 = 系统仍在依赖临时注入干预，规则少 = 更成熟
+      const maturityIcon = totalAgentRules <= 100 ? '✅' : totalAgentRules <= 200 ? '⚪' : '⚠️';
+      const maturityDesc = totalAgentRules <= 100 ? '规则精简，行为内化程度高'
+        : totalAgentRules <= 200 ? '规则适中（基线阶段）'
+        : '规则偏多，仍依赖外部注入';
+      sysLayerResults.push(`${maturityIcon} AGENTS.md 规则收敛：三角色合计 ${totalAgentRules} 条规则行（${maturityDesc}）`);
     } catch (e) {
-      sysLayerResults.push(`⚠️ AGENTS.md 读取失败：${e.message.slice(0, 60)}`);
+      sysLayerResults.push(`⚠️ AGENTS.md 规则统计失败：${e.message.slice(0, 60)}`);
+    }
+
+    // S6. 路由阈值进化（路由事件中本地路由比例 + routing-thresholds.json 存在性）
+    try {
+      const routeEventsPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'route-events.jsonl');
+      const thresholdsPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'routing-thresholds.json');
+      let localRoutePct = 0;
+      let recentTotal = 0, recentLocal = 0;
+      if (fs.existsSync(routeEventsPath)) {
+        const lines = fs.readFileSync(routeEventsPath, 'utf8').split('\n').filter(l => l.trim());
+        // 取最近 200 条计算本地路由比例
+        const recent = lines.slice(-200);
+        for (const line of recent) {
+          try {
+            const ev = JSON.parse(line);
+            recentTotal++;
+            if (ev.routed_to === 'local' || ev.model_tier === 'local') recentLocal++;
+          } catch (_) {}
+        }
+        localRoutePct = recentTotal > 0 ? Math.round(recentLocal / recentTotal * 100) : 0;
+      }
+      const hasThresholds = fs.existsSync(thresholdsPath);
+      const routeIcon = recentTotal === 0 ? '⚪' : localRoutePct >= 5 ? '✅' : '⚪';
+      const routeDesc = recentTotal === 0 ? '尚无路由事件（云端模型唯一路径）'
+        : `近 ${recentTotal} 条事件中本地路由占 ${localRoutePct}%（local:${recentLocal}）`;
+      sysLayerResults.push(`${routeIcon} 路由阈值进化：${routeDesc}${hasThresholds ? '，routing-thresholds.json 存在' : '，routing-thresholds.json 不存在'}`);
+    } catch (e) {
+      sysLayerResults.push(`⚠️ 路由阈值检查失败：${e.message.slice(0, 60)}`);
     }
 
     // ══ 模型层：行为内化 ══
@@ -4057,14 +4159,15 @@ os._exit(0)
     if (_L4I) {
       // 系统层评分
       for (const r of sysLayerResults) {
-        if (r.includes('幻觉') && r.includes('禁令')) trackScore(_l4s, _L4I, 'l4_sys_rules', r.trim().startsWith('✅') ? 'exists' : 'missing');
-        if (r.includes('Andy') && r.includes('巡检')) trackScore(_l4s, _L4I, 'l4_sys_heartbeat', r.trim().startsWith('✅') ? 'recent' : 'stale');
-        if (r.includes('知识内化')) { const m = r.match(/(\d+) 条/); if (m) trackScore(_l4s, _L4I, 'l4_sys_knowledge', +m[1] >= 5 ? 'ok' : 'low'); }
-        if (r.includes('Skill 积累')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l4s, _L4I, 'l4_sys_skills', +m[1] >= 20 ? 'ok' : 'low'); }
+        if (r.includes('AGENTS.md 规则收敛') && r.includes('条规则行')) {
+          const m = r.match(/合计 (\d+) 条/); if (m) trackScore(_l4s, _L4I, 'agents_md_maturity', +m[1]);
+        }
+        if (r.includes('路由阈值进化') && r.includes('本地路由占')) {
+          const m = r.match(/占 (\d+)%/); if (m) trackScore(_l4s, _L4I, 'routing_evolution', +m[1]);
+        }
       }
       // 模型层评分
       for (const r of mdlLayerResults) {
-        if (r.includes('DPO 信号总计')) { /* count tracked via patterns below */ }
         if (r.includes('已达内化阈值')) { const m = r.match(/(\d+) 个模式/); if (m) trackScore(_l4s, _L4I, 'dpo_accumulation', 100); }
         if (r.includes('本地模型') || r.includes('Ollama') || r.includes('MLX')) {
           const hasOllama = mdlLayerResults.some(x => x.includes('Ollama 模型'));
@@ -4516,7 +4619,7 @@ ${factsDesc}`;
     }
     const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-count);
     const layerKeys = ['L0', 'L1', 'L2', 'L3', 'L4'];
-    const layerLabels = { L0: 'L0 基础设施', L1: 'L1 行为质量', L2: 'L2 自进化', L3: 'L3 组织协作', L4: 'L4 深度学习' };
+    const layerLabels = { L0: 'L0 基础设施', L1: 'L1 行为质量', L2: 'L2 Engineering Anything', L3: 'L3 组织级AI', L4: 'L4 系统自进化' };
     const layerScores = {};
     for (const lk of layerKeys) layerScores[lk] = entries.map(e => e[lk]?.w ?? null);
     const overallScores = entries.map(e => e.overall);
@@ -6337,7 +6440,7 @@ async function runMainMonitorLoop() {
     let iterations = 0;
     let reply = '';
 
-    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。\n\n**汇报格式（强制）**：所有推送给工程师的消息必须按 Lx 分层组织：\n## L0 基础设施\n[各 PM2 进程名称+状态+运行时长+重启次数、Gateway 状态、关键端口]\n## L1 Agent 人格化\n[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]\n## L2 Vibe Anything\n[任务类型覆盖度、端到端交付成功率、交付物多样性]\n## L3 组织协作\n[协作边/成员分身/关系蒸馏/访客影子]\n## L4 系统自我演化\n[系统层：进化信号/知识内化/Skill积累/Andy巡检时效 | 模型层：DPO积累进度/本地模型就绪/Gemma 4 状态]\n规则：某层无问题写 ✅ 无异常，不要省略该层。L0 必须包含具体进程状态和数据。\n\n可用评估工具：evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_system（依次调用 L0~L4）。';
+    const heartbeatSystem = MAIN_SYSTEM_PROMPT + '\n\n【当前交互来源：HEARTBEAT 自动触发】这是定时监控检查，不是业主主动发消息。只在发现真实异常时才通知业主，正常状态回复 HEARTBEAT_OK。\n\n**汇报格式（强制）**：所有推送给工程师的消息必须按 Lx 分层组织：\n## L0 基础设施\n[各 PM2 进程名称+状态+运行时长+重启次数、Gateway 状态、关键端口]\n## L1 Agent 人格化\n[Lucas 质量、Andy/Lisa 活跃度、蒸馏产出、evaluator 状态]\n## L2 Engineering Anything\n[任务类型覆盖度、端到端交付成功率、交付物多样性、三角色流水线健康]\n## L3 组织级AI\n[①成员画像/②协作关系图谱/③影子Agent演进/④跨成员感知蒸馏]\n## L4 系统自进化\n[系统层：AGENTS.md规则收敛+路由阈值进化+Andy巡检时效+Skill积累 | 模型层：DPO积累进度/本地路由比例/本地模型就绪]\n规则：某层无问题写 ✅ 无异常，不要省略该层。L0 必须包含具体进程状态和数据。\n\n可用评估工具：evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_system（依次调用 L0~L4）。';
     while (iterations++ < 10) {
       const response = await callMainModel(heartbeatSystem, messages);
 
