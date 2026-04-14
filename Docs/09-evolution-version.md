@@ -3097,3 +3097,78 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `Docs/00-project-overview.md`
 - `Docs/HomeAI Readme.md`
 - `Docs/09-evolution-version.md`（本条目）
+
+---
+
+## v677 · MemPalace/MAGMA/Hermes/ClaudeCode 四项目 gap 补全（2026-04-15）
+
+**干预类型**：L0/L1/L4 多层机制补全（参考四个外部项目深度 gap 分析后实施）
+
+**背景**：系统工程师对 MemPalace（L0 记忆架构）、MAGMA（L0 图谱检索）、Hermes（L1 行为质量）、ClaudeCode（L2 流水线体验）四个参考项目做了深度评估，识别出 P0/P1 缺口，本次全部实现，同时激活已积累数据的上下文预算裁剪。
+
+**变更清单**：
+
+1. **hall_type 对话分类元数据（index.ts `writeMemory`）**：
+   - MemPalace 四厅架构对齐（hall_events / hall_discoveries / hall_preferences / hall_facts）
+   - 写入时机：`agent_end` 触发的 `writeMemory` 同步写 metadata `hall_type` 字段
+   - 分类规则：dev_or_complex intent → hall_events；「发现/原来/学到」关键词 → hall_discoveries；「喜欢/习惯/偏好」关键词 → hall_preferences；其余默认 hall_facts
+   - 价值：为未来按记忆类型过滤检索（只查「发现类」或「事件类」）打基础
+
+2. **MAGMA Phase 2 因果多跳检索（index.ts）**：
+   - `detectCausalQuery(query: string): boolean`：正则检测「为什么/为何/原因/怎么会/导致/因为」
+   - `queryCausalFactsMultiHop(userId: string)`：2-hop Kuzu MATCH `(p)-[f1:causal]->(m)-[f2:causal]->(t) LIMIT 6`，返回 `{chain, context}[]`
+   - recall_memory 中：检测到因果查询时并发执行 multi-hop + 1-hop，合并为 `【因果推理链】` 块注入；普通查询走原有路径
+
+3. **session_todo 工具（index.ts，Andy/Lisa 共享）**：
+   - Hermes todo_tool 对齐，action: `write/update/read/clear`
+   - `sessionTodoMap: Map<string, TodoItem[]>`，TodoItem: `{id, content, status: pending|in_progress|done|cancelled}`
+   - `before_prompt_build`：检测到未完成 todo 时注入 `【当前任务进度】` 块（⬜/🔄/✅/🚫），全部完成时追加 clear 提示
+   - 仅 DESIGNER_AGENT_ID / IMPLEMENTOR_AGENT_ID 可调用
+
+4. **recall_memory session 聚合摘要（index.ts）**：
+   - Hermes session_search_tool 对齐，解决原始碎片化检索结果可读性差的问题
+   - 按 sessionId 聚合检索结果 → top-3 session（每 session ≤4 条）→ 跨 ≥2 session 且 ≥4 条时调 lucas 模型摘要（max_tokens=300，4s 超时）→ 注入 `【语义相关对话摘要】`
+   - 超时或摘要 <20 字时 fallback 到原始结果，不影响可靠性
+
+5. **findRelevantMemories 关键词动态注入过滤（context-sources.ts + context-handler.ts）**：
+   - ClaudeCode `findRelevantMemories` 机制对齐（轻量无 LLM 版本）
+   - `FileSource` 新增 `optional?: boolean` + `keywords?: string[]` 字段
+   - `context-handler.ts resolveFile()`：optional=true + queryMode=static-file + keywords 非空时，keyword miss → 静默返回空字符串，跳过注入
+   - Andy 背景文件（optional: true, keywords: 项目背景/里程碑/HomeAI/HiveClaw/L0-L4...）
+   - Andy MEMORY.md（optional: true, keywords: 设计/架构/原则/踩坑/spec...）
+   - Lisa 背景文件和 MEMORY.md 同样配置各自场景 keywords
+
+6. **上下文预算正式激活（config/context-budget.json）**：
+   - `dryRun: true` → `dryRun: false`，v667 积累的数据已验证（典型 total=13436 < 40000，正常不裁剪）
+   - T0~T3 四层裁剪逻辑正式生效，溢出时从 T3（低优）开始裁剪，T0 永不裁剪
+
+7. **Andy Spec SFT 积累管道（index.ts + 两个 Python 脚本）**：
+   - `ANDY_SPEC_FINETUNE_QUEUE = data/learning/andy-spec-finetune-queue.jsonl`
+   - `trigger_lisa_implementation` 中：spec 通过验证后写入队列（requirement + context + spec + specQuality 元数据）
+   - `launchOpenCodeBackground` 中：`opencodeReqIdMap` 记录 sessionId → requirementId 映射
+   - opencode `proc.on("close")` 中：回填 outcome（exitCode + specMatchRate），设置 `eligibleForTraining`
+   - `seed-andy-spec-queue.py`：扫描 workspace-andy/ 12 个历史 spec 种子导入，mtime 去重
+   - `prepare-andy-sft-data.py`：过滤 eligible → MLX messages 格式 train.jsonl + valid.jsonl，50 条触发 LoRA SFT 提示
+   - 运行结果：12 条种子，9 条 eligible，8 train + 1 valid 分割
+
+**设计决策**：
+- hall_type 写入阶段用关键词分类而非 LLM，避免每次对话多一次 LLM 调用；精确度够用（主要用途是批量统计/过滤，不是精准分类）
+- session_todo 用 sessionKey 而非 agentId 作 Map key，保证 tool 调用和 before_prompt_build 读同一个 session 状态
+- recall_memory 摘要设 4s 超时是有意的 safeguard——summrization 是锦上添花，不能阻塞主流程
+- SFT 积累管道设计为异步非阻塞（写队列 fire-and-forget），不影响主流水线延迟
+
+**文档更新**：
+- `Docs/HomeAI Readme.md`：L0~L4 里程碑段落补充 hall_type/因果多跳/session_todo/recall摘要/findRelevantMemories/预算激活/SFT管道
+- `Docs/00-project-overview.md`：因果多跳 Phase 2 实现/hall_type写入层/session聚合摘要/findRelevantMemories节/dryRun激活/Andy SFT管道/L4定义
+- `~/HomeAI/CLAUDE.md`：版本 v675→v677，工具 36→37，session_todo 加入共享工具表
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/index.ts`
+- `CrewClaw/crewclaw-routing/context-sources.ts`
+- `CrewClaw/crewclaw-routing/context-handler.ts`
+- `CrewClaw/crewclaw-routing/config/context-budget.json`
+- `HomeAILocal/Scripts/seed-andy-spec-queue.py`（新增）
+- `HomeAILocal/Scripts/prepare-andy-sft-data.py`（新增）
+- `Docs/HomeAI Readme.md`
+- `Docs/00-project-overview.md`
+- `Docs/09-evolution-version.md`（本条目）
