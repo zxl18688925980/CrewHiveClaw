@@ -1165,9 +1165,16 @@ async function closetFirstSearch(
     const closetResults = await chromaQuery("conversations_closets", embedding, nClosets, where);
     if (closetResults.length === 0) return [];
 
+    // 语义命中集合内按 timestamp 降序重排，确保新结论优先覆盖旧结论
+    const sortedByRecency = [...closetResults].sort((a, b) => {
+      const ta = (a.metadata.timestamp as string) ?? "";
+      const tb = (b.metadata.timestamp as string) ?? "";
+      return tb.localeCompare(ta);
+    });
+
     // 从 closet metadata 提取 drawer_id，去重后 batch fetch
     const drawerIds = [...new Set(
-      closetResults.map(r => r.metadata.drawer_id as string).filter(Boolean),
+      sortedByRecency.map(r => r.metadata.drawer_id as string).filter(Boolean),
     )].slice(0, nFinal);
     if (drawerIds.length === 0) return [];
 
@@ -11004,19 +11011,22 @@ last_used: null
       },
     }));
 
-    // ── flag_for_skill：Lucas 专属，记录隐式进化信号候选 ────────────────────
+    // ── flag_for_skill：三角色共用，记录隐式进化信号候选 ──────────────────────
     //
-    // 当同类情况重复出现 ≥ 3 次时调用，把模式信号写入 skill-candidates.jsonl。
-    // Andy 在 HEARTBEAT 巡检中读取此文件，判断是否值得结晶为正式 Skill/Tool。
+    // 任务执行中发现弱信号（首次/尚不确定）时立即标记，无需等 HEARTBEAT。
+    // 稳定信号（已出现 2+ 次）直接用 skill_manage create 结晶，不必先 flag。
+    // Andy 在 HEARTBEAT 巡检中读取此文件，评估候选是否结晶为正式 Skill/Tool。
 
     api.registerTool((toolCtx) => ({
       label: "记录技能候选信号",
       name: "flag_for_skill",
       description: [
-        "Lucas 专属工具：当同类用户需求/对话模式出现 3 次以上时调用，记录隐式进化信号。",
-        "Andy 会在定期巡检中评估这些候选，判断是否结晶为正式 Skill 或 Tool。",
-        "不要在第 1-2 次出现时调用，只在确认已重复 ≥3 次时才记录。",
-        "例如：家人反复问同类问题、Lucas 反复用相同方式解决某类需求。",
+        "三角色共用工具：任务执行中发现弱信号（首次出现、尚不确定是否稳定）时立即调用，记录进化候选。",
+        "不要等 HEARTBEAT，当场标记——Andy 巡检时评估这些候选是否结晶为正式 Skill 或 Tool。",
+        "弱信号示例（Lucas）：家人反复问同类问题；反复用相同工具组合解决某类需求。",
+        "弱信号示例（Andy）：首次遇到某类设计约束感觉可能反复出现；Lisa 反馈 spec 未覆盖的约束类型。",
+        "弱信号示例（Lisa）：实现中遇到某类平台限制/工具组合；同类 spec 偏差模式首次出现。",
+        "已稳定的模式（2+ 次，pattern 清晰）→ 直接用 skill_manage create 结晶，不必先 flag。",
       ].join("\n"),
       parameters: Type.Object({
         pattern_name: Type.String({ description: "模式名称（简洁命名，如 「作业辅导链接推送」）" }),
@@ -11024,8 +11034,9 @@ last_used: null
         suggested_form: Type.Optional(Type.String({ description: "建议的结晶形式：skill / tool / webapp，不确定时省略" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ flag_for_skill 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+        const allowedAgents = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (toolCtx.agentId && !allowedAgents.has(toolCtx.agentId)) {
+          return { content: [{ type: "text", text: `❌ flag_for_skill 不支持 ${toolCtx.agentId} 调用。` }], details: { error: "wrong_agent" } };
         }
         const { pattern_name, description, suggested_form } = params as {
           pattern_name: string; description: string; suggested_form?: string;
@@ -11034,6 +11045,7 @@ last_used: null
         try {
           appendJsonl(skillCandidatesFile, {
             timestamp: nowCST(),
+            source: toolCtx.agentId ?? "unknown",
             pattern_name,
             description,
             suggested_form: suggested_form ?? "unknown",
