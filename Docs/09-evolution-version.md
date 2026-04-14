@@ -3216,3 +3216,51 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `Docs/00-project-overview.md`
 - `Docs/09-evolution-version.md`（本条目）
 - `~/HomeAI/CLAUDE.md`
+
+---
+
+## v678 · Closet 两层记忆检索架构 + Loop 1 意志感修复（2026-04-15）
+
+### 背景
+
+两个独立问题：
+1. **检索质量**：直接对全文 `conversations` 做向量搜索，因文档长且噪音高，语义精度差（实测 top-10 全不相关）。MemPalace 借鉴机会明确。
+2. **意志感减弱**：Lucas 在 04:18 `share_with_andy` 失败，且对"HyperAgents：跨领域自主进化系统"视频没有主动触发知识分享循环（Loop 1），根因：① Gateway flapping；② Loop 1 正则未覆盖 AI/视频类内容。
+
+### 变更内容
+
+#### 1. Closet 两层检索架构（参考 MemPalace）
+
+新增 `conversations_closets` ChromaDB 集合作为紧凑索引层：
+- **格式**：`[hall_type] entityTags: prompt摘要(120字) | response摘要(80字) →drawerId`
+- **写入**：`writeMemory` 每次写 drawer 同时写对应 closet，失败不影响主链路
+- **检索**（`closetFirstSearch`）：
+  1. query `conversations_closets`（小文档，语义精度高）取 nClosets=20
+  2. 语义命中集合内按 **timestamp 降序**重排（新结论优先，解决旧结论压过新结论的问题）
+  3. 提取去重 `drawer_id` → `chromaGetByIds("conversations", drawerIds)` 批量拉完整原文
+  4. 返回空时 fallback 到原 `chromaQuery("conversations", ...)`
+- **接入点**：`queryMemories` Step 3a + `recall_memory` Step 5，均为 closet-first → fallback
+- **历史回填**：`HomeAILocal/Scripts/backfill-conversations-closets.py`，首次部署后执行，幂等
+
+#### 2. Loop 1 知识感知正则扩展
+
+`KNOWLEDGE_SHARE_RE` 新增覆盖：AI/大模型/Agent/架构/系统设计类内容、抖音/B站/视频类内容、「值得了解/学习/借鉴」等表达，解决 HyperAgents 类视频场景未命中问题。
+
+#### 3. Gateway flapping 根因确认
+
+Gateway flapping 根因：旧进程 pid 占端口 + watchdog 反复触发 EADDRINUSE，`share_with_andy` 失败是副作用非工具 bug。修复：`pkill -f openclaw-gateway && start-gateway.sh` 重启干净进程。
+
+### 设计决策
+
+- **为什么不用 AAAK 压缩**：MemPalace 的 AAAK 是 30x 有损压缩，为英文设计，中文语义保留率不确定。closet 用可读摘要（prompt[:120] | response[:80]）更安全，中文效果可验证。
+- **为什么在语义集合内按时间排而非全局时间排**：全局时间排会完全失去语义过滤，语义集合内排是"相关但最新"的最优平衡——先过语义门槛，门槛内最新的排前面。
+- **backward compatibility 设计**：`conversations_closets` 为空时 fallback，存量 conversations 记录不影响可用性，回填脚本是增量提升而非必要条件。
+
+### 修改文件
+
+- `CrewClaw/crewclaw-routing/index.ts`（新增 `chromaGetByIds` / `buildClosetDoc` / `closetFirstSearch`；`writeMemory` 新增 closet 写入；`queryMemories` / `recall_memory` 接入 closet-first；Loop 1 正则扩展；timestamp 重排）
+- `HomeAILocal/Scripts/backfill-conversations-closets.py`（新增）
+- `Docs/HomeAI Readme.md`（L0 里程碑加 Closet 架构描述）
+- `Docs/00-project-overview.md`（Entity Tags 段后新增 Closet 两层检索架构设计说明）
+- `Docs/09-evolution-version.md`（本条目）
+- `~/HomeAI/CLAUDE.md`（动态区更新）

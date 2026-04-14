@@ -679,6 +679,19 @@ Capability → [IMPLEMENTS] → Tool
 
 设计选择：采用 **post-filtering reranking + pre-filtering 混合** 策略。v667 前：纯 post-filtering（原因：① ChromaDB v2 metadata 不支持数组类型，`$contains` 子串匹配可能误匹配 ② pre-filtering 缩小候选池可能漏掉语义相关但没 tag 的旧记录 ③ reranking 增量式改进，新旧记录共存不冲突）。v667 新增 **Kuzu entity pre-filter**（queryMemories Step 3a）：entityHits 非空时，先对 `entityTags` 做 `$contains` 匹配缩小候选池，不足时 fallback 全量补充 + post-filtering rerank。两阶段互补：pre-filter 提高精准记录命中率，post-filter 保证旧记录不丢失。
 
+- **Closet 两层检索架构（MemPalace 借鉴）**：
+
+直接对全文 `conversations` 做向量搜索的核心缺陷：drawer 文档是完整对话原文，长度不均且噪音高，嵌入向量的语义精度因内容混杂而下降（实测：「抖音带货」查询 top-10 全不相关）。
+
+解决方案：在 `conversations` 之外新增 `conversations_closets` 集合，作为轻量索引层。
+
+  - **closet 文档格式**：`[hall_type] entityTags: prompt摘要(120字) | response摘要(80字) →drawerId`。文档小（约 200 字符）、语义集中，向量精度显著高于原始对话全文。
+  - **写入**（`writeMemory`）：每次写 drawer 同时写对应 closet（同一 `chunkId`，closet id = `closet-{chunkId}`），closet metadata 含 `drawer_id / userId / source / hall_type / timestamp / entityTags`。写 closet 失败不影响 drawer（fire-and-forget catch）。
+  - **检索**（`closetFirstSearch`）：先 query `conversations_closets`（nClosets=20）→ 在语义命中集合内按 **timestamp 降序**重排（新结论优先覆盖旧结论）→ 提取去重 `drawer_id` → `chromaGetByIds("conversations", drawerIds)` 批量拉取完整原文。返回 `[]` 时调用方自动 fallback 到原 `chromaQuery("conversations", ...)`，旧数据向后兼容。
+  - **接入点**：`queryMemories` Step 3a（主路径）+ `recall_memory` Step 5（工具路径），均为 closet-first → fallback 二段式。
+  - **历史回填**：`backfill-conversations-closets.py`（`HomeAILocal/Scripts/`）——遍历全量 conversations 记录，按同一格式生成并写入 closet，幂等（已有 closet 跳过）。首次部署后执行一次，存量记录也走新路径。
+  - **核心收益**：检索精度提升（小文档语义聚焦）+ 新结论自动覆盖旧结论（timestamp 重排）。
+
 **source 类型**（`context-sources.ts` 注册表可用）：
 
 | source 类型 | 实现位置 | 典型用途 |
