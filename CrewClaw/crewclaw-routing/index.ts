@@ -12164,7 +12164,7 @@ last_used: null
           // ── write_file：写入辅助文件（模板/参考/脚本等）──────────────
           if (p.action === "write_file") {
             if (!p.file_path) {
-              return { content: [{ type: "text", text: "❌ write_file 必须提供 file_path（辅助文件相对路径，如 'templates/prompt.txt'）。" }], details: { error: "missing_file_path" } });
+              return { content: [{ type: "text", text: "❌ write_file 必须提供 file_path（辅助文件相对路径，如 'templates/prompt.txt'）。" }], details: { error: "missing_file_path" } };
             }
             if (p.file_content === undefined || p.file_content === null) {
               return { content: [{ type: "text", text: "❌ write_file 必须提供 file_content。" }], details: { error: "missing_file_content" } };
@@ -12194,7 +12194,7 @@ last_used: null
           // ── remove_file：删除辅助文件 ─────────────────────────────
           if (p.action === "remove_file") {
             if (!p.file_path) {
-              return { content: [{ type: "text", text: "❌ remove_file 必须提供 file_path。" }], details: { error: "missing_file_path" } });
+              return { content: [{ type: "text", text: "❌ remove_file 必须提供 file_path。" }], details: { error: "missing_file_path" } };
             }
             if (p.file_path.includes("..") || p.file_path.startsWith("/")) {
               return { content: [{ type: "text", text: `❌ file_path 不允许路径穿越或绝对路径：${p.file_path}` }], details: { error: "path_traversal" } };
