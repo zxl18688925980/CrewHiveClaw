@@ -962,3 +962,38 @@ const budgetPath = join(PROJECT_ROOT, "crewclaw-routing", "config", "context-bud
 
 **状态**：已修复
 **确认日期**：2026-04-14
+
+---
+
+### GLM-5.1（zai 推理模型）小 max_tokens 导致 content 返回空字符串
+
+**场景**：用 `callAgentModel('main', ...)` 调用 GLM-5.1 做批量文本改写，设置 `max_tokens: 300`。
+
+**现象**：API 返回 HTTP 200，`resp.ok` 为 true，但 `choices[0].message.content` 是空字符串 `''`，`finish_reason` 是 `length`。
+
+**根因**：GLM-5.1 是推理模型，响应体有两个字段：
+- `reasoning_content`：模型的内部思考过程（CoT），消耗大量 token
+- `content`：最终输出
+
+当 `max_tokens` 过小时，token 预算全被 `reasoning_content` 耗尽，`content` 来不及生成就触发 `length` 截断，返回空字符串。
+
+**复现条件**：
+```bash
+# 测试：max_tokens=100，可见 reasoning_content 有内容但 content 为空
+curl -s https://open.bigmodel.cn/api/paas/v4/chat/completions \
+  -H "Authorization: Bearer $ZAI_API_KEY" \
+  -d '{"model":"GLM-5.1","max_tokens":100,"messages":[{"role":"user","content":"回复OK"}]}'
+# → content: "", reasoning_content: "...(思考过程)...", finish_reason: "length"
+```
+
+**影响范围**：所有用 `callAgentModel('main', ...)` 且 `max_tokens` < 1000 的调用（GLM-5.1 思考步骤通常需要几百 token）。
+
+**解决方案**：
+1. **简单改写任务**：改用 lucas 模型（deepseek-chat，非推理模型），`max_tokens: 600` 足够
+2. **必须用推理模型**：max_tokens 至少设 2000+，保证有足够预算让 content 产出
+3. **通用防御**：调用推理模型时检查 `reasoning_content`——若 content 空但 reasoning_content 非空，说明 token 不够
+
+**本次修复**：`generate_dpo_good_responses` 的 good_response 改写从 `callAgentModel('main', ..., 300)` 改为 `callAgentModel('lucas', ..., 600)`。
+
+**状态**：已修复
+**确认日期**：2026-04-14

@@ -2986,3 +2986,67 @@ L2 定义为双维度（Vibe Anything × 自进化飞轮）后，对照实际系
 - `Docs/00-project-overview.md`（L3 定义表 + 口诀 + 差别段 + 详细节）
 - `Docs/HomeAI Readme.md`（L3 里程碑）
 - `Docs/09-evolution-version.md`（本条目）
+
+
+---
+
+## v674 · Main 评估算法刷新——对齐最新 L0~L4 定义（2026-04-14）
+
+**干预类型**：评估算法重构 + rubric 配置更新
+
+**背景**：v668 完成 Lx 能力分级体系重构（L2=Engineering Anything / L3=组织级AI / L4=系统自进化）后，Main 的 evaluate_l2/l3/l4 实现和 evaluation-rubric.json 仍停留在旧定义，存在多处错位：L2 混入了 L4 自进化指标（evolution_signals/skill_count），L3 缺少成员画像维度，L4 用"幻觉禁令条数"衡量成熟度（二元指标）而不是趋势性指标。
+
+**变更清单**：
+
+1. **evaluation-rubric.json**：
+   - L2：删除 evolution_signals/skill_count/andy_heartbeat_check（属于 L4），新增 pipeline_health（三角色流水线健康，completed/failed 比例）
+   - L3：label 从"组织协作进化"改为"组织级AI"，新增 member_profile（成员画像蒸馏比例）
+   - L4：label 从"深度学习"改为"系统自进化"，删除 l2_intervention（幻觉禁令二元指标），新增 agents_md_maturity（三角色 AGENTS.md 规则总条数，lower_better，越少越成熟）+ routing_evolution（本地路由占比，higher_better）
+
+2. **evaluate_l2**：标题改为"Engineering Anything · 三角色闭环交付力"，新增 B 维度（三角色流水线健康：读 task-registry.json，计算 completed/failed 比例）
+
+3. **evaluate_l3**：重构为四维度分段输出——①成员画像（inject.md 含蒸馏信息关键词比例）②关系图谱（Kuzu 协作边）③影子 Agent（演进环记录+访客Registry）④跨成员感知（关系蒸馏日志+成员协作信息比例）
+
+4. **evaluate_l4 S5**：从"Lucas AGENTS.md 幻觉禁令条数"改为"三角色 AGENTS.md 规则总条数"（当前基线 ~178 条，阈值 ≤100 为 5 分，基线阶段 3 分）
+
+5. **evaluate_l4 S6**：新增路由阈值进化（读 route-events.jsonl 近 200 条，统计 local/total 比例）
+
+6. **LAYER_NAMES/layerLabels/HEARTBEAT 提示**：全部统一为 L2→"Engineering Anything"、L3→"组织级AI"、L4→"系统自进化"
+
+7. **Andy HEARTBEAT 时间戳解析修复**：原代码 `.slice(0, 20)` 截断 ISO 时间戳尾部（`2026-04-14T16:47:56.064+08:00` → 截成 `2026-04-14T16:47:56.` 含尾部点），再拼 `+08:00` 产生 NaN，fallback 到 9999h；改为直接解析完整原始字符串
+
+**修改文件**：
+- `CrewClaw/crewclaw-routing/config/evaluation-rubric.json`
+- `CrewClaw/daemons/entrances/wecom/index.js`（evaluate_l2/l3/l4 实现 + LAYER_NAMES + layerLabels + HEARTBEAT 提示）
+- `Docs/09-evolution-version.md`（本条目）
+
+
+---
+
+## v675 · DPO 生成修复 + Readme 刷新（2026-04-14）
+
+**干预类型**：bug 修复 + 文档对齐
+
+**背景**：触发 `generate_dpo_good_responses` 生成 false_commitment 的 good_response 时，工具报告"20 条生成完成"但 `approve_dpo_batch` 实际只确认 1 条。经排查，根因是 GLM-5.1（推理模型）的 reasoning_content 耗尽 max_tokens=300 的 token 预算，content 字段返回空字符串，同时 `generated.push(pt)` 未加空值守卫导致虚报计数。
+
+**变更清单**：
+
+1. **generate_dpo_good_responses** (`wecom/index.js` line ~4487)：
+   - 模型从 `callAgentModel('main', ...)` 改为 `callAgentModel('lucas', ...)`（deepseek-chat，非推理模型，适合简单改写任务）
+   - max_tokens 从 300 提升到 600
+   - `generated.push(pt)` 加空值守卫：`if (entry.good_response) generated.push(pt)`
+
+2. **Readme 刷新**（`Docs/00-project-overview.md`）：
+   - `evaluate_l2` 工具描述：补充三角色流水线健康维度
+   - `evaluate_l3` 工具描述：更新为 ①成员画像 ②关系图谱 ③影子 Agent ④跨成员感知 格式
+   - `evaluate_l4` 工具描述：AGENTS.md 指标更新 + 新增 routing_evolution 描述
+   - L2 成熟信号列：补充"三角色流水线健康（completed 比例 ≥80%）"
+   - DPO 处理方式：从"批量送云端自动生成"改为"调用 lucas 模型（deepseek-chat）批量改写"
+
+**实际执行结果**：false_commitment 45 条中 26 条已 confirmed（6 历史存量 + 20 本次新生成），剩余 19 条待下次处理。
+
+**修改文件**：
+- `CrewClaw/daemons/entrances/wecom/index.js`（generate_dpo_good_responses 修复）
+- `Docs/00-project-overview.md`（evaluate 工具描述对齐）
+- `Docs/HomeAI Readme.md`（Lx 里程碑注释位置调整 + 表格格式）
+- `Docs/09-evolution-version.md`（本条目）
