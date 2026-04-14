@@ -6353,59 +6353,158 @@ async function markCommitmentNotified(id, outcome = 'proactive_notified') {
   }
 }
 
+// ─── task-registry 读写辅助（主动循环专用）────────────────────────────────────
+function readTaskRegistryRaw() {
+  try {
+    const p = path.join(HOMEAI_ROOT, 'Data/learning/task-registry.json');
+    if (!fs.existsSync(p)) return [];
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch { return []; }
+}
+
+function markTaskLucasAcked(taskId) {
+  try {
+    const p = path.join(HOMEAI_ROOT, 'Data/learning/task-registry.json');
+    if (!fs.existsSync(p)) return;
+    const entries = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const idx = entries.findIndex(e => e.id === taskId);
+    if (idx >= 0) {
+      entries[idx].lucasAcked = true;
+      entries[idx].lucasAckedAt = nowCST();
+      fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8');
+    }
+    logger.info('任务标记 lucasAcked=true', { taskId });
+  } catch (e) {
+    logger.warn('markTaskLucasAcked 失败', { taskId, error: e.message });
+  }
+}
+
 async function runLucasProactiveLoop() {
   logger.info('Lucas 主动循环触发');
   try {
-    const commitments = await fetchPendingCommitments();
-    if (commitments.length === 0) {
-      logger.info('Lucas 主动循环：无待办承诺');
-      return;
-    }
-
-    // 构建大小写不敏感的 userId 反查表：zifeiyu → ZiFeiYu
-    // 历史数据中 userId 以 "wecom-zifeiyu"（小写+前缀）格式存储，需还原为真实微信 userId
-    const familyUserIdMap = {};
+    // 构建大小写不敏感的成员 userId 反查表（覆盖所有组织成员，不只家人）
+    const memberUserIdMap = {};
     for (const realId of Object.keys(familyMembers)) {
-      familyUserIdMap[realId.toLowerCase()] = realId;
+      memberUserIdMap[realId.toLowerCase()] = realId;
     }
 
-    for (const c of commitments) {
-      const storedUserId = c.userId || '';
-      // 剥离 wecom- 前缀（历史数据存储格式为 wecom-zifeiyu）
-      const strippedId = storedUserId.startsWith('wecom-') ? storedUserId.slice(6) : storedUserId;
-      // 大小写不敏感查找真实 WeChat userId；跳过非家庭成员（system-* / test / unknown）
-      const realUserId = familyUserIdMap[strippedId.toLowerCase()];
-      if (!realUserId) continue;
+    // ── Part 1：ChromaDB 未交付承诺跟进 ─────────────────────────────────────
+    const commitments = await fetchPendingCommitments();
+    if (commitments.length > 0) {
+      for (const c of commitments) {
+        const storedUserId = c.userId || '';
+        const strippedId = storedUserId.startsWith('wecom-') ? storedUserId.slice(6) : storedUserId;
+        const realUserId = memberUserIdMap[strippedId.toLowerCase()];
+        if (!realUserId) continue;
 
-      const requirement = (c.context || '').trim();
-      if (!requirement) continue;
+        const requirement = (c.context || '').trim();
+        if (!requirement) continue;
 
-      // 异步触发 Gateway（不 await）：主动循环不阻塞实时消息，Gateway 并发处理
-      // 消息仍过 Gateway，保证路由日志、记忆注入、DPO 数据正常积累
-      // 注意：不要让 Lucas 重新触发流水线——只需告知用户进度或提醒关注
-      // 如果 Andy/Lisa 已在处理，说"在处理中"即可；只有明确未提交时才考虑再触发
-      const message = `提醒：以下需求你之前已经提交给开发团队，请**告知用户**当前状态（进行中/已完成/卡住）。不要重新触发流水线，除非你确认从未提交过。\n\n需求内容：${requirement}`;
+        const message = `提醒：以下需求你之前已经提交给开发团队，请**告知用户**当前状态（进行中/已完成/卡住）。不要重新触发流水线，除非你确认从未提交过。\n\n需求内容：${requirement}`;
 
-      logger.info('Lucas 主动跟进承诺（异步触发）', { userId: realUserId, requirement: requirement.slice(0, 60) });
-      // 先标记已触达，防止下次循环重复处理（无论 Gateway 是否成功）
-      markCommitmentNotified(c.id).catch(() => {});
-      // 异步发出，不等结果
-      callGatewayAgent('lucas', message, realUserId)
-        .then(reply => {
-          logger.info('Lucas 主动跟进完成', { userId: realUserId, reply: (reply || '').slice(0, 100) });
-          // 通知工程师：Lucas 主动触达了哪位家人、说了什么
-          if (WECOM_OWNER_ID) {
-            const notifyText = [
-              `📋 [Lucas → 系统工程师]`,
-              `[主动跟进] 对象：${realUserId}`,
-              `承诺：${requirement.slice(0, 100)}`,
-              ``,
-              `Lucas 回复摘要：${(reply || '（无回复）').slice(0, 200)}`,
-            ].join('\n');
-            sendLongWeComMessage(WECOM_OWNER_ID, notifyText).catch(() => {});
-          }
-        })
-        .catch(e  => logger.error('Lucas 主动跟进失败', { userId: realUserId, error: e.message }));
+        logger.info('Lucas 主动跟进承诺（异步触发）', { userId: realUserId, requirement: requirement.slice(0, 60) });
+        markCommitmentNotified(c.id).catch(() => {});
+        callGatewayAgent('lucas', message, realUserId)
+          .then(reply => {
+            logger.info('Lucas 主动跟进完成', { userId: realUserId, reply: (reply || '').slice(0, 100) });
+            if (WECOM_OWNER_ID) {
+              sendLongWeComMessage(WECOM_OWNER_ID, [
+                `[Lucas 主动跟进] 对象：${realUserId}`,
+                `承诺：${requirement.slice(0, 100)}`,
+                `回复摘要：${(reply || '（无回复）').slice(0, 200)}`,
+              ].join('\n')).catch(() => {});
+            }
+          })
+          .catch(e => logger.error('Lucas 主动跟进失败', { userId: realUserId, error: e.message }));
+      }
+    } else {
+      logger.info('Lucas 主动循环：无待办承诺');
+    }
+
+    // ── Part 2：已完成但未告知的开发任务（ClaudeCode 模式：不留沉默任务）────
+    // 覆盖所有组织成员：家人、访客提交、系统工程师提交均检查
+    const allTasks = readTaskRegistryRaw();
+
+    // 2a. 已完成但 lucasAcked=false → 主动通知提交者
+    const pendingAck = allTasks.filter(e => e.status === 'completed' && e.lucasAcked === false);
+    for (const task of pendingAck) {
+      const submittedBy = (task.submittedBy || '').trim();
+      // 访客任务（visitor:CODE）→ 访客通过 Web 界面查看，静默标记即可
+      if (submittedBy.startsWith('visitor:')) {
+        markTaskLucasAcked(task.id);
+        continue;
+      }
+      // UUID 格式（系统/工程师提交）→ 通知系统工程师
+      const isUUID = /^[0-9a-f-]{36}$/.test(submittedBy);
+      const targetUserId = isUUID
+        ? WECOM_OWNER_ID
+        : (memberUserIdMap[submittedBy.toLowerCase()] || WECOM_OWNER_ID);
+      if (!targetUserId) { markTaskLucasAcked(task.id); continue; }
+
+      const brief = task.deliveryBrief || task.requirement?.slice(0, 100) || '开发任务已完成';
+      const message = [
+        `[系统通知] 一个开发任务已完成，请主动告知提交者。`,
+        ``,
+        `任务完成情况：${brief}`,
+        `任务 ID：${task.id}`,
+        ``,
+        `告知后请调用 ack_task_delivered 标记 task_id=${task.id}，防止重复通知。`,
+      ].join('\n');
+
+      logger.info('Lucas 主动告知任务完成（异步触发）', { userId: targetUserId, taskId: task.id });
+      markTaskLucasAcked(task.id);  // 先标记，防止下次循环重复
+      callGatewayAgent('lucas', message, targetUserId)
+        .then(reply => logger.info('Lucas 任务完成告知完成', { taskId: task.id, reply: (reply || '').slice(0, 100) }))
+        .catch(e => logger.error('Lucas 任务完成告知失败', { taskId: task.id, error: e.message }));
+    }
+
+    // 2b. 进行中任务超时检查：超过 estimatedHours×1.5 或兜底 6h → 主动上报
+    const STALE_FALLBACK_MS = 6 * 60 * 60 * 1000; // 6h 兜底
+    const staleTasks = allTasks.filter(e => {
+      if (['completed', 'cancelled'].includes(e.status)) return false;
+      const estMs = e.estimatedHours ? e.estimatedHours * 1.5 * 60 * 60 * 1000 : STALE_FALLBACK_MS;
+      const ageMs = Date.now() - new Date(e.submittedAt).getTime();
+      // 避免重复告警：同一任务上次告警距现在 < 2h 则跳过
+      if (e.lastStaleAlertAt) {
+        const alertAge = Date.now() - new Date(e.lastStaleAlertAt).getTime();
+        if (alertAge < 2 * 60 * 60 * 1000) return false;
+      }
+      return ageMs > estMs;
+    });
+    for (const task of staleTasks) {
+      const submittedBy = (task.submittedBy || '').trim();
+      if (submittedBy.startsWith('visitor:')) continue;
+      const isUUID = /^[0-9a-f-]{36}$/.test(submittedBy);
+      const targetUserId = isUUID
+        ? WECOM_OWNER_ID
+        : (memberUserIdMap[submittedBy.toLowerCase()] || WECOM_OWNER_ID);
+      if (!targetUserId) continue;
+
+      const ageH = Math.round((Date.now() - new Date(task.submittedAt).getTime()) / 3600000);
+      const message = [
+        `[任务进度提醒] 一个开发任务已进行 ${ageH} 小时，请主动确认进展。`,
+        ``,
+        `任务：${task.requirement?.slice(0, 80) || task.id}`,
+        `当前阶段：${task.currentPhase || '进行中'}`,
+        ``,
+        `请调用 ask_lisa 确认进展，然后主动告知提交者。`,
+      ].join('\n');
+
+      logger.info('Lucas 主动上报超时任务（异步触发）', { userId: targetUserId, taskId: task.id, ageH });
+      // 记录本次告警时间，防止频繁打扰
+      try {
+        const p = path.join(HOMEAI_ROOT, 'Data/learning/task-registry.json');
+        const entries = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const idx = entries.findIndex(e => e.id === task.id);
+        if (idx >= 0) { entries[idx].lastStaleAlertAt = nowCST(); fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8'); }
+      } catch {}
+      callGatewayAgent('lucas', message, targetUserId)
+        .then(reply => logger.info('Lucas 超时任务上报完成', { taskId: task.id, reply: (reply || '').slice(0, 100) }))
+        .catch(e => logger.error('Lucas 超时任务上报失败', { taskId: task.id, error: e.message }));
+    }
+
+    if (pendingAck.length === 0 && staleTasks.length === 0) {
+      logger.info('Lucas 主动循环：无待告知任务、无超时任务');
     }
   } catch (e) {
     logger.error('Lucas 主动循环失败', { error: e.message });
