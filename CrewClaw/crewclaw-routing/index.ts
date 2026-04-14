@@ -5765,6 +5765,9 @@ const crewclawRoutingPlugin = {
         if (_lucasBehavioralRules.channelPrivacyRule) {
           appendSystem.push(_lucasBehavioralRules.channelPrivacyRule);
         }
+        if ((_lucasBehavioralRules as Record<string, unknown>).styleRule) {
+          appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).styleRule as string);
+        }
 
         // ── 工具调用幻觉纠正注入（上一轮检测到幻觉时注入，打断传播链条）──────────
         // 幻觉从原理上无法消灭，但可以在下一轮上下文里纠正，阻止链条蔓延。
