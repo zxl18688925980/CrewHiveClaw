@@ -3247,6 +3247,23 @@ async function runAndyPipeline(params: {
     if (isTaskCancelled(requirementId)) {
       void pushToChannel(`ℹ️ 任务已被叫停，Andy 完成后不会继续触发 Lisa。`, params.userId, true);
     } else {
+      // ── Exploration 阶段通知：Andy 开始分析前告知 Lucas（类 ClaudeCode Discovery 可见性）──
+      void notifyEngineer(`【${requirementId}】Andy 开始探索需求：${params.requirement.slice(0, 80)}`, "pipeline", DESIGNER_AGENT_ID);
+      if (params.userId && params.userId !== "unknown") {
+        void callGatewayAgent(
+          FRONTEND_AGENT_ID,
+          [
+            `【Andy 开始探索 · ${requirementId}】`,
+            `Andy 正在分析需求、搜索相关代码、调研技术方案。`,
+            ``,
+            `用户 ID：${params.userId}`,
+            `不需要马上告知用户，知情即可。设计完成后你会收到方案摘要。`,
+          ].join("\n"),
+          15_000,
+          undefined,
+          DESIGNER_AGENT_ID,
+        ).catch(() => {});
+      }
       // 单次 30 分钟超时，不重试。
       // callGatewayAgentWithRetry 在超时时会重试，每次重试创建新 Andy 会话，
       // 若 Andy 被重试 3 次，最坏情况产生 3 个并发 Andy 会话 + 3 个 Lisa 会话 + 3 个 opencode 进程。
@@ -8953,6 +8970,51 @@ last_used: null
             } catch (_altE) { /* 不阻塞主流程 */ }
           }
         }
+        // ── 单方案设计摘要 + 软审批 gate ────────────────────────────────────────
+        // alternatives < 2 时，Lucas 对 Andy 设计内容一无所知。
+        // 类 ClaudeCode 体验：实现前让 Lucas 知道「Andy 要做什么、改哪些文件」，可叫停。
+        {
+          const singleApprSpecMatch = p.spec.match(/```json\s*([\s\S]*?)```/);
+          if (singleApprSpecMatch) {
+            try {
+              const saData = JSON.parse(singleApprSpecMatch[1]) as Record<string, unknown>;
+              const saAlts = saData.alternatives as Array<unknown> | undefined;
+              // 只在非多方案时触发（多方案已由上面的 alternatives 块通知）
+              if (!saAlts || saAlts.length < 2) {
+                const saTitle = saData.title as string | undefined;
+                const saAcs = (saData.acceptance_criteria ?? []) as string[];
+                const saIps = (saData.integration_points ?? []) as Array<{file?: string; action?: string}>;
+                const saReqId = p.requirement_id ?? "?";
+                const fileLines = saIps
+                  .filter(ip => !!ip.file)
+                  .slice(0, 5)
+                  .map(ip => `  • ${ip.file}${ip.action ? `（${ip.action}）` : ""}`);
+                const totalFiles = saIps.filter(ip => !!ip.file).length;
+                if (requestorId && requestorId !== "unknown" && fileLines.length > 0) {
+                  void callGatewayAgent(
+                    FRONTEND_AGENT_ID,
+                    [
+                      `【Andy 设计完成 · ${saReqId}】`,
+                      saTitle ? `方案：${saTitle}` : "",
+                      ``,
+                      `即将修改 ${totalFiles} 个文件：`,
+                      ...fileLines,
+                      totalFiles > 5 ? `  …等共 ${totalFiles} 个文件` : "",
+                      ``,
+                      saAcs.length > 0 ? `核心验收条件：\n${saAcs.slice(0, 2).map(ac => `  ✓ ${ac}`).join("\n")}` : "",
+                      ``,
+                      `用户 ID：${requestorId}`,
+                      `Lisa 正在实现，完成后你会收到验收通知。如需叫停，请调 cancel_task（task_id="${saReqId}"）。`,
+                    ].filter(Boolean).join("\n"),
+                    20_000,
+                    undefined,
+                    DESIGNER_AGENT_ID,
+                  ).catch(() => {});
+                }
+              }
+            } catch (_saE) { /* 不阻塞主流程 */ }
+          }
+        }
         // ────────────────────────────────────────────────────────────────────
 
         // ── Andy spec SFT 积累：每次通过验证的 spec 写入训练队列 ───────────────────
@@ -9915,6 +9977,12 @@ last_used: null
         if (revCount >= 1) {
           message += "\n\n【系统提示】这是第 2+ 轮修订，同样的问题反复出现可能意味着 spec 设计本身有问题。"
             + "如果这次修订仍不能解决，建议简化 spec 或换方案，用 trigger_lisa_implementation 重新实现。";
+          // 第 2 轮起通知工程师：修订循环预警，供人工关注
+          void notifyEngineer(
+            `【${p.requirement_id}】验收修订第 ${revCount + 1} 轮（共最多 ${REVISION_MAX_ROUNDS} 轮）\n问题：${p.issues.slice(0, 150)}\n期望修改：${p.specific_fixes.slice(0, 100)}`,
+            "pipeline",
+            DESIGNER_AGENT_ID,
+          );
         }
 
         try {
@@ -11289,6 +11357,7 @@ last_used: null
         if (all.length === 0) {
           return { content: [{ type: "text", text: "当前没有进行中的开发任务。" }], details: { tasks: [] } };
         }
+        const nowMs = Date.now();
         const lines = all.map(e => {
           const icon = e.status === "running" ? "🔄" : e.status === "queued" ? "⏳" : e.status === "completed" ? "✅" : "🚫";
           const time = e.submittedAt.slice(0, 16).replace("T", " ");
@@ -11297,7 +11366,16 @@ last_used: null
           const blockLabel = e.blockedAt ? " [⚠️阻塞]" : "";
           const estLabel = e.estimatedHours ? ` ~${e.estimatedHours}h` : "";
           const actualLabel = e.actualHours ? ` 实际${e.actualHours}h` : "";
-          return `${icon} [${e.id}] (${time}) ${desc}${ackLabel}${blockLabel}${estLabel}${actualLabel}`;
+          // 当前阶段标签（ClaudeCode 体验：用户能看到流水线卡在哪一步）
+          const phaseLabel = e.status === "running" && e.currentPhase
+            ? ` · ${phaseLabels[e.currentPhase] ?? e.currentPhase}`
+            : "";
+          // 已运行时长（提交时间到现在）
+          const elapsedMin = e.status === "running"
+            ? Math.round((nowMs - new Date(e.submittedAt).getTime()) / 60_000)
+            : 0;
+          const elapsedLabel = e.status === "running" && elapsedMin > 0 ? ` (已运行${elapsedMin}分钟)` : "";
+          return `${icon} [${e.id}] (${time}) ${desc}${phaseLabel}${elapsedLabel}${ackLabel}${blockLabel}${estLabel}${actualLabel}`;
         });
         return {
           content: [{ type: "text", text: lines.join("\n") }],
