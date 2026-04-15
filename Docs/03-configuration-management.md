@@ -129,7 +129,7 @@ HomeAI 采用**分层配置管理**，解决两个核心问题：
     │   ├── TOOLS.md                # 工具清单 + 家庭 Web 应用列表（Lucas 验收后自行登记）
     │   ├── USER.md                 # 服务对象定义
     │   ├── HEARTBEAT.md            # 定时任务（A股晨报 9:30 / 算力盒子 15:00）
-    │   ├── BACKGROUND.md           # 项目前世今生：HomeAI是什么/幕后队友/流水线/里程碑/文档查阅地图（appendSystemContext 注入）
+    │   ├── BACKGROUND.md           # 项目前世今生：HomeAI是什么/幕后队友/协作链/里程碑/文档查阅地图（appendSystemContext 注入）
     │   ├── family/                 # 家人档案（Kuzu 渲染产物，appendSystemContext 注入）
     │   │   └── {userId}.inject.md
     │   └── skills/                 # Lucas 家庭专属 Skill（子目录格式，SKILL.md 含 frontmatter）
@@ -141,7 +141,7 @@ HomeAI 采用**分层配置管理**，解决两个核心问题：
     │   ├── TOOLS.md                # 工具清单（Andy 验收后自行登记）
     │   ├── USER.md                 # 服务对象（Lucas + 系统工程师）
     │   ├── HEARTBEAT.md            # L2 激活：每日 2 点结晶评估
-    │   ├── BACKGROUND.md           # 项目前世今生：框架打样定位/四角色/流水线/里程碑/文档查阅地图（appendSystemContext 注入）
+    │   ├── BACKGROUND.md           # 项目前世今生：框架打样定位/四角色/协作链/里程碑/文档查阅地图（appendSystemContext 注入）
     │   ├── DESIGN-PRINCIPLES.md    # 设计哲学（appendSystemContext 注入）
     │   ├── ARCH.md                 # 系统架构摘要（系统工程师手工维护，appendSystemContext 注入）
     │   └── skills/                 # Andy 家庭专属 Skill
@@ -153,7 +153,7 @@ HomeAI 采用**分层配置管理**，解决两个核心问题：
         ├── TOOLS.md                # 工具清单（Lisa 验收后自行登记）
         ├── USER.md                 # 服务对象（Andy + 系统工程师）
         ├── HEARTBEAT.md            # L2 激活：每周复盘 code_history
-        ├── BACKGROUND.md           # 项目前世今生：框架打样定位/四角色/流水线/里程碑/文档查阅地图（含10-engineering-notes.md必查提醒，appendSystemContext 注入）
+        ├── BACKGROUND.md           # 项目前世今生：框架打样定位/四角色/协作链/里程碑/文档查阅地图（含10-engineering-notes.md必查提醒，appendSystemContext 注入）
         ├── CODEBASE.md             # 代码库上下文摘要（系统工程师手工维护主体，appendSystemContext 注入）
         └── skills/                 # Lisa 家庭专属 Skill
 

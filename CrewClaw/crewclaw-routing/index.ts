@@ -12,7 +12,7 @@
  *   Lucas 响应前从 ChromaDB 查询相关记忆片段，注入为上下文
  *
  * 阶段 1: 工具注册 (registerTool)
- *   trigger_development_pipeline：Lucas 识别到开发需求时调用，触发 Andy 三步流水线：
+ *   trigger_development_pipeline：Lucas 识别到开发需求时调用，触发 Andy 三步协作链：
  *     Step 1  DeepSeek 调研（search: true）→ 技术背景
  *     Step 2  Codebase Reader → 已有代码风格 + Andy BOOTSTRAP.md
  *     Step 3  Plandex（模型跟着 Andy 走）→ Implementation Spec（Plandex 失败时 fallback Gateway Andy）
@@ -697,10 +697,10 @@ async function manageDep(dep: DepSpec): Promise<void> {
   logDep({ agent: dep.agent, dep: dep.name, status: "rollback_failed", note: "tool may be broken; executePlandex/executeOpenCode error handlers will catch failures" });
 }
 
-// ── Andy 流水线 Step 1：DeepSeek 调研（search: true）────────────────────
+// ── Andy 协作链 Step 1：DeepSeek 调研（search: true）────────────────────
 //
 // 使用 DeepSeek 内置搜索（无需 Tavily 等第三方 API），国内可访问，零额外依赖。
-// 返回技术调研结论；若 API Key 未配置或调用失败，返回空字符串（不阻塞流水线）。
+// 返回技术调研结论；若 API Key 未配置或调用失败，返回空字符串（不阻塞协作链）。
 
 async function researchWithDeepSeek(requirement: string, taskType = "feature"): Promise<string> {
   if (!DEEPSEEK_API_KEY) return "";
@@ -743,7 +743,7 @@ async function researchWithDeepSeek(requirement: string, taskType = "feature"): 
   }
 }
 
-// ── Andy 流水线 Step 2：Codebase Reader ───────────────────────────────────
+// ── Andy 协作链 Step 2：Codebase Reader ───────────────────────────────────
 //
 // 读取项目上下文：Andy 的 BOOTSTRAP.md（角色定位）+ app/generated/ 最近生成文件（代码风格样例）。
 // 同步操作，出错静默跳过。
@@ -777,7 +777,7 @@ function readCodebaseContext(projectRoot: string): string {
   return sections.join("\n\n");
 }
 
-// ── Andy 流水线 Step 3：Plandex 规划引擎 ─────────────────────────────────
+// ── Andy 协作链 Step 3：Plandex 规划引擎 ─────────────────────────────────
 //
 // Plandex 模型选择跟着 Andy 走（与 OpenCode 跟着 Lisa 走的原则相同）：
 //   ANDY_PROVIDER=deepseek → OPENAI_BASE_URL=api.deepseek.com, KEY=DEEPSEEK_API_KEY
@@ -2556,7 +2556,7 @@ async function queryCodeStructure(symbol: string): Promise<string> {
 }
 
 // ── 待调度需求队列（Lucas before_prompt_build / HEARTBEAT 空闲调度）─────
-// 返回 status=pending 的需求，供 Lucas 在空闲时自主触发开发流水线
+// 返回 status=pending 的需求，供 Lucas 在空闲时自主触发开发协作链
 
 async function queryPendingSchedulableRequirements(): Promise<string> {
   try {
@@ -2614,7 +2614,7 @@ async function updateDecisionOutcome(
 
 // ── 需求记忆（requirements 集合）────────────────────────────────────
 //
-// 每次 Andy→Lisa 流水线启动时写入，outcome="" 表示进行中。
+// 每次 Andy→Lisa 协作链启动时写入，outcome="" 表示进行中。
 // record_outcome_feedback 工具写回最终 outcome。
 
 async function writeRequirement(params: {
@@ -2656,11 +2656,11 @@ async function updateRequirementOutcome(
 
 // ── Agent 交互记忆（agent_interactions 集合）─────────────────────────
 //
-// 记录每次流水线中 Andy（spec）和 Lisa（实现报告）的实际输出。
+// 记录每次协作链中 Andy（spec）和 Lisa（实现报告）的实际输出。
 // before_prompt_build 阶段语义检索，为 Andy/Lisa 提供历史参考。
 
 async function writeAgentInteraction(params: {
-  // 流水线模式（Andy spec / Lisa implementation）
+  // 协作链模式（Andy spec / Lisa implementation）
   requirementId?: string;
   agentId?: string;
   interactionType?: string;
@@ -2671,7 +2671,7 @@ async function writeAgentInteraction(params: {
   taskId?: string;
 }): Promise<void> {
   try {
-    // 生成唯一 ID：优先用 taskId（分身模式），其次用 agentId+requirementId（流水线模式）
+    // 生成唯一 ID：优先用 taskId（分身模式），其次用 agentId+requirementId（协作链模式）
     const id = params.taskId
       ? `shadow-${params.taskId}`
       : `${params.agentId ?? "unknown"}-${params.requirementId ?? Date.now()}`;
@@ -2866,7 +2866,7 @@ async function callGatewayAgent(
 // ── callGatewayAgent 重试包装 ─────────────────────────────────────────
 //
 // 借鉴 ClaudeCode withRetry.ts 模式：指数退避 + jitter，区分前台（重试）和后台（不重试）。
-// 前台流水线节点（Andy / Lisa）最多重试 3 次；Lucas 错误人话包装属后台，不重试。
+// 前台协作链节点（Andy / Lisa）最多重试 3 次；Lucas 错误人话包装属后台，不重试。
 //
 // 退避公式（同 ClaudeCode）：BASE(5s) × 2^(attempt-1) + rand(0~25%) × BASE，上限 60s
 // 覆盖场景：超时(AbortError / TimeoutError)、网络抖动(5xx / connection error)
@@ -3208,9 +3208,9 @@ async function pushEventDriven(text: string, userId: string, success: boolean): 
   }
 }
 
-// ── Andy→Lisa 流水线（异步，不阻塞 Lucas 回复）────────────────────────
+// ── Andy→Lisa 协作链（异步，不阻塞 Lucas 回复）────────────────────────
 //
-// 完整三步流水线：
+// 完整三步协作链：
 //   Step 1  DeepSeek 调研（search: true）→ 技术背景
 //   Step 2  Codebase Reader → 已有代码风格 + Andy 身份配置
 //   Step 3  Plandex（模型跟着 Andy 走）→ Implementation Spec
@@ -3227,7 +3227,7 @@ async function pushEventDriven(text: string, userId: string, success: boolean): 
 
 // ── Andy 并发限速（防止 MiniMax 级联超时）────────────────────────────
 // MiniMax 并发请求全部 300s 超时时会导致 Gateway session pool 腐化。
-// 信号量：最多同时跑 MAX_ANDY_CONCURRENT 个流水线，超出的排队等待（不丢弃）。
+// 信号量：最多同时跑 MAX_ANDY_CONCURRENT 个协作链，超出的排队等待（不丢弃）。
 // 暂定串行（=1），稳定后再评估是否放开。
 const MAX_ANDY_CONCURRENT = 1;
 let andyRunningCount = 0;
@@ -3254,18 +3254,18 @@ function andyRelease(): void {
 }
 // ──────────────────────────────────────────────────────────────────────
 
-/** 流水线失败后让 Lucas 判断原因并决定下一步（提取为独立函数以便重触发路径复用） */
+/** 协作链失败后让 Lucas 判断原因并决定下一步（提取为独立函数以便重触发路径复用） */
 async function runLucasPipelineFallback(
   requirementId: string,
   params: { requirement: string; userId: string; intentType?: string },
 ): Promise<void> {
   try {
     const lucasDecisionPrompt = [
-      `【流水线卡壳】Andy 收到了这个需求，但没有调用 trigger_lisa_implementation 启动实现。`,
+      `【协作链卡壳】Andy 收到了这个需求，但没有调用 trigger_lisa_implementation 启动实现。`,
       `需求原文：${params.requirement.slice(0, 400)}`,
       `需求 ID：${requirementId}`,
       ``,
-      `Andy 没有启动流水线，通常是因为需求信息不足、或遇到技术问题。`,
+      `Andy 没有启动协作链，通常是因为需求信息不足、或遇到技术问题。`,
       `请你判断，然后选一个行动（不要两个都做）：`,
       `1. 如果是需求背景不足，你能从你对家人的了解里补充信息 → 调用 trigger_development_pipeline，在 lucasContext 里附上补充背景`,
       `2. 如果你也不确定，需要家人提供更多信息 → 用人话问爸爸一个最关键的问题`,
@@ -3315,16 +3315,16 @@ async function runAndyPipeline(params: {
     ...(params.visitorCode ? { visitorCode: params.visitorCode } : {}),
   });
 
-  // 通报系统工程师：流水线启动
-  void notifyEngineer(`流水线启动 [${requirementId}]\n发起人：${params.userId}\n\n━━ 需求原文 ━━\n${params.requirement}`, "pipeline", FRONTEND_AGENT_ID);
+  // 通报系统工程师：协作链启动
+  void notifyEngineer(`协作链启动 [${requirementId}]\n发起人：${params.userId}\n\n━━ 需求原文 ━━\n${params.requirement}`, "pipeline", FRONTEND_AGENT_ID);
 
-  // Lucas 路由决策记忆：记录"为这个需求触发了流水线"
+  // Lucas 路由决策记忆：记录"为这个需求触发了协作链"
   void addDecisionMemory({
     decision_id: requirementId,
     agent: FRONTEND_AGENT_ID,
     timestamp: nowCST(),
     context: params.requirement.slice(0, 300),
-    decision: `触发 ${DESIGNER_AGENT_ID}→${IMPLEMENTOR_AGENT_ID} 开发流水线`,
+    decision: `触发 ${DESIGNER_AGENT_ID}→${IMPLEMENTOR_AGENT_ID} 开发协作链`,
     outcome: null,
     outcome_at: null,
     outcome_note: null,
@@ -3342,9 +3342,9 @@ async function runAndyPipeline(params: {
   await andyAcquire();
 
   try {
-    // Andy 通过 OpenClaw 原生工具调用机制自主驱动流水线：
+    // Andy 通过 OpenClaw 原生工具调用机制自主驱动协作链：
     //   Andy 调 research_task → trigger_lisa_implementation
-    // 插件层不再干预流水线步骤，让 Andy 作为真正的 Agent 运行。
+    // 插件层不再干预协作链步骤，让 Andy 作为真正的 Agent 运行。
     //
     // Bug 修复不走 research（那是功能调研），直接进入 Lisa 分析 + Andy 审阅模式
     const isBugFix = params.intentType === "bug_fix";
@@ -3440,7 +3440,7 @@ async function runAndyPipeline(params: {
       }
       // 验证 Andy 实际触发了 Lisa：检查协作线程文件是否存在
       // andy-to-lisa:{requirementId}_collab.json 由 trigger_lisa_implementation 写入
-      // 若不存在，Andy 响应了但跳过了流水线（幻觉完成）
+      // 若不存在，Andy 响应了但跳过了协作链（幻觉完成）
       const threadFile = join(AGENT_THREAD_DIR, `andy-to-lisa:${requirementId}_collab.json`);
       if (existsSync(threadFile)) {
         markTaskStatus(requirementId, "completed");
@@ -3452,7 +3452,7 @@ async function runAndyPipeline(params: {
         const specJsonMatch = (andyResponse ?? "").match(/```json\s*([\s\S]*?)```/);
         const hasSpec = !!(specJsonMatch && specJsonMatch[1].trim().length > 20);
 
-        void notifyEngineer(`流水线自动重触发 [${requirementId}]\nAndy 未调用 trigger_lisa_implementation（无协作线程文件），自动补救中`, "pipeline", FRONTEND_AGENT_ID);
+        void notifyEngineer(`协作链自动重触发 [${requirementId}]\nAndy 未调用 trigger_lisa_implementation（无协作线程文件），自动补救中`, "pipeline", FRONTEND_AGENT_ID);
 
         (async () => {
           try {
@@ -3527,11 +3527,11 @@ async function runAndyPipeline(params: {
     } else {
       // Andy 未触发 Lisa，真正的失败
       markTaskStatus(requirementId, "failed");
-      void notifyEngineer(`流水线失败 [${requirementId}]\n\n━━ 错误详情 ━━\n${rawErr}`, "pipeline", FRONTEND_AGENT_ID);
+      void notifyEngineer(`协作链失败 [${requirementId}]\n\n━━ 错误详情 ━━\n${rawErr}`, "pipeline", FRONTEND_AGENT_ID);
       // 通过 Lucas 包装成人话再推送，避免裸机器错误出现在家人界面
       try {
         const lucasPrompt = [
-          `Andy 在处理一个开发需求时遇到了技术问题，流水线中断了。`,
+          `Andy 在处理一个开发需求时遇到了技术问题，协作链中断了。`,
           `技术原因（内部参考，不要原文转述给家人）：${rawErr.slice(0, 300)}`,
           ``,
           `请用一两句人话告诉爸爸：什么失败了、大概是什么原因（不说技术细节）、他现在能做什么（比如稍后重发、或者等我排查）。`,
@@ -3541,7 +3541,7 @@ async function runAndyPipeline(params: {
         await pushToChannel(lucasVerdict, params.userId, true);
       } catch (_e) {
         await pushToChannel(
-          `Andy 处理这个需求时遇到了问题，流水线暂停了。你可以稍后重新发一遍需求，或者等我排查好了告诉你。`,
+          `Andy 处理这个需求时遇到了问题，协作链暂停了。你可以稍后重新发一遍需求，或者等我排查好了告诉你。`,
           params.userId,
           true,
         );
@@ -4298,7 +4298,7 @@ interface TaskRegistryEntry {
   cancelledAt?: string;
   completedAt?: string;
   lucasContext?: string;  // Lucas 补充的需求背景（情绪/时间敏感度/可接受替代方案）
-  currentPhase?: string;  // 流水线当前阶段：andy_designing | lisa_implementing | completed
+  currentPhase?: string;  // 协作链当前阶段：andy_designing | lisa_implementing | completed
   designNote?: string;    // Andy 的设计简报（非技术语言，Lucas 可直接告知家人）
   deliveryBrief?: string; // Andy 验收完成时的交付简报（家人语言，供 Lucas 告知家人用）
   lucasAcked?: boolean;   // Lucas 是否已主动告知家人完成情况（false=待告知，true=已告知）
@@ -5142,7 +5142,7 @@ async function runReflectionEngine(): Promise<void> {
   // （这里用 JSONL 采样近似，ChromaDB 查询留给 before_prompt_build）
   let outcomeSuccess = 0;
   let outcomeTotal   = 0;
-  // 用户明确反馈的 outcome 类型（delivered/merged/implemented 等流水线状态不计入达成率）
+  // 用户明确反馈的 outcome 类型（delivered/merged/implemented 等协作链状态不计入达成率）
   const userFeedbackOutcomes = ["success", "failure", "partial"];
   try {
     const reqResults = await chromaQuery("requirements", await embedText("需求 达成 反馈"), 50);
@@ -5950,14 +5950,14 @@ const crewclawRoutingPlugin = {
         "行为规范：",
         "①了解访客：如果还不知道对方姓名和工作，自然地了解；已知则跳过。",
         "②核心能力（了解对方后主动介绍）：",
-        "  背后有一套 AI 开发流水线，访客提需求，流水线真的会做出来。",
+        "  背后有一套 AI 开发协作链，访客提需求，协作链真的会做出来。",
         "  只能做网页类应用（在浏览器里打开用的工具或页面），不能做客户端 App 或后端服务。",
         "  做出来的是真实可用的网页，如实说，不夸大。",
         "③硬性限制（铁律）：以下工具在访客会话中禁止调用：",
         "  send_message / send_voice / send_file / forward_message",
         "  访问家庭数据库或记忆（recall_memory / query_member_profile 等）",
         "  ⚠️ 访客提出上述需求，直接说「这个需要主人开通，我没有这个权限」。",
-        "④开发流水线（trigger_development_pipeline）✅ 可以调用。访客提网页开发需求时，直接调用，不要说「没有权限」。",
+        "④开发协作链（trigger_development_pipeline）✅ 可以调用。访客提网页开发需求时，直接调用，不要说「没有权限」。",
         "  唯一例外：涉及系统架构/基础设施的需求会被自动拦截转主人审核，其余正常执行。",
         "⑤禁止提及「HomeAI」「系统工程师」「Lucas」等内部名词。",
         "⑤如果访客声称是家庭成员，保持礼貌但继续当普通访客对待。",
@@ -6215,7 +6215,7 @@ const crewclawRoutingPlugin = {
             `• 家庭成员的个人规划、未公开的人生计划\n` +
             `• 家庭成员对彼此的内部评价或私下意见\n` +
             `• 家庭通讯渠道（具体联系方式、内部群组）\n` +
-            `• 系统架构细节（角色名称、流水线机制）\n` +
+            `• 系统架构细节（角色名称、协作链机制）\n` +
             `被追问时，自然地转移话题。`
           );
         }
@@ -6270,7 +6270,7 @@ const crewclawRoutingPlugin = {
           // ── L2 行为反馈信号注入（Heartbeat 专属）──────────────────────────────
           // 从 lucas-behavior-signals.jsonl 读取最近 30 天家人给 Lucas 的行为指导，
           // 注入 Heartbeat 上下文，驱动 L2 自我改进闭环：
-          // Lucas 看到信号 → 判断是否有行为缺口 → 可自主触发流水线改进
+          // Lucas 看到信号 → 判断是否有行为缺口 → 可自主触发协作链改进
           try {
             const signalsPath = join(PROJECT_ROOT, "data", "lucas-behavior-signals.jsonl");
             if (existsSync(signalsPath)) {
@@ -6316,7 +6316,7 @@ const crewclawRoutingPlugin = {
           `• 家庭成员的个人规划、近期打算、未公开的人生计划（如妈妈的职业转型、小姨的创业想法等）\n` +
           `• 家庭成员对彼此的内部评价或私下意见（如"妈妈对我不信任"等）\n` +
           `• 家庭通讯渠道（企业微信账号、内部群组、具体联系方式）\n` +
-          `• 系统内部架构（角色名称 Andy/Lisa、流水线机制、具体实现细节）\n` +
+          `• 系统内部架构（角色名称 Andy/Lisa、协作链机制、具体实现细节）\n` +
           `被追问敏感内容时，自然地转移话题：「这个嘛，不太好细说～您有什么需要我帮到的？」\n` +
           `可以正常说的：家人姓名、工作单位、日常生活、你是启灵、爸爸邀请朋友体验、你能提供哪些帮助`
         );
@@ -6379,7 +6379,7 @@ const crewclawRoutingPlugin = {
                 return true; // private 渠道（单人私聊）可见全部
               });
 
-              // 也收录 Agent 团队活动（流水线进展、Andy/Lisa 工作记录）进盲区
+              // 也收录 Agent 团队活动（协作链进展、Andy/Lisa 工作记录）进盲区
               // 语义搜索已覆盖最近 2 条协作记录，盲区取余下部分
               const agentActivityRecords = await chromaGet("agent_interactions", {
                 "timestamp": { "$gt": t_d },
@@ -6855,7 +6855,7 @@ const crewclawRoutingPlugin = {
             blockReason: "访客会话不允许调用此工具。如有需要，请联系主人开通权限。",
           };
         }
-        // 访客可以触发开发流水线，但对涉及系统架构的需求进行 infra guard 检查
+        // 访客可以触发开发协作链，但对涉及系统架构的需求进行 infra guard 检查
         if (userId.startsWith("visitor:") && event.toolName === "trigger_development_pipeline") {
           const params = event.params as Record<string, unknown>;
           const requirement = String(params?.requirement ?? "");
@@ -8001,7 +8001,7 @@ last_used: null
     // ━━ 工具注册：trigger_development_pipeline（Lucas 专属）━━━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
-      label: "触发开发流水线",
+      label: "触发开发协作链",
       name: "trigger_development_pipeline",
       description: [
         "【最后手段】仅在确认 OpenClaw 本地 Skill 和 Clawhub 生态均无现成方案后，才调用此工具。",
@@ -8012,7 +8012,7 @@ last_used: null
         "  - Lisa 队列深度（running + queued 任务数）",
         "  - 访客任务 vs 家人任务：访客需求排在家人需求之后，不抢占资源",
         "  - 当前系统繁忙（Lisa ≥3 个任务在跑）时，优先告知访客排队而非立即触发",
-        "  - 当前系统空闲时，可正常触发流水线",
+        "  - 当前系统空闲时，可正常触发协作链",
         "",
         "【需求 Scoping】在触发前，主动向用户澄清：",
         "  - 做什么用的（背景和目标）",
@@ -8594,13 +8594,13 @@ last_used: null
       },
     }));
 
-    // ━━ 工具注册：ask_andy（Lucas 专属，直接向 Andy 咨询，不触发流水线）━━━━━━━━━
+    // ━━ 工具注册：ask_andy（Lucas 专属，直接向 Andy 咨询，不触发协作链）━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
       label: "询问 Andy",
       name: "ask_andy",
       description: [
-        "Lucas 专属：直接向 Andy 发出技术/设计问题，不触发开发流水线，Andy 直接回答。",
+        "Lucas 专属：直接向 Andy 发出技术/设计问题，不触发开发协作链，Andy 直接回答。",
         "适用：了解系统现状、确认技术可行性、询问 Andy 对某方案的看法、澄清设计意图、了解某需求的进展。",
         "不适用：正式提交开发需求（用 trigger_development_pipeline）、Bug 修复（用 report_bug）。",
         "注意：这是双向协作通道——Andy 也可以主动通过 query_requirement_owner 找 Lucas 澄清需求（见触发 5）。",
@@ -8653,13 +8653,13 @@ last_used: null
       },
     }));
 
-    // ━━ 工具注册：ask_lisa（Lucas 专属，直接向 Lisa 咨询实现细节，不触发流水线）━━━━━━━━━
+    // ━━ 工具注册：ask_lisa（Lucas 专属，直接向 Lisa 咨询实现细节，不触发协作链）━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
       label: "询问 Lisa",
       name: "ask_lisa",
       description: [
-        "Lucas 专属：直接向 Lisa 咨询实现/进展/代码相关问题，不触发开发流水线，Lisa 直接回答。",
+        "Lucas 专属：直接向 Lisa 咨询实现/进展/代码相关问题，不触发开发协作链，Lisa 直接回答。",
         "适用：了解某个功能的实现进展、确认技术细节是否已完成、询问 Lisa 对某实现方案的看法、了解当前代码库状态。",
         "不适用：正式提交开发需求（用 trigger_development_pipeline）、Bug 修复（用 report_bug）、设计/架构问题（用 ask_andy）。",
       ].join("\n"),
@@ -9132,7 +9132,7 @@ last_used: null
               }
 
               // ④ 核心框架文件保护（渐进式信任：核心文件变更时 warn-and-proceed 通知工程师）
-              // 不阻断流水线，但工程师会即时收到告警以便人工验收。
+              // 不阻断协作链，但工程师会即时收到告警以便人工验收。
               // 保护列表：基础设施层核心文件，任何修改都需要工程师知情。
               {
                 const PROTECTED_FILES = [
@@ -9303,7 +9303,7 @@ last_used: null
             outcome: null,
             eligibleForTraining: false,
           });
-        } catch (_e) { /* 不阻塞流水线 */ }
+        } catch (_e) { /* 不阻塞协作链 */ }
 
         // ① Andy→Lucas 设计摘要：立即通知 Lucas Andy 已出方案，不等 Lisa 完成
         // fire-and-forget，不阻塞工具返回
@@ -9714,7 +9714,7 @@ last_used: null
               const lucasFailMsg = await callGatewayAgent(
                 FRONTEND_AGENT_ID,
                 [
-                  `【流水线失败 · ${reqId}】Lisa 在实现需求时遇到了问题，没有完成交付。`,
+                  `【协作链失败 · ${reqId}】Lisa 在实现需求时遇到了问题，没有完成交付。`,
                   `技术原因（内部参考，不要直接说给家人）：${responseText.slice(0, 300)}`,
                   ``,
                   `请用一两句人话告知用户失败了、大概为什么、他能做什么（稍后重试或等我排查）。口气自然，不要 ❌ 开头。`,
@@ -9729,11 +9729,11 @@ last_used: null
               }
             } catch (_e) { /* 降级：保持原始错误消息 */ }
           }
-          // 通报系统工程师：流水线终态
+          // 通报系统工程师：协作链终态
           void notifyEngineer(
             success
-              ? `【${p.requirement_id ?? "unknown"}】流水线完成\n\n━━ Lisa 交付报告 ━━\n${responseText}`
-              : `【${p.requirement_id ?? "unknown"}】流水线失败\n\n━━ 错误详情 ━━\n${responseText}`,
+              ? `【${p.requirement_id ?? "unknown"}】协作链完成\n\n━━ Lisa 交付报告 ━━\n${responseText}`
+              : `【${p.requirement_id ?? "unknown"}】协作链失败\n\n━━ 错误详情 ━━\n${responseText}`,
             "pipeline",
             IMPLEMENTOR_AGENT_ID,
           );
@@ -11067,7 +11067,7 @@ last_used: null
     //
     // 走企业应用 HTTP API，消息显示「系统工程师」名称，与家庭 bot 通道隔离。
     // 适用场景：
-    //   - Lucas：流水线状态通报、需要工程师介入的技术问题
+    //   - Lucas：协作链状态通报、需要工程师介入的技术问题
     //   - Andy：HEARTBEAT 主动行动汇报、架构提案、需要工程师决策的设计边界
     //   - Lisa：实现异常、opencode 失败、需要工程师关注的系统性问题
     //
@@ -11078,7 +11078,7 @@ last_used: null
       name: "notify_engineer",
       description: [
         "Lucas / Andy / Lisa 通用：通过系统工程师通道（企业应用，显示「系统工程师」）向系统工程师发送观测通知。",
-        "适用于流水线关键状态通报（启动/完成/失败）、需要工程师关注的技术问题、以及其他工程师需要知情的情况。",
+        "适用于协作链关键状态通报（启动/完成/失败）、需要工程师关注的技术问题、以及其他工程师需要知情的情况。",
         "消息不经过家庭 bot 通道，家庭成员不可见。",
         "type 参数：'intervention'（干预请求，🔧）| 'pipeline'（流程通报，📋）| 'info'（一般信息，ℹ️）",
         "不要用于普通家庭通知，那些走 send_message；紧急告警可同时调用 alert_owner。",
@@ -11654,7 +11654,7 @@ last_used: null
           const blockLabel = e.blockedAt ? " [⚠️阻塞]" : "";
           const estLabel = e.estimatedHours ? ` ~${e.estimatedHours}h` : "";
           const actualLabel = e.actualHours ? ` 实际${e.actualHours}h` : "";
-          // 当前阶段标签（ClaudeCode 体验：用户能看到流水线卡在哪一步）
+          // 当前阶段标签（ClaudeCode 体验：用户能看到协作链卡在哪一步）
           const phaseLabel = e.status === "running" && e.currentPhase
             ? ` · ${phaseLabels[e.currentPhase] ?? e.currentPhase}`
             : "";
@@ -11752,7 +11752,7 @@ last_used: null
         "Lucas 专属工具：当 Andy 提供了多个设计方案时，选择非推荐方案重新触发实现。",
         "适用场景：家人说「用另一个方案」「我想要那个更复杂的方案」「用方案 B」。",
         "传入原始需求 ID（req_xxx）和想要的方案 ID（如 A / B / C）。",
-        "工具会叫停当前正在进行的实现，并用所选方案重新触发 Andy 流水线。",
+        "工具会叫停当前正在进行的实现，并用所选方案重新触发 Andy 协作链。",
         "如果任务已完成或需求 ID 找不到对应的多方案文件，会给出说明。",
       ].join("\n"),
       parameters: Type.Object({
@@ -11801,7 +11801,7 @@ last_used: null
         // 如果已经是推荐方案，提示无需切换
         if (choiceId === approachesData!.recommended.toUpperCase()) {
           return {
-            content: [{ type: "text", text: `ℹ️ 方案「${choiceId}」就是 Andy 推荐的方案，当前流水线已在按此方案执行，无需切换。` }],
+            content: [{ type: "text", text: `ℹ️ 方案「${choiceId}」就是 Andy 推荐的方案，当前协作链已在按此方案执行，无需切换。` }],
             details: { switched: false, alreadyRecommended: true },
           };
         }

@@ -484,7 +484,7 @@ function isDuplicateMsg(msgId) {
 
 ### Gateway 重启中断 Andy/Lisa 进行中的 session
 
-**场景**：调试阶段频繁执行 `launchctl stop/start ai.openclaw.gateway`，Andy 或 Lisa 正在处理 fire-and-forget 流水线任务。
+**场景**：调试阶段频繁执行 `launchctl stop/start ai.openclaw.gateway`，Andy 或 Lisa 正在处理 fire-and-forget 协作链任务。
 
 **现象**：
 - Gateway 重启后，进行中的 Andy/Lisa session 被立即终止
@@ -510,14 +510,14 @@ function isDuplicateMsg(msgId) {
 
 **场景**：系统工程师直接 POST Gateway（`x-openclaw-agent-id: andy`）发送需求，希望 Andy 处理后调 `trigger_lisa_implementation`。
 
-**现象**：Andy 返回详细的 spec 文本，但实际上没有调任何工具——`trigger_lisa_implementation` 未执行，Lisa 收不到 spec，流水线不启动。
+**现象**：Andy 返回详细的 spec 文本，但实际上没有调任何工具——`trigger_lisa_implementation` 未执行，Lisa 收不到 spec，协作链不启动。
 
-**根因**：直接 API 调用绕过了 `trigger_development_pipeline` 工具里的 session 管理（`taskRegistry` 写入、session key 设定）。Andy 收到普通对话消息，按 AGENTS.md 规则判断这是系统工程师直接指令而非标准流水线触发，不调工具。
+**根因**：直接 API 调用绕过了 `trigger_development_pipeline` 工具里的 session 管理（`taskRegistry` 写入、session key 设定）。Andy 收到普通对话消息，按 AGENTS.md 规则判断这是系统工程师直接指令而非标准协作链触发，不调工具。
 
 **规避方式**：
 - 正确路径：通过 Lucas 的 `trigger_development_pipeline`（wecom-entrance forward 接口）
 - 紧急绕过：直接调 Lisa API（`x-openclaw-agent-id: lisa`），消息里附上完整 spec（含 `【需求 ID】` 和 `【wecom_user_id】` 头）——Lisa 会按 spec 执行
-- 不要期望直接调 Andy API 能触发完整流水线
+- 不要期望直接调 Andy API 能触发完整协作链
 
 **状态**：活跃
 
@@ -900,7 +900,7 @@ async function executeMainTool(toolName, toolInput) {
 **根因**：推测是 R1 长程推理衰减——CoT 过长时，模型对末尾工具调用的注意力不足。非确定性复现，偶尔能调到。
 
 **规避方式**：
-- 流水线末端增加自动重触发：检测 Andy 输出含 spec JSON（`integration_points` 关键字）但协作线程文件不存在 → 自动提取 spec 并构造精简 retry prompt → 二次调 Andy
+- 协作链末端增加自动重触发：检测 Andy 输出含 spec JSON（`integration_points` 关键字）但协作线程文件不存在 → 自动提取 spec 并构造精简 retry prompt → 二次调 Andy
 - retry prompt 只要求一件事：调用 trigger_lisa_implementation（减少注意力分散）
 - 重触发失败才转 Lucas 决策路径
 

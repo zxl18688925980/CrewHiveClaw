@@ -520,9 +520,9 @@ Agent 可自主修改的文件：
 
 ---
 
-## 十、多 Agent 流水线：V字型协作
+## 十、多 Agent 协作链：V字型协作
 
-HomeAI 的需求流水线是「V字型」——Lucas 发起，沿 V 字左边下行到 Andy/Lisa 执行，完成后沿右边上行通知。
+HomeAI 的需求协作链是「V字型」——Lucas 发起，沿 V 字左边下行到 Andy/Lisa 执行，完成后沿右边上行通知。
 
 ```
 Lucas（家庭需求官）
@@ -694,7 +694,7 @@ OpenClaw 平台层（基础设施）
   │
   ▼ 叠加
 crewclaw-routing 插件层（HomeAI 专属扩展）
-  │ 提供：ChromaDB 记忆 · 三层模型路由 · 家庭专属工具 · V字型流水线
+  │ 提供：ChromaDB 记忆 · 三层模型路由 · 家庭专属工具 · V字型协作链
   │
   ▼ 叠加
 家庭场景应用层（业务实现）
