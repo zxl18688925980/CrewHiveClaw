@@ -3401,6 +3401,8 @@ async function runAndyPipeline(params: {
     } else {
       // ── Exploration 阶段通知：Andy 开始分析前告知 Lucas（类 ClaudeCode Discovery 可见性）──
       void notifyEngineer(`【${requirementId}】Andy 开始探索需求：${params.requirement.slice(0, 80)}`, "pipeline", DESIGNER_AGENT_ID);
+      // 流式状态同步：告知用户需求已收到
+      pushStageToUser(requirementId, "andy_designing", "收到，开始分析了。", params.userId);
       if (params.userId && params.userId !== "unknown") {
         void callGatewayAgent(
           FRONTEND_AGENT_ID,
@@ -4288,6 +4290,30 @@ const OFF_PEAK_END    = parseInt(process.env.OFF_PEAK_END   || "8",  10);
 
 // ── 任务注册表：Lucas 叫停/查询进行中任务 ────────────────────────────────────
 const TASK_REGISTRY_FILE = join(PROJECT_ROOT, "data/learning/task-registry.json");
+
+// 流式状态同步：去重守卫（每任务每阶段最多推送一次）
+const stagePushTracker = new Map<string, Set<string>>();  // reqId -> Set<stage>
+function pushStageToUser(reqId: string, stage: string, message: string, userId: string): void {
+  if (!userId || isNonHumanUser(userId)) return;
+  const pushed = stagePushTracker.get(reqId) ?? new Set<string>();
+  if (pushed.has(stage)) return;  // 去重
+  pushed.add(stage);
+  stagePushTracker.set(reqId, pushed);
+  void pushEventDriven(message, userId, true);
+  // 清理：48h 后移除（与 task registry TTL 一致）
+  setTimeout(() => stagePushTracker.delete(reqId), 48 * 3600 * 1000);
+}
+
+// 方案审批 gate：超时默认继续
+const APPROVAL_TIMEOUT_SEC = parseInt(process.env.APPROVAL_TIMEOUT_SEC || "300", 10);  // 5 分钟
+interface PendingApproval {
+  reqId: string;
+  recommended: string;
+  alts: Array<{ id: string; title: string; tradeoffs?: string }>;
+  resolved: boolean;
+  resolve: ((choice: string) => void) | null;
+}
+const pendingApprovals = new Map<string, PendingApproval>();
 
 interface TaskRegistryEntry {
   id: string;
@@ -9214,6 +9240,34 @@ last_used: null
                     30_000, undefined, DESIGNER_AGENT_ID,
                   ).catch(() => {});
                 }
+                // 方案审批 gate：推送用户 + 等待选择（超时默认推荐方案）
+                const approvalKey = p.requirement_id ?? `req_${Date.now()}`;
+                const recId = recommended ?? alts[0]?.id ?? "A";
+                if (requestorId && !isNonHumanUser(requestorId)) {
+                  const choiceList = alts.map(a => `${a.id === recId ? "★ " : "  "}${a.title}`).join("\n");
+                  void pushEventDriven(
+                    `有 ${alts.length} 个方案可选：\n${choiceList}\n\n推荐「${alts.find(a => a.id === recId)?.title ?? recId}」。\n想换方案可以告诉启灵（${Math.floor(APPROVAL_TIMEOUT_SEC / 60)} 分钟后自动用推荐方案开始）。`,
+                    requestorId, true,
+                  );
+                  // 创建等待 Promise：select_spec_approach 可 resolve，或超时自动 resolve
+                  const pendingEntry: PendingApproval = { reqId: approvalKey, recommended: recId, alts, resolved: false, resolve: null };
+                  pendingApprovals.set(approvalKey, pendingEntry);
+                  const approvalPromise = new Promise<string>((resolve) => {
+                    pendingEntry.resolve = resolve;
+                    setTimeout(() => {
+                      if (!pendingEntry.resolved) {
+                        pendingEntry.resolved = true;
+                        resolve(recId);
+                        log("pipeline", `[approval-gate] ${approvalKey}: timeout (${APPROVAL_TIMEOUT_SEC}s), using recommended=${recId}`);
+                      }
+                    }, APPROVAL_TIMEOUT_SEC * 1000);
+                  });
+                  const chosen = await approvalPromise;
+                  pendingApprovals.delete(approvalKey);
+                  if (chosen !== recId) {
+                    log("pipeline", `[approval-gate] ${approvalKey}: user chose ${chosen} (was ${recId})`);
+                  }
+                }
               }
             } catch (_altE) { /* 不阻塞主流程 */ }
           }
@@ -9239,6 +9293,11 @@ last_used: null
                   .map(ip => `  • ${ip.file}${ip.action ? `（${ip.action}）` : ""}`);
                 const totalFiles = saIps.filter(ip => !!ip.file).length;
                 if (requestorId && requestorId !== "unknown" && fileLines.length > 0) {
+                  // 流式状态同步：单方案也推送用户
+                  void pushEventDriven(
+                    `方案确定了，准备修改 ${totalFiles} 个文件。`,
+                    requestorId, true,
+                  );
                   void callGatewayAgent(
                     FRONTEND_AGENT_ID,
                     [
@@ -9339,6 +9398,8 @@ last_used: null
         }
 
         if (requestorId && requestorId !== "unknown") {
+          // 流式状态同步：告知用户方案设计完成，开始写代码
+          pushStageToUser(reqIdForPhase, "lisa_implementing", `方案设计完成了，开始写代码实现${estimatedHours ? `，预计 ${estimatedHours} 小时` : ""}。`, requestorId);
           // 告知 Lucas 设计完成（Lucas 决定是否、何时、如何告知用户进展）
           void callGatewayAgent(
             FRONTEND_AGENT_ID,
@@ -9376,11 +9437,20 @@ last_used: null
           try {
             // 触发 Lisa 实现：发送 spec，要求 Lisa 调用 run_opencode 工具
             // threadId 贯穿整个协作过程，report_implementation_issue 多轮回路共享同一上下文
+            // 检测 spec 是否包含 edit_patches（精准补丁模式）
+            let hasEditPatches = false;
+            try {
+              const epMatch = (p.spec as string).match(/"edit_patches"\s*:\s*\[/);
+              if (epMatch) hasEditPatches = true;
+            } catch (_e) { /* ignore */ }
             const lisaResponse = await callGatewayAgent(
               IMPLEMENTOR_AGENT_ID,
               [
                 `【Implementation Spec】\n${p.spec}`,
                 "请阅读以上 spec，使用 run_opencode 工具在项目目录执行代码实现。",
+                hasEditPatches
+                  ? "⚠️ 本 spec 包含 edit_patches 字段。对于 edit_patches 中定义的精准修改，请使用 patch_file 工具逐条直接执行（无需 run_opencode）。对于 edit_patches 之外的复杂实现，仍使用 run_opencode。"
+                  : "",
                 "实现完成后输出交付报告：1) 完成了什么 2) 生成的文件路径 3) 验证结果（是否成功/失败原因）4) 使用方式",
                 "如果 spec 包含 Python 脚本，请在报告中包含 py_compile 验证结果（命令：python3 -m py_compile <脚本路径>）",
                 `【协作线程 ID】${threadId}（遇阻时调用 report_implementation_issue 请带上此 thread_id）`,
@@ -9390,7 +9460,9 @@ last_used: null
               DESIGNER_AGENT_ID,
             );
             // 检测 Lisa 是否绕过了 run_opencode（用文本描述假装 edit/write 工具）
-            const lisaBypassedOpencode = lisaResponse && (
+            // patch_file 是合法工具（spec 含 edit_patches 时可用），不算绕过
+            const lisaUsedPatchFile = lisaResponse && /patch_file/.test(lisaResponse);
+            const lisaBypassedOpencode = lisaResponse && !lisaUsedPatchFile && (
               /直接(用|使用).{0,10}edit.{0,10}工具/.test(lisaResponse) ||
               /直接(用|使用).{0,10}write.{0,10}工具/.test(lisaResponse) ||
               /按照.{0,20}工程判断.{0,20}应该直接/.test(lisaResponse)
@@ -9438,6 +9510,12 @@ last_used: null
                 }
               }
               void notifyEngineer(`【${reqId}】Lisa 实现完成，进入 Andy 验收阶段`, "pipeline", IMPLEMENTOR_AGENT_ID);
+              // 流式状态同步：告知用户代码写好了，正在验收
+              {
+                const phaseEntries2 = readTaskRegistry();
+                const phaseEntry2 = phaseEntries2.find(e => e.id === reqId);
+                pushStageToUser(reqId, "andy_verifying", "代码写好了，正在检查质量。", phaseEntry2?.submittedBy ?? "");
+              }
               // ─────────────────────────────────────────────────────────────────
 
               // ── 独立验证门（Claude Code 模式：做完跑测试，不靠自述）──────────
@@ -10585,6 +10663,120 @@ last_used: null
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           return { content: [{ type: "text", text: `❌ 写入失败：${msg}` }], details: { error: msg } };
+        }
+      },
+    }));
+
+    // ── patch_file：Andy/Lisa 共享，精准编辑已有文件（exact string replacement）──
+    //
+    // L2 大文件精准操作：不需要重写整个文件，只替换精确匹配的文本段。
+    // ClaudeCode Edit 工具架构借鉴：old_string 必须唯一匹配，原子写入防止脏文件。
+    // Lisa 仅在 spec 含 edit_patches 时可使用（幻觉防护允许 patch_file）。
+
+    api.registerTool((toolCtx) => ({
+      label: "精准编辑文件",
+      name: "patch_file",
+      description: [
+        "对已有文件做精准文本替换，不需要重写整个文件。Andy/Lisa 均可使用。",
+        "在文件中查找 old_string（必须完全匹配），替换为 new_string。",
+        "old_string 必须在文件中唯一（除非 replace_all=true），否则会报错。",
+        "路径限定在用户主目录内。",
+        "Lisa 使用限制：仅在 spec JSON 包含 edit_patches 字段时可用。",
+      ].join("\n"),
+      parameters: Type.Object({
+        path: Type.String({ description: "文件路径（主目录内的绝对路径，或相对于 Agent 工作区的相对路径）" }),
+        old_string: Type.String({ description: "文件中要被替换的精确文本段（必须完全匹配）" }),
+        new_string: Type.String({ description: "替换后的文本" }),
+        replace_all: Type.Optional(Type.Boolean({ description: "true=替换所有匹配，false=仅替换第一个（默认）。使用前确认文件中有多处匹配" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const allowedAgents = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (toolCtx.agentId && !allowedAgents.has(toolCtx.agentId)) {
+          return { content: [{ type: "text", text: "Error: patch_file 是 Lucas/Andy/Lisa 专用工具" }], details: { error: "wrong_agent" } };
+        }
+
+        const { old_string, new_string, replace_all = false } = params as { path: string; old_string: string; new_string: string; replace_all?: boolean };
+        let targetPath = (params as { path: string }).path;
+
+        const HOME = process.env.HOME ?? "/";
+
+        // 路径解析：复用 write_file 逻辑
+        if (!targetPath.startsWith("/")) {
+          const agentWorkspaces: Record<string, string> = {
+            [FRONTEND_AGENT_ID]: join(HOME, ".openclaw/workspace-lucas"),
+            [DESIGNER_AGENT_ID]: join(HOME, ".openclaw/workspace-andy"),
+            [IMPLEMENTOR_AGENT_ID]: join(HOME, ".openclaw/workspace-lisa"),
+          };
+          const workspace = agentWorkspaces[toolCtx.agentId ?? ""] ?? join(HOME, ".openclaw");
+          targetPath = join(workspace, targetPath);
+        }
+
+        // 路径必须在主目录内
+        if (!targetPath.startsWith(HOME + "/") && targetPath !== HOME) {
+          return {
+            content: [{ type: "text", text: `❌ 路径越权：只能编辑主目录内的文件。目标路径：${targetPath}` }],
+            details: { error: "path_violation", target: targetPath },
+          };
+        }
+
+        // 文件必须存在
+        if (!existsSync(targetPath)) {
+          return {
+            content: [{ type: "text", text: `❌ 文件不存在：${targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath}` }],
+            details: { error: "file_not_found", target: targetPath },
+          };
+        }
+
+        try {
+          const original = readFileSync(targetPath, "utf8");
+
+          // 检查 old_string 匹配次数
+          let matchCount = 0;
+          let searchFrom = 0;
+          while ((searchFrom = original.indexOf(old_string, searchFrom)) !== -1) {
+            matchCount++;
+            searchFrom += old_string.length;
+          }
+
+          if (matchCount === 0) {
+            const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
+            return {
+              content: [{ type: "text", text: `❌ 未找到匹配文本。文件：${displayPath}\n请确认 old_string 与文件内容完全一致（包括缩进和空行）。` }],
+              details: { error: "not_found", target: targetPath },
+            };
+          }
+
+          if (matchCount > 1 && !replace_all) {
+            const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
+            return {
+              content: [{ type: "text", text: `❌ old_string 在文件中出现了 ${matchCount} 次，不是唯一的。请缩小匹配范围使其唯一，或设置 replace_all=true。文件：${displayPath}` }],
+              details: { error: "not_unique", target: targetPath, matchCount },
+            };
+          }
+
+          // 执行替换
+          const updated = replace_all ? original.replaceAll(old_string, new_string) : original.replace(old_string, new_string);
+          const replacementCount = replace_all ? matchCount : 1;
+
+          // 原子写入
+          const tmpPath = `${targetPath}.tmp.${Date.now()}`;
+          try {
+            writeFileSync(tmpPath, updated, "utf8");
+            renameSync(tmpPath, targetPath);
+          } catch (e) {
+            try { unlinkSync(tmpPath); } catch (_e) {}
+            throw e;
+          }
+
+          const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
+          const diffLines = updated.split("\n").length - original.split("\n").length;
+          return {
+            content: [{ type: "text", text: `✅ 已编辑 ${displayPath}（替换 ${replacementCount} 处，行数变化 ${diffLines >= 0 ? "+" : ""}${diffLines}）` }],
+            details: { path: targetPath, replacementCount, lineDelta: diffLines },
+          };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return { content: [{ type: "text", text: `❌ 编辑失败：${msg}` }], details: { error: msg } };
         }
       },
     }));
@@ -11800,9 +11992,29 @@ last_used: null
 
         // 如果已经是推荐方案，提示无需切换
         if (choiceId === approachesData!.recommended.toUpperCase()) {
+          // 如果有 pending approval，resolve 它（即使选的是推荐方案，也算用户主动确认）
+          const pending = pendingApprovals.get(p.requirement_id);
+          if (pending && !pending.resolved) {
+            pending.resolved = true;
+            if (pending.resolve) pending.resolve(approachesData!.recommended);
+          }
           return {
             content: [{ type: "text", text: `ℹ️ 方案「${choiceId}」就是 Andy 推荐的方案，当前协作链已在按此方案执行，无需切换。` }],
             details: { switched: false, alreadyRecommended: true },
+          };
+        }
+
+        // 方案审批 gate 拦截：如果有 pending approval，直接 resolve 并告知
+        const pendingApproval = pendingApprovals.get(p.requirement_id);
+        if (pendingApproval && !pendingApproval.resolved) {
+          const chosenAlt = approachesData!.alternatives.find(a => a.id.toUpperCase() === choiceId);
+          pendingApproval.resolved = true;
+          if (pendingApproval.resolve) pendingApproval.resolve(chosenAlt?.id ?? choiceId);
+          pendingApprovals.delete(p.requirement_id);
+          void notifyEngineer(`【方案审批 · ${p.requirement_id}】用户选择了方案「${choiceId}」（非推荐 ${approachesData!.recommended}），等待审批窗口结束后将按用户选择执行。`, "pipeline", FRONTEND_AGENT_ID);
+          return {
+            content: [{ type: "text", text: `✅ 已记录你的选择：方案「${chosenAlt?.title ?? choiceId}」。系统将按此方案开始实现。` }],
+            details: { switched: true, via: "approval_gate", choice: choiceId },
           };
         }
 
