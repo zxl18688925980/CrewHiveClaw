@@ -7,8 +7,26 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v684
+> **版本**: v685
 > **最后更新**: 2026-04-15
+
+---
+
+## v685 · Vibe vs Harness 设计哲学写入正朔（2026-04-15）
+
+**干预类型**：设计哲学（L2 本质认知升级）
+
+**背景**：系统工程师与 Lucas 讨论中提炼出 L2 的本质设计哲学。用户带着模糊的"vibe"来，系统交出结构化的"harness"。这不是工程细节，而是决定协作链入口和出口设计方向的核心理念。
+
+**变更内容**：
+
+1. **00-project-overview.md**：在"为什么稳定输出是核心"之后新增"Vibe vs Harness"节——阐明 harness 是系统标准，vibe 是用户真实状态，好的系统入口接 vibe 出口交 harness，Frontend Agent 接住 vibe，Designer+Implementor 交出 harness
+2. **HomeAI Readme.md**：新增"入口接得住 Vibe，出口交得出 Harness"独立小节，作为对外设计愿景
+
+**修改文件**：
+- `Docs/00-project-overview.md`（新增设计哲学段）
+- `Docs/HomeAI Readme.md`（新增愿景小节）
+- `Docs/09-evolution-version.md`（本条记录）
 
 ---
 
