@@ -3401,8 +3401,8 @@ async function runAndyPipeline(params: {
     } else {
       // ── Exploration 阶段通知：Andy 开始分析前告知 Lucas（类 ClaudeCode Discovery 可见性）──
       void notifyEngineer(`【${requirementId}】Andy 开始探索需求：${params.requirement.slice(0, 80)}`, "pipeline", DESIGNER_AGENT_ID);
-      // 流式状态同步：告知用户需求已收到
-      pushStageToUser(requirementId, "andy_designing", "收到，开始分析了。", params.userId);
+      // 流式状态同步：告知 Lucas 需求已收到
+      pushStageToLucas(requirementId, "andy_designing", "andy_designing", params.userId);
       if (params.userId && params.userId !== "unknown") {
         void callGatewayAgent(
           FRONTEND_AGENT_ID,
@@ -4291,16 +4291,31 @@ const OFF_PEAK_END    = parseInt(process.env.OFF_PEAK_END   || "8",  10);
 // ── 任务注册表：Lucas 叫停/查询进行中任务 ────────────────────────────────────
 const TASK_REGISTRY_FILE = join(PROJECT_ROOT, "data/learning/task-registry.json");
 
-// 流式状态同步：去重守卫（每任务每阶段最多推送一次）
+// 流式状态同步：去重守卫（每任务每阶段最多推送一次给 Lucas）
+// 不直接推给用户——由 Lucas 根据用户身份决定是否告知、怎么翻译（千人千面）
 const stagePushTracker = new Map<string, Set<string>>();  // reqId -> Set<stage>
-function pushStageToUser(reqId: string, stage: string, message: string, userId: string): void {
-  if (!userId || isNonHumanUser(userId)) return;
+function pushStageToLucas(reqId: string, stage: string, internalStage: string, userId: string, extra?: string): void {
   const pushed = stagePushTracker.get(reqId) ?? new Set<string>();
   if (pushed.has(stage)) return;  // 去重
   pushed.add(stage);
   stagePushTracker.set(reqId, pushed);
-  void pushEventDriven(message, userId, true);
-  // 清理：48h 后移除（与 task registry TTL 一致）
+  // 推给 Lucas，由 Lucas 决定是否、何时、用什么语气告知用户
+  const stageLabels: Record<string, string> = {
+    "andy_designing": "Andy 正在分析需求和代码",
+    "lisa_implementing": "方案设计完成，Lisa 正在写代码实现",
+    "andy_verifying": "代码写好了，Andy 正在验收质量",
+  };
+  void callGatewayAgent(
+    FRONTEND_AGENT_ID,
+    [
+      `【进度更新 · ${reqId}】${stageLabels[stage] ?? stage}`,
+      extra ?? "",
+      `用户 ID：${userId}`,
+      `如果用户问起进度或聊到相关话题，请用对方能听懂的方式告知当前进展。不要主动打扰，除非用户之前说过「做好了告诉我」。`,
+    ].filter(Boolean).join("\n"),
+    15_000, undefined, DESIGNER_AGENT_ID,
+  ).catch(() => {});
+  // 清理：48h 后移除
   setTimeout(() => stagePushTracker.delete(reqId), 48 * 3600 * 1000);
 }
 
@@ -9245,10 +9260,20 @@ last_used: null
                 const recId = recommended ?? alts[0]?.id ?? "A";
                 if (requestorId && !isNonHumanUser(requestorId)) {
                   const choiceList = alts.map(a => `${a.id === recId ? "★ " : "  "}${a.title}`).join("\n");
-                  void pushEventDriven(
-                    `有 ${alts.length} 个方案可选：\n${choiceList}\n\n推荐「${alts.find(a => a.id === recId)?.title ?? recId}」。\n想换方案可以告诉启灵（${Math.floor(APPROVAL_TIMEOUT_SEC / 60)} 分钟后自动用推荐方案开始）。`,
-                    requestorId, true,
-                  );
+                  // 推送 Lucas，由 Lucas 用对方能听懂的方式告知家人
+                  void callGatewayAgent(
+                    FRONTEND_AGENT_ID,
+                    [
+                      `【方案选择 · ${p.requirement_id ?? "?"}】`,
+                      `Andy 设计了 ${alts.length} 个方案，推荐「${alts.find(a => a.id === recId)?.title ?? recId}」。`,
+                      ``,
+                      choiceList,
+                      ``,
+                      `用户 ID：${requestorId}`,
+                      `${Math.floor(APPROVAL_TIMEOUT_SEC / 60)} 分钟后自动用推荐方案开始。如果用户想换方案，你可以调 select_spec_approach 切换。`,
+                    ].join("\n"),
+                    20_000, undefined, DESIGNER_AGENT_ID,
+                  ).catch(() => {});
                   // 创建等待 Promise：select_spec_approach 可 resolve，或超时自动 resolve
                   const pendingEntry: PendingApproval = { reqId: approvalKey, recommended: recId, alts, resolved: false, resolve: null };
                   pendingApprovals.set(approvalKey, pendingEntry);
@@ -9293,11 +9318,7 @@ last_used: null
                   .map(ip => `  • ${ip.file}${ip.action ? `（${ip.action}）` : ""}`);
                 const totalFiles = saIps.filter(ip => !!ip.file).length;
                 if (requestorId && requestorId !== "unknown" && fileLines.length > 0) {
-                  // 流式状态同步：单方案也推送用户
-                  void pushEventDriven(
-                    `方案确定了，准备修改 ${totalFiles} 个文件。`,
-                    requestorId, true,
-                  );
+                  // 单方案通知走 Lucas（千人千面），不直接推用户
                   void callGatewayAgent(
                     FRONTEND_AGENT_ID,
                     [
@@ -9398,8 +9419,8 @@ last_used: null
         }
 
         if (requestorId && requestorId !== "unknown") {
-          // 流式状态同步：告知用户方案设计完成，开始写代码
-          pushStageToUser(reqIdForPhase, "lisa_implementing", `方案设计完成了，开始写代码实现${estimatedHours ? `，预计 ${estimatedHours} 小时` : ""}。`, requestorId);
+          // 流式状态同步：告知 Lucas 方案设计完成，Lisa 开始实现
+          pushStageToLucas(reqIdForPhase, "lisa_implementing", "lisa_implementing", requestorId, estimatedHours ? `预计 ${estimatedHours} 小时` : undefined);
           // 告知 Lucas 设计完成（Lucas 决定是否、何时、如何告知用户进展）
           void callGatewayAgent(
             FRONTEND_AGENT_ID,
@@ -9510,11 +9531,11 @@ last_used: null
                 }
               }
               void notifyEngineer(`【${reqId}】Lisa 实现完成，进入 Andy 验收阶段`, "pipeline", IMPLEMENTOR_AGENT_ID);
-              // 流式状态同步：告知用户代码写好了，正在验收
+              // 流式状态同步：告知 Lucas 代码写好了，正在验收
               {
                 const phaseEntries2 = readTaskRegistry();
                 const phaseEntry2 = phaseEntries2.find(e => e.id === reqId);
-                pushStageToUser(reqId, "andy_verifying", "代码写好了，正在检查质量。", phaseEntry2?.submittedBy ?? "");
+                pushStageToLucas(reqId, "andy_verifying", "andy_verifying", phaseEntry2?.submittedBy ?? "");
               }
               // ─────────────────────────────────────────────────────────────────
 
