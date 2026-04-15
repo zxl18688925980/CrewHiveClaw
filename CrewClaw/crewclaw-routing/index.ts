@@ -77,6 +77,9 @@ const BASE_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_A
 // 最近一次 frontend agent 会话的 userId（供工具在无 session 上下文时使用，单用户场景安全）
 let lastFrontendUserId = "";
 
+// ── 日志（与 console.log/warn 对齐，供 skill/visitor/dispatch 等模块使用）────────
+const logger = { info: console.log, warn: console.warn, error: console.error };
+
 // ── HomeAI 实例层配置（从 config/ 加载，不含业务逻辑）─────────────────────────
 function loadInstanceConfig<T>(filename: string): T {
   const p = join(PROJECT_ROOT, "CrewHiveClaw", "CrewClaw", "crewclaw-routing", "config", filename);
@@ -158,7 +161,7 @@ function agentThreadRounds(threadId: string): number {
 }
 
 // Lucas 云端模型路由
-// LUCAS_CLOUD_PROVIDER: deepseek | anthropic | zai | ollama
+// LUCAS_CLOUD_PROVIDER: dashscope | deepseek | anthropic | zai | ollama
 const LUCAS_PROVIDER   = process.env.LUCAS_CLOUD_PROVIDER     || "deepseek";
 
 // Andy 模型路由（与 Lucas before_model_resolve 同等原则）
@@ -261,33 +264,33 @@ const AGENT_EVOLUTION_CONFIGS: AgentEvolutionConfig[] = [
   {
     agentId: FRONTEND_AGENT_ID,
     corpusFile: join(PROJECT_ROOT, `data/corpus/${FRONTEND_AGENT_ID}-corpus.jsonl`),
-    localProvider: "mlx",
-    localModel: "gemma-4-lucas",
+    localProvider: "ollama",
+    localModel: "homeai-assistant",
     cloudProvider: LUCAS_PROVIDER,
     cloudModel: process.env.LUCAS_CLOUD_MODEL || "deepseek-chat",
-    localThresholdInit: 0.0,       // 起点：全走云端，积累数据后再进化
+    localThresholdInit: 0.2,       // L4 本地路由已激活（threshold 0.2 = 日常对话走本地）
     localRatioTarget: 0.7,         // 目标：70% 走本地（日常对话密集）
     capabilityEventsFile: join(PROJECT_ROOT, `data/learning/${FRONTEND_AGENT_ID}-capability-events.jsonl`),
   },
   {
     agentId: DESIGNER_AGENT_ID,
     corpusFile: join(PROJECT_ROOT, `data/corpus/${DESIGNER_AGENT_ID}-corpus.jsonl`),
-    localProvider: "mlx",
-    localModel: "gemma-4-lucas",
+    localProvider: "ollama",
+    localModel: "homeai-assistant",
     cloudProvider: ANDY_PROVIDER,
     cloudModel: ANDY_MODEL,
-    localThresholdInit: 0.0,       // 设计者以架构设计为主，起点保守
+    localThresholdInit: 0.2,       // L4 本地路由已激活（简单设计判断走本地）
     localRatioTarget: 0.4,         // 目标：40%（架构复杂度高，更多依赖云端）
     capabilityEventsFile: join(PROJECT_ROOT, `data/learning/${DESIGNER_AGENT_ID}-capability-events.jsonl`),
   },
   {
     agentId: IMPLEMENTOR_AGENT_ID,
     corpusFile: join(PROJECT_ROOT, `data/corpus/${IMPLEMENTOR_AGENT_ID}-corpus.jsonl`),
-    localProvider: "mlx",
-    localModel: "gemma-4-lucas",
+    localProvider: "ollama",
+    localModel: "homeai-assistant",
     cloudProvider: LISA_PROVIDER,
     cloudModel: LISA_MODEL,
-    localThresholdInit: 0.0,       // 实现者任务，起点保守
+    localThresholdInit: 0.15,      // L4 本地路由已激活（简单实现任务走本地）
     localRatioTarget: 0.5,         // 目标：50%（标准实现可以逐步本地化）
     capabilityEventsFile: join(PROJECT_ROOT, `data/learning/${IMPLEMENTOR_AGENT_ID}-capability-events.jsonl`),
   },
@@ -6178,6 +6181,15 @@ const crewclawRoutingPlugin = {
         if ((_lucasBehavioralRules as Record<string, unknown>).progressRule) {
           appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).progressRule as string);
         }
+        if ((_lucasBehavioralRules as Record<string, unknown>).certaintyRule) {
+          appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).certaintyRule as string);
+        }
+        if ((_lucasBehavioralRules as Record<string, unknown>).lengthRule) {
+          appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).lengthRule as string);
+        }
+        if ((_lucasBehavioralRules as Record<string, unknown>).statusRule) {
+          appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).statusRule as string);
+        }
 
         // ── 工具调用幻觉纠正注入（上一轮检测到幻觉时注入，打断传播链条）──────────
         // 幻觉从原理上无法消灭，但可以在下一轮上下文里纠正，阻止链条蔓延。
@@ -6224,6 +6236,25 @@ const crewclawRoutingPlugin = {
             `- 需要通知 → 先调 send_message，成功后再说"已通知"\n` +
             `还没做就说「我现在去做」。`
           );
+        }
+
+        // ── 活跃任务状态自动注入（L2：不依赖 Lucas 主动调工具查进度）────────
+        // 系统自动注入真实任务数据，Lucas 只需翻译成人话
+        const _phaseMap: Record<string, string> = { andy_designing: "设计中", lisa_implementing: "实现中", andy_verifying: "验收中" };
+        const _activeTasks = readTaskRegistry().filter(e => e.status === "running" || e.status === "queued");
+        const _recentDone = readTaskRegistry().filter(e => e.status === "completed").slice(-2);
+        if (_activeTasks.length > 0 || _recentDone.length > 0) {
+          const _taskLines: string[] = [];
+          for (const t of _activeTasks) {
+            const elapsed = Math.round((Date.now() - new Date(t.submittedAt).getTime()) / 60_000);
+            const phase = t.status === "running" && t.currentPhase ? ` · ${_phaseMap[t.currentPhase] ?? t.currentPhase}` : "";
+            _taskLines.push(`${t.status === "running" ? "🔄" : "⏳"} ${t.requirement.slice(0, 60)}${phase}（${elapsed}分钟）`);
+          }
+          for (const t of _recentDone) {
+            const ack = t.lucasAcked ? "已告知家人" : "⚠️待告知";
+            _taskLines.push(`✅ ${t.requirement.slice(0, 60)}（${ack}）`);
+          }
+          appendSystem.push(`【当前活跃任务·系统自动注入·不要编造进度】\n${_taskLines.join("\n")}\n家人问进度时，直接基于以上真实数据回答，不要编造。`);
         }
 
         // ── 待调度需求队列（仅 HEARTBEAT 触发时注入，避免干扰正常家庭对话）────
@@ -12196,20 +12227,19 @@ last_used: null
           // ── Step 3: 图增强 + topic 关键词增强检索 query ────────────────
           // P0: recall_memory 也走图增强，与 queryMemories 一致
           let graphKeywords = "";
-          if (kuzuEntityMapLoaded) {
-            const entityHits = extractEntityHits(query);
-            if (entityHits.length > 0) {
-              const { topicNames, personNames } = graphExpandEntities(entityHits);
-              const cleanTopics = topicNames
-                .map(n => n.replace(/^topic_/, "").replace(/_/g, " ").trim())
-                .filter(n => n.length >= 2 && n.length <= 30)
-                .slice(0, 10);
-              const cleanPersons = personNames
-                .map(n => n.replace(/^(爸爸|妈妈|小姨|姐姐)/, "").trim())
-                .filter(n => n.length >= 2)
-                .slice(0, 5);
-              graphKeywords = [...cleanTopics, ...cleanPersons].join(" ");
-            }
+          const entityHits = (kuzuEntityMapLoaded)
+            ? extractEntityHits(query) : [];
+          if (entityHits.length > 0) {
+            const { topicNames, personNames } = graphExpandEntities(entityHits);
+            const cleanTopics = topicNames
+              .map(n => n.replace(/^topic_/, "").replace(/_/g, " ").trim())
+              .filter(n => n.length >= 2 && n.length <= 30)
+              .slice(0, 10);
+            const cleanPersons = personNames
+              .map(n => n.replace(/^(爸爸|妈妈|小姨|姐姐)/, "").trim())
+              .filter(n => n.length >= 2)
+              .slice(0, 5);
+            graphKeywords = [...cleanTopics, ...cleanPersons].join(" ");
           }
           const allKeywords = [topicKeywords, graphKeywords].filter(Boolean).join(" ");
           const searchEmbedding = allKeywords

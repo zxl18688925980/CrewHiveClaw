@@ -7,8 +7,8 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v673
-> **最后更新**: 2026-04-14
+> **版本**: v679
+> **最后更新**: 2026-04-15
 
 ---
 
@@ -3262,5 +3262,62 @@ Gateway flapping 根因：旧进程 pid 占端口 + watchdog 反复触发 EADDRI
 - `HomeAILocal/Scripts/backfill-conversations-closets.py`（新增）
 - `Docs/HomeAI Readme.md`（L0 里程碑加 Closet 架构描述）
 - `Docs/00-project-overview.md`（Entity Tags 段后新增 Closet 两层检索架构设计说明）
+
+---
+
+## v679 · Lucas 对话质量优化 + 模型切换（2026-04-15）
+
+**背景**：Lucas 近期对话暴露 5 个系统性问题——批量消息回复灾难（9 个视频 = 9 条一模一样的长回复）、记忆编造、场景误判、回复过长、虚假承诺。爸爸反复纠正「想不起来就想不起来，不能编」「你整个记忆都有点混乱」。
+
+### 改动 1：行为规则强化（P1+P3+P4）
+
+`crewclaw-routing/config/lucas-behavioral-rules.json` 新增 3 条铁律：
+- **certaintyRule**：不确定必须说不确定，禁止编造具体日期/数字/人名/地点
+- **lengthRule**：日常回复不超过 150 字硬限制，简单问答 50 字内
+- **statusRule**：后台处理中的任务只能说「收到了，后台在处理」，不能说已完成
+
+注入方式：`index.ts` 在 `progressRule` 注入后追加三条规则到 `appendSystem`，每轮必注入。
+
+`workspace-lucas/AGENTS.md` 强化对应表述：第 11 行长度规则、第 13 行不确定性规则措辞更硬。
+
+### 改动 2：消息聚合器（P0）
+
+`wecom/index.js` 新增 `MessageAggregator` 类：
+- 2 秒 debounce，同用户同类型消息合并为一次 Lucas 调用
+- ≥3 条消息时注入场景提示「家人短时间内连续发送 N 条同类型消息，简洁回复」
+- 单条消息直接走原流程，延迟增加 < 2 秒
+
+新增 `transcriptionBuffer`：抖音视频转录完成后按用户聚合，3 秒 debounce，最后一条完成时合并推送，避免 N 个视频 = N 条独立推送。
+
+`task-manager.js` 新增 `getPendingCount(userId, taskType)` 方法供聚合器查询。
+
+### 改动 3：L2 改进
+
+- **任务状态自动注入**：`index.ts` `before_prompt_build` 中读取 taskRegistry，向 Lucas appendSystem 注入真实活跃任务状态（含运行时间），家人问进度时 Lucas 基于真实数据回答，不编造。
+- **术语后处理**：`stripInternalTerms()` 清洗技术术语（pm2/Gateway/spec/pipeline 等），Andy/Lisa 名称保留（家人熟知）。
+
+### 改动 4：Lucas 模型切换
+
+Lucas 从 `deepseek/deepseek-chat` 切换为 `dashscope/qwen3.6-plus`（阿里云 DashScope API）。
+- `openclaw.json` 新增 `dashscope` provider + Lucas agent model 更新
+- `start-gateway.sh` 环境变量 `LUCAS_CLOUD_PROVIDER/MODEL` + `DASHSCOPE_API_KEY`
+- `index.ts` provider 注释补充 `dashscope`
+
+### 改动 5：Bug 修复
+
+- **recall_memory `entityHits` 作用域 bug**：`entityHits` 在 `if (kuzuEntityMapLoaded)` 块内 `const` 声明，块外引用 → `ReferenceError`。修复：提升到块外，`kuzuEntityMapLoaded` 为 false 时默认空数组。
+- 此 bug 导致 `recall_memory` 工具完全不可用（不是 ChromaDB 服务问题）。
+
+### 修改文件
+
+- `CrewClaw/crewclaw-routing/config/lucas-behavioral-rules.json`（新增 3 条规则）
+- `CrewClaw/crewclaw-routing/index.ts`（规则注入 + 任务状态注入 + entityHits 修复 + provider 注释）
+- `~/.openclaw/workspace-lucas/AGENTS.md`（强化表述）
+- `CrewClaw/daemons/entrances/wecom/index.js`（MessageAggregator + transcriptionBuffer + stripInternalTerms）
+- `CrewClaw/daemons/entrances/wecom/task-manager.js`（getPendingCount）
+- `~/.openclaw/openclaw.json`（dashscope provider + Lucas model）
+- `~/.openclaw/start-gateway.sh`（环境变量）
+- `Docs/04-project-constitution.md`（模型表更新）
+- `Docs/09-evolution-version.md`（本条记录）
 - `Docs/09-evolution-version.md`（本条目）
 - `~/HomeAI/CLAUDE.md`（动态区更新）

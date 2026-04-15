@@ -5042,6 +5042,22 @@ async function sendWeComMessage(toUser, text) {
   logger.info('WeCom reply sent', { toUser, length: text.length });
 }
 
+/**
+ * 通过 bot 通道推送消息到 target（群 chatId 或私聊 userId）。
+ * 群聊：sendMessage(chatId, markdown) — 正常。
+ * 私聊：sendMessage(userId, text/markdown) 触发 errcode=40008（bot 协议不支持），
+ *       fallback 到企业应用 HTTP API（显示「系统工程师」）。
+ */
+async function botPushOrFallback(target, text) {
+  // chatId 以 wr 开头（群聊），直接走 bot sendMessage
+  if (target.startsWith('wr')) {
+    await globalBotClient.sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
+  } else {
+    // 私聊 userId：bot sendMessage 必定 40008，直接走 HTTP API
+    await sendWeComMessage(target, text);
+  }
+}
+
 async function sendWeComFile(toUser, absPath) {
   const FormData = require('form-data');
   const token = await getAccessToken();
@@ -5192,10 +5208,7 @@ function startBotLongConnection() {
           try {
             const failReply = await callGatewayAgent('lucas', failPrompt, followUpSessionKey);
             if (failReply && globalBotClient && globalBotReady) {
-              globalBotClient.sendMessage(botTarget, {
-                msgtype: 'markdown',
-                markdown: { content: failReply },
-              }).catch(e => logger.warn('Bot 抖音提取失败通知推送失败', { error: e.message }));
+              botPushOrFallback(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(null)', { error: e?.message || String(e) }));
             }
           } catch (e) {
             logger.warn('Bot 抖音提取失败通知 Lucas 调用失败', { error: e.message });
@@ -5209,30 +5222,48 @@ function startBotLongConnection() {
           try {
             const failReply = await callGatewayAgent('lucas', failPrompt, followUpSessionKey);
             if (failReply && globalBotClient && globalBotReady) {
-              globalBotClient.sendMessage(botTarget, {
-                msgtype: 'markdown',
-                markdown: { content: failReply },
-              }).catch(e => logger.warn('Bot 抖音提取失败通知推送失败', { error: e.message }));
+              botPushOrFallback(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(err)', { error: e?.message || String(e) }));
             }
           } catch (e) {
             logger.warn('Bot 抖音提取失败通知 Lucas 调用失败', { error: e.message });
           }
           return;
         }
-        logger.info('Bot 抖音后台提取完成，经 Lucas 分析后推送', { fromUser, hasTranscript: !!meta.transcript });
-        // 把转录内容喂给 Lucas，让他分析后再发给家人（而不是直接推送生肉转录）
-        const followUpPrompt = `${memberTag}[系统：刚才你分享的抖音视频语音转录已完成，以下是内容，请做简洁总结后直接回复家人：]\n${formatVideoInjection(meta, douyinUrl)}`;
-        try {
-          const analysis = await callGatewayAgent('lucas', followUpPrompt, followUpSessionKey);
-          if (analysis && globalBotClient && globalBotReady) {
-            globalBotClient.sendMessage(botTarget, {
-              msgtype: 'markdown',
-              markdown: { content: analysis },
-            }).catch(e => logger.warn('Bot 抖音转录分析推送失败', { error: e.message }));
+        logger.info('Bot 抖音后台提取完成', { fromUser, hasTranscript: !!meta.transcript });
+        // 合并推送：检查同一用户是否还有其他抖音在处理中
+        const pendingDouyin = douyinUrlMatch && lucasText_orig ? 
+          (lucasText_orig.match(/douyin\.com/g) || []).length - 1 : 0; // 粗略估计
+        transcriptionBuffer.add(fromUser, { meta, douyinUrl, memberTag });
+        const buffered = transcriptionBuffer.get(fromUser);
+        // 简单策略：如果 3 秒内没来新的转录结果，就推送当前所有
+        // 用 debounce 方式：每次完成都延迟推送，新的完成会取消旧的定时器
+        if (!transcriptionBuffer._timers) transcriptionBuffer._timers = new Map();
+        clearTimeout(transcriptionBuffer._timers.get(fromUser));
+        transcriptionBuffer._timers.set(fromUser, setTimeout(async () => {
+          transcriptionBuffer._timers.delete(fromUser);
+          const items = transcriptionBuffer.flush(fromUser);
+          if (!items || items.length === 0) return;
+          try {
+            let followUpPrompt;
+            if (items.length === 1) {
+              // 单条：原逻辑
+              const b = items[0];
+              followUpPrompt = `${b.memberTag}[系统：刚才你分享的抖音视频语音转录已完成，以下是内容，请做简洁总结后直接回复家人：]\n${formatVideoInjection(b.meta, b.douyinUrl)}`;
+            } else {
+              // 多条：合并
+              const mergedParts = items.map((b, i) =>
+                `视频${i+1}「${b.meta.title || '未知'}」:\n${formatVideoInjection(b.meta, b.douyinUrl)}`
+              ).join('\n---\n');
+              followUpPrompt = `${items[0].memberTag}[系统：${items.length} 个抖音视频语音转录全部完成，请做简洁总结：]\n${mergedParts}`;
+            }
+            const analysis = await callGatewayAgent('lucas', followUpPrompt, followUpSessionKey);
+            if (analysis && globalBotClient && globalBotReady) {
+              botPushOrFallback(botTarget, analysis).catch(e => logger.warn('Bot 抖音转录合并推送失败', { error: e?.message || String(e) }));
+            }
+          } catch (e) {
+            logger.warn('Bot 抖音转录合并分析 Lucas 调用失败', { error: e.message });
           }
-        } catch (e) {
-          logger.warn('Bot 抖音转录分析 Lucas 调用失败', { error: e.message });
-        }
+        }, 3000));
       }).catch(e => logger.warn('Bot 抖音后台提取异常', { error: e.message }));
     }
 
@@ -5307,94 +5338,109 @@ function startBotLongConnection() {
     }
     // ── 演示群分支结束 ─────────────────────────────────────────────────
 
-    try {
-      // 通过 Gateway → Lucas 嵌入式 agent（crewclaw-routing 插件处理三层路由）
-      logger.info('callGatewayAgent 开始', { fromUser, historyRounds: historyMessages.length / 2 | 0 });
+    // ── 消息聚合：判断消息类型标签，走聚合器 ────────────────────────────
+    let typeTag = 'text';
+    if (douyinUrlMatch) typeTag = 'douyin';
+    else if (videoUrlMatch) typeTag = 'video';
+    else if (wechatUrlMatch) typeTag = 'article';
+    const aggKey = `${fromUser}:${isGroup}:${typeTag}`;
 
-      let replyText;
-      try {
-        replyText = await callGatewayAgent('lucas', messageToLucas, wecomUserId, 180000, historyMessages) || '收到～';
-      } catch (firstErr) {
-        // socket hang up / ECONNRESET：DeepSeek R1 偶发网络断连，自动重试一次
-        const isNetErr = /socket hang up|ECONNRESET|ECONNABORTED|ETIMEDOUT/i.test(firstErr?.message || '');
-        if (isNetErr) {
-          logger.warn('Gateway 网络错误，2s 后重试一次', { fromUser, error: firstErr.message });
-          await new Promise(r => setTimeout(r, 2000));
-          replyText = await callGatewayAgent('lucas', messageToLucas, wecomUserId, 180000, historyMessages) || '收到～';
-        } else {
-          throw firstErr;
-        }
-      }
+    messageAggregator.add(aggKey, {
+      rawText: text,
+      messageToLucas,
+      wecomUserId,
+      historyMessages,
+      memberTag,
+      extra: { isGroup, chatId, frame, groupAckSent, groupAckTimer, histKey, text },
+      sendFn: (msg, userId, history, extra) => {
+        // sendFn 在聚合器 flush 时被调用，msg 可能是原 messageToLucas 或合并后的 prompt
+        const { isGroup: _isGroup, chatId: _chatId, frame: _frame, groupAckTimer: _ackTimer, histKey: _histKey, text: _text } = extra;
+        (async () => {
+          try {
+            // 通过 Gateway → Lucas 嵌入式 agent（crewclaw-routing 插件处理三层路由）
+            logger.info('callGatewayAgent 开始', { fromUser, historyRounds: history.length / 2 | 0 });
 
-      clearTimeout(groupAckTimer);
-      groupAckSent = true; // 有正常回复，不需要再发 ack
-      logger.info('callGatewayAgent 返回', { fromUser, replyLen: replyText.length });
+            let replyText;
+            try {
+              replyText = await callGatewayAgent('lucas', msg, userId, 180000, history) || '收到～';
+            } catch (firstErr) {
+              // socket hang up / ECONNRESET：DeepSeek R1 偶发网络断连，自动重试一次
+              const isNetErr = /socket hang up|ECONNRESET|ECONNABORTED|ETIMEDOUT/i.test(firstErr?.message || '');
+              if (isNetErr) {
+                logger.warn('Gateway 网络错误，2s 后重试一次', { fromUser, error: firstErr.message });
+                await new Promise(r => setTimeout(r, 2000));
+                replyText = await callGatewayAgent('lucas', msg, userId, 180000, history) || '收到～';
+              } else {
+                throw firstErr;
+              }
+            }
 
-      // 写回本轮对话到 chatHistory buffer（供下条消息使用）
-      // 存储剥离后的文本，避免 <think> 块污染下一轮历史注入
-      appendChatHistory(histKey, `${memberTag}${text}`, stripMarkdownForWecom(replyText));
+            clearTimeout(_ackTimer);
+            logger.info('callGatewayAgent 返回', { fromUser, replyLen: replyText.length });
 
-      // [VOICE] / [RAP] 检测：Lucas 在回复末尾加标记时，剥离 markdown 后发文字 + fire-and-forget 语音
-      const hasVoiceTag = replyText.includes('[VOICE]');
-      const hasRapTag   = replyText.includes('[RAP]');
-      const needVoice   = hasVoiceTag || hasRapTag;
-      // 基础设施层：先统一剥离 ## 标题和 --- 分割线（微信不渲染），再按需剥语音 markdown
-      const wecomSafeText = stripMarkdownForWecom(replyText);
-      const displayText = needVoice ? stripMarkdownForVoice(wecomSafeText) : wecomSafeText;
-      const voiceTarget = isGroup ? chatId : fromUser;
+            // 写回本轮对话到 chatHistory buffer（供下条消息使用）
+            appendChatHistory(_histKey, `${memberTag}${_text}`, stripMarkdownForWecom(replyText));
 
-      if (isGroup) {
-        // 群消息限流：同一群 5s 内只发一条，避免 errcode=846607
-        const now = Date.now();
-        const lastSend = groupBotLastSend.get(chatId) || 0;
-        const wait = Math.max(0, GROUP_BOT_MIN_INTERVAL_MS - (now - lastSend));
-        if (wait > 0) {
-          logger.info('群消息限流等待', { chatId, waitMs: wait });
-          await new Promise(r => setTimeout(r, wait));
-        }
-        await sendWithTimeout(() => wsClient.sendMessage(chatId, { msgtype: 'markdown', markdown: { content: displayText } }));
-        groupBotLastSend.set(chatId, Date.now());
-      } else {
-        // 私聊：sendMessage 私聊不支持任何消息类型（40008）
-        // 必须用 replyStream(frame, streamId, content, finish) —— 被动回复已收到消息的唯一正确方式
-        const streamId = crypto.randomUUID();
-        await sendWithTimeout(() => wsClient.replyStream(frame, streamId, displayText, true), 30000);
-      }
-      // [VOICE]/[RAP] 模式：文字发出后 fire-and-forget 追加一条语音（失败不影响主流程）
-      if (needVoice) {
-        const ttsStyle = hasRapTag ? 'rap' : 'normal';
-        sendVoiceChunks(voiceTarget, displayText, ttsStyle).catch(() => {});
-      }
+            // [VOICE] / [RAP] 检测
+            const hasVoiceTag = replyText.includes('[VOICE]');
+            const hasRapTag   = replyText.includes('[RAP]');
+            const needVoice   = hasVoiceTag || hasRapTag;
+            const wecomSafeText = stripInternalTerms(stripMarkdownForWecom(replyText));
+            const displayText = needVoice ? stripMarkdownForVoice(wecomSafeText) : wecomSafeText;
+            const voiceTarget = _isGroup ? _chatId : fromUser;
 
-      logger.info('Bot 已回复', { fromUser, isGroup, length: replyText.length, channel: 'bot' });
-    } catch (e) {
-      clearTimeout(groupAckTimer);
-      groupAckSent = true;
-      logger.error('Bot 消息处理失败，启用 Claude 后备', { error: e?.message || String(e), fromUser });
-      try {
-        // Gateway / Lucas 不可用，直接用 Claude + SOUL.md 顶上，体验不中断
-        const fallbackReply = await callClaudeFallback(messageToLucas, fromUser, historyMessages).catch(fallbackErr => {
-          logger.error('Claude 后备也失败了', { error: fallbackErr.message });
-          return '我现在有点忙，稍后回你～';
-        });
-        appendChatHistory(histKey, `${memberTag}${text}`, fallbackReply);
-        if (isGroup) {
-          const now = Date.now();
-          const lastSend = groupBotLastSend.get(chatId) || 0;
-          const wait = Math.max(0, GROUP_BOT_MIN_INTERVAL_MS - (now - lastSend));
-          if (wait > 0) await new Promise(r => setTimeout(r, wait));
-          await sendWithTimeout(() => wsClient.sendMessage(chatId, { msgtype: 'markdown', markdown: { content: fallbackReply } }));
-          groupBotLastSend.set(chatId, Date.now());
-        } else {
-          const errStreamId = crypto.randomUUID();
-          await sendWithTimeout(() => wsClient.replyStream(frame, errStreamId, fallbackReply, true), 30000);
-        }
-        logger.info('Claude 后备回复已发送', { fromUser, isGroup });
-      } catch (fallbackSendErr) {
-        logger.error('后备回复发送失败', { error: fallbackSendErr.message });
-      }
-    }
+            if (_isGroup) {
+              // 群消息限流：同一群 5s 内只发一条，避免 errcode=846607
+              const now = Date.now();
+              const lastSend = groupBotLastSend.get(_chatId) || 0;
+              const wait = Math.max(0, GROUP_BOT_MIN_INTERVAL_MS - (now - lastSend));
+              if (wait > 0) {
+                logger.info('群消息限流等待', { chatId: _chatId, waitMs: wait });
+                await new Promise(r => setTimeout(r, wait));
+              }
+              await sendWithTimeout(() => wsClient.sendMessage(_chatId, { msgtype: 'markdown', markdown: { content: displayText } }));
+              groupBotLastSend.set(_chatId, Date.now());
+            } else {
+              // 私聊：replyStream
+              const streamId = crypto.randomUUID();
+              await sendWithTimeout(() => wsClient.replyStream(_frame, streamId, displayText, true), 30000);
+            }
+            if (needVoice) {
+              const ttsStyle = hasRapTag ? 'rap' : 'normal';
+              sendVoiceChunks(voiceTarget, displayText, ttsStyle).catch(() => {});
+            }
+
+            logger.info('Bot 已回复', { fromUser, isGroup: _isGroup, length: replyText.length, channel: 'bot' });
+          } catch (e) {
+            clearTimeout(_ackTimer);
+            logger.error('Bot 消息处理失败，启用 Claude 后备', { error: e?.message || String(e), fromUser });
+            try {
+              const fallbackReply = await callClaudeFallback(msg, fromUser, history).catch(fallbackErr => {
+                logger.error('Claude 后备也失败了', { error: fallbackErr.message });
+                return '我现在有点忙，稍后回你～';
+              });
+              appendChatHistory(_histKey, `${memberTag}${_text}`, fallbackReply);
+              if (_isGroup) {
+                const now = Date.now();
+                const lastSend = groupBotLastSend.get(_chatId) || 0;
+                const wait = Math.max(0, GROUP_BOT_MIN_INTERVAL_MS - (now - lastSend));
+                if (wait > 0) await new Promise(r => setTimeout(r, wait));
+                await sendWithTimeout(() => wsClient.sendMessage(_chatId, { msgtype: 'markdown', markdown: { content: fallbackReply } }));
+                groupBotLastSend.set(_chatId, Date.now());
+              } else {
+                const errStreamId = crypto.randomUUID();
+                await sendWithTimeout(() => wsClient.replyStream(_frame, errStreamId, fallbackReply, true), 30000);
+              }
+              logger.info('Claude 后备回复已发送', { fromUser, isGroup: _isGroup });
+            } catch (fallbackSendErr) {
+              logger.error('后备回复发送失败', { error: fallbackSendErr.message });
+            }
+          }
+        })();
+      },
+    });
   });
+
 
   // ─── 文件 / 图片 / 语音 消息处理 ──────────────────────────────────────────────
   //
@@ -5472,7 +5518,7 @@ function startBotLongConnection() {
     }
 
     // ── 2. 写 ACK 到 chatHistory（在 await 之前完成，不存在竞态）─────────────
-    const histKey    = chatHistoryKey(isGroup, chatId, fromUser);
+    const histKey    = chatHistoryKey(isGroup, chatId, fromUser) + ':' + streamId;
     const mediaLabel = mediaType === 'video' ? '视频' : mediaType === 'image' ? '图片' : '文件';
     appendChatHistory(histKey, `${memberTag}发了一个${mediaLabel}`, ackMsg);
 
@@ -5491,6 +5537,7 @@ function startBotLongConnection() {
       chatId,
       isGroup,
       histKey,
+      streamId,
       memberTag,
       memberName,
       isPdf,
@@ -5730,6 +5777,20 @@ function stripMarkdownForWecom(text) {
     .trim();
 }
 
+// ── 内部术语清洗：发给家人前替换掉内部架构术语 ──────────────────────────
+// Andy/Lisa 是家人们熟知的名字，不替换；只清洗技术术语
+function stripInternalTerms(text) {
+  return text
+    .replace(/\bpm2\s+restart\b/gi, '重启服务')
+    .replace(/\bpm2\b/gi, '服务管理')
+    .replace(/\bGateway\b/gi, '系统')
+    .replace(/\bspec\b/gi, '方案')
+    .replace(/\bpipeline\b/gi, '流程')
+    .replace(/\btask-manager\b/gi, '任务管理')
+    .replace(/\bwecom-entrance\b/gi, '消息服务')
+    .replace(/\bcrewclaw-routing\b/gi, '路由服务');
+}
+
 function stripMarkdownForVoice(text) {
   return text
     .replace(/\[VOICE\]/g, '')
@@ -5863,6 +5924,67 @@ function isDuplicateMsg(msgId) {
   return false;
 }
 
+// ─── 消息聚合器：短时间内多条同类消息合并为一次 Lucas 调用 ─────────────────
+class MessageAggregator {
+  constructor() {
+    this._buffers = new Map(); // key → { items: [], timer }
+    this.DEBOUNCE_MS = 2000;   // 首条消息等 2 秒
+    this.MAX_ITEMS   = 10;     // 最多聚合 10 条
+  }
+
+  // key = `${fromUser}:${isGroup}:${typeTag}` (typeTag: 'douyin'|'video'|'article'|'text')
+  add(key, item) {
+    if (this._buffers.has(key)) {
+      const buf = this._buffers.get(key);
+      buf.items.push(item);
+      if (buf.items.length >= this.MAX_ITEMS) this._flush(key);
+      return;
+    }
+    const buf = { items: [item], timer: setTimeout(() => this._flush(key), this.DEBOUNCE_MS) };
+    this._buffers.set(key, buf);
+  }
+
+  _flush(key) {
+    const buf = this._buffers.get(key);
+    if (!buf) return;
+    clearTimeout(buf.timer);
+    this._buffers.delete(key);
+    if (buf.items.length === 0) return;
+
+    const first = buf.items[0];
+    if (buf.items.length === 1) {
+      // 单条消息：直接走原流程
+      first.sendFn(first.messageToLucas, first.wecomUserId, first.historyMessages, first.extra);
+      return;
+    }
+
+    // 多条消息：合并为一条 prompt
+    const count = buf.items.length;
+    const sceneHint = count >= 3
+      ? `\n[系统提示：家人在短时间内连续发送了 ${count} 条同类型消息。请用最短的回复确认收到并简要概括，不要逐条重复分析。回复控制在 100 字以内。]`
+      : `\n[系统提示：家人连续发送了 ${count} 条消息，请合并回复。]`;
+
+    const messages = buf.items.map((it, i) => `${i + 1}. ${it.rawText}`).join('\n');
+    const mergedMessage = `${first.messageToLucas}${sceneHint}\n${messages}`;
+
+    first.sendFn(mergedMessage, first.wecomUserId, first.historyMessages, first.extra);
+  }
+}
+
+const messageAggregator = new MessageAggregator();
+
+// ─── 抖音转录结果缓冲：多条抖音完成时合并推送 ──────────────────────────
+const transcriptionBuffer = new Map(); // userId → Array<{ meta, douyinUrl, memberTag }>
+transcriptionBuffer.add = function(userId, item) {
+  if (!this.has(userId)) this.set(userId, []);
+  this.get(userId).push(item);
+};
+transcriptionBuffer.flush = function(userId) {
+  const items = this.get(userId) || [];
+  this.delete(userId);
+  return items;
+};
+
 // ─── 长流程任务管理器 ─────────────────────────────────────────────────────────
 const taskManager = new TaskManager({
   homeaiRoot:           HOMEAI_ROOT,
@@ -5976,8 +6098,8 @@ app.post('/api/wecom/send-file', async (req, res) => {
     // 上传素材，获取 media_id（3天内有效）
     const uploaded = await globalBotClient.uploadMedia(buffer, { type: 'file', filename });
     const mediaId = uploaded.media_id;
-    // 先发说明文字（可选）
-    if (text) {
+    // 先发说明文字（可选）— 私聊 userId 不支持 sendMessage text/markdown（errcode=40008），跳过
+    if (text && target.startsWith('wr')) {  // chatId 以 wr 开头（群聊）
       await globalBotClient.sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
     }
     // 发文件
@@ -6058,21 +6180,10 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
     res.json({ success: true, channel: 'app' });
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
-    logger.warn('notify-engineer app 通道失败，fallback 到 bot', { error: errMsg });
-    if (globalBotClient && globalBotReady) {
-      try {
-        await globalBotClient.sendMessage(WECOM_OWNER_ID, { msgtype: 'markdown', markdown: { content: text } });
-        logger.info('notify-engineer 已发送 (bot fallback)', { type, length: message.length });
-        res.json({ success: true, channel: 'bot' });
-      } catch (botErr) {
-        const botErrMsg = botErr instanceof Error ? botErr.message : JSON.stringify(botErr);
-        logger.error('notify-engineer 两通道均失败', { appError: errMsg, botError: botErrMsg });
-        res.status(500).json({ success: false, error: errMsg, botError: botErrMsg });
-      }
-    } else {
-      logger.error('notify-engineer 发送失败，bot 通道不可用', { error: errMsg });
-      res.status(500).json({ success: false, error: errMsg });
-    }
+    logger.warn('notify-engineer app 通道失败', { error: errMsg });
+    // bot sendMessage(userId) 必定 40008（私聊不支持），不尝试无效 fallback
+    logger.error('notify-engineer 发送失败', { error: errMsg });
+    res.status(500).json({ success: false, error: errMsg });
   }
 });
 
@@ -7036,6 +7147,14 @@ ${precomputedTechDebtSignals}
 }
 
 // ─── 启动 ────────────────────────────────────────────────────────────────────
+
+// 全局异常兜底：防止 unhandledRejection / uncaughtException 导致进程 crash → PM2 重启
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandledRejection（已拦截，不 crash）', { error: reason instanceof Error ? reason.message : String(reason), stack: reason?.stack });
+});
+process.on('uncaughtException', (err) => {
+  logger.error('uncaughtException（已拦截，不 crash）', { error: err.message, stack: err.stack });
+});
 
 app.listen(PORT, () => {
   logger.info('企业微信入口已启动', { port: PORT });

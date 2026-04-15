@@ -35,6 +35,14 @@ const RETRY_DELAYS  = [5000, 15000, 60000]; // ms
 // 视频文件大小上限
 const VIDEO_SIZE_LIMIT = 50 * 1024 * 1024;  // 50MB
 
+// 并发限制
+const CONCURRENCY = {
+  video_transcription: 2,
+  image_analysis: 3,
+  file_processing: 3,
+  default: 2,
+};
+
 class TaskManager {
   /**
    * @param {Object} ctx
@@ -50,7 +58,7 @@ class TaskManager {
   constructor(ctx) {
     this.ctx        = ctx;
     this._wsClient  = null;
-    this._userQueues = {};   // userId → Promise（per-user 串行 mutex）
+    this._userQueues = {};   // userId → { running: number, queue: Array<{task, resolve, reject}> }
 
     this._taskDir = path.join(ctx.homeaiRoot, 'data', 'tasks');
     fs.mkdirSync(this._taskDir, { recursive: true });
@@ -61,22 +69,47 @@ class TaskManager {
     this._wsClient = wsClient;
   }
 
+  /** 查询某用户某类型任务的 pending + running 数量（用于聚合器判断是否还有进行中的任务） */
+  getPendingCount(userId, taskType) {
+    const uq = this._userQueues[userId];
+    if (!uq) return 0;
+    const pending = uq.queue.filter(t => t.type === taskType && t.status === STATUS.PENDING).length;
+    return pending + uq.running;
+  }
+
   /**
-   * 创建任务并加入该用户的串行队列。
+   * 创建任务并加入该用户的并发受限队列。
    * 调用方不需要 await，fire-and-forget 即可。
    */
   enqueue(data) {
     const task = this._createTask(data);
     const { userId } = task;
 
-    if (!this._userQueues[userId]) this._userQueues[userId] = Promise.resolve();
+    if (!this._userQueues[userId]) {
+      this._userQueues[userId] = { running: 0, queue: [] };
+    }
 
-    // 严格串行：等上一个任务完成后再开始本任务
-    this._userQueues[userId] = this._userQueues[userId]
-      .then(() => this._run(task))
-      .catch(e => this.ctx.logger.error('TaskManager 队列异常', {
-        taskId: task.taskId, error: e?.message || String(e),
-      }));
+    const limit = CONCURRENCY[task.type] || CONCURRENCY.default;
+    const q = this._userQueues[userId];
+
+    if (q.running < limit) {
+      q.running++;
+      this._run(task).finally(() => this._onTaskDone(userId, task.type));
+    } else {
+      q.queue.push(task);
+    }
+  }
+
+  _onTaskDone(userId, taskType) {
+    const q = this._userQueues[userId];
+    if (!q) return;
+    q.running--;
+    const limit = CONCURRENCY[taskType] || CONCURRENCY.default;
+    if (q.queue.length > 0 && q.running < limit) {
+      const next = q.queue.shift();
+      q.running++;
+      this._run(next).finally(() => this._onTaskDone(userId, next.type));
+    }
   }
 
   // ─── 内部：任务生命周期 ───────────────────────────────────────────────────
@@ -239,9 +272,8 @@ class TaskManager {
     const { userId, chatId, isGroup, histKey, memberTag, type } = task;
 
     // 构建推送给 Lucas 的 follow-up prompt（独立 session，不污染主对话）
-    // sessionId 用真实 userId：callGatewayAgent 会拼上时间戳形成唯一 session，
-    // 同时 parseSessionUser 能正确提取 userId，ChromaDB writeMemory 归属正确用户。
-    const sessionId = task.userId || 'lucas';
+    // sessionId 用 streamId 确保每个视频/图片的推送互相独立，避免 histKey 冲突导致覆盖。
+    const sessionId = task.streamId || task.userId || 'lucas';
     let followUpPrompt;
 
     if (type === 'video_transcription') {

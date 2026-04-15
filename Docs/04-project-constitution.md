@@ -38,7 +38,7 @@
 | **不删核心功能** | 企业微信交互、长记忆系统（ChromaDB）、人工干预提醒机制——不得删除 |
 | **不绕过人工审批** | 架构变更、隐私逻辑修改、大规模重构——必须等待家庭业主确认 |
 | **不修改未经授权的配置** | `~/.openclaw/openclaw.json`、`.env` 中的敏感配置——只读，不自动修改 |
-| **不得擅自更换模型** | Lucas/Andy/Lisa 三个角色的云端模型分配（Lucas→DeepSeek Chat、Andy→DeepSeek R1、Lisa→MiniMax M2.7、Main→GLM-5.1）是系统架构决策，任何角色（含 Claude Code）没有业主明确指令，不得以任何理由更换——包括但不限于"优化成本"、"解决兼容性"、"临时测试"。违反此规则等同于未经授权修改架构。 |
+| **不得擅自更换模型** | Lucas/Andy/Lisa 三个角色的云端模型分配（Lucas→Qwen3.6 Plus、Andy→DeepSeek R1、Lisa→MiniMax M2.7、Main→GLM-5.1）是系统架构决策，任何角色（含 Claude Code）没有业主明确指令，不得以任何理由更换——包括但不限于"优化成本"、"解决兼容性"、"临时测试"。违反此规则等同于未经授权修改架构。 |
 | **Main 通道安全边界** | Andy/Lisa 不得触碰 Main 相关设计与实现；Channel 层必须严格隔离组织成员（Main 只响应系统工程师）；Lucas 无权调用 Main 工具集 |
 
 ---

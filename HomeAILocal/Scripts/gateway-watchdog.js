@@ -19,11 +19,12 @@ const path = require('path');
 const PYTHON3 = '/opt/homebrew/opt/python@3.11/bin/python3.11';
 const http = require('http');
 
-const CHECK_INTERVAL_MS = 3_600_000;  // 1 小时检查一次
-const PROBE_TIMEOUT_MS  = 180_000;  // 3 分钟内没回应 = 挂死（本地模型响应可能需要几分钟）
+const CHECK_INTERVAL_MS = 300_000;    // 5 分钟检查一次（CLAUDE.md 规格）
+const PROBE_TIMEOUT_MS  = 180_000;    // 3 分钟内没回应 = 挂死
 const LOG_FILE = path.join(__dirname, '../logs/pm2/gateway-watchdog.log');
 
-const HOMEAI_ROOT           = path.join(__dirname, '..');       // ~/HomeAI/CrewHiveClaw
+const HOMEAI_ROOT           = path.join(__dirname, '..', '..'); // ~/HomeAI/CrewHiveClaw
+const HOMEAI_DATA_ROOT      = process.env.HOMEAI_ROOT || path.join(process.env.HOME, 'HomeAI'); // ~/HomeAI
 const SCRIPTS_DIR           = __dirname;                        // ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts
 const DISTILL_SCRIPT        = path.join(SCRIPTS_DIR, 'distill-memories.py');
 const DISTILL_LOG           = path.join(HOMEAI_ROOT, 'HomeAILocal', 'logs', 'distill-memories.log');
@@ -401,10 +402,10 @@ async function checkGateway() {
 // 预计算数据注入消息内容，Andy 无需 exec Python，直接读文字做判断。
 
 const HEARTBEAT_TIMEOUT_MS = 600_000;  // 10 分钟（Andy 可能需要通知 Lucas）
-const SKILL_CANDIDATES_FILE = path.join(__dirname, '../data/learning/skill-candidates.jsonl');
-const FOLLOWUP_QUEUE_FILE   = path.join(__dirname, '../data/learning/followup-queue.jsonl');
-const ANDY_GOALS_FILE         = path.join(__dirname, '../data/learning/andy-goals.jsonl');
-const SELF_SEARCH_STATE_FILE  = path.join(__dirname, '../data/learning/andy-self-search-state.json');
+const SKILL_CANDIDATES_FILE = path.join(HOMEAI_DATA_ROOT, 'Data/learning/skill-candidates.jsonl');
+const FOLLOWUP_QUEUE_FILE   = path.join(HOMEAI_DATA_ROOT, 'Data/learning/followup-queue.jsonl');
+const ANDY_GOALS_FILE         = path.join(HOMEAI_DATA_ROOT, 'Data/learning/andy-goals.jsonl');
+const SELF_SEARCH_STATE_FILE  = path.join(HOMEAI_DATA_ROOT, 'Data/learning/andy-self-search-state.json');
 const SELF_SEARCH_COOLDOWN_MS = 72 * 60 * 60 * 1000;  // 72h = 每周约 2~3 次
 
 function buildHeartbeatContext() {
@@ -416,7 +417,7 @@ function buildHeartbeatContext() {
     const snapshot = {};
 
     // ① opencode 最近 10 次执行指标
-    const opencodeResultsFile = path.join(HOMEAI_ROOT, 'data/learning/opencode-results.jsonl');
+    const opencodeResultsFile = path.join(HOMEAI_DATA_ROOT, 'Data/learning/opencode-results.jsonl');
     if (fs.existsSync(opencodeResultsFile)) {
       const lines = fs.readFileSync(opencodeResultsFile, 'utf8').trim().split('\n').filter(Boolean);
       const recent = lines.slice(-10).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
@@ -659,7 +660,7 @@ function buildHeartbeatContext() {
     ].join('\n'), 'utf8');
     const specOut = execSync(`${PYTHON3} ${specRetroScript}`, { encoding: 'utf8', timeout: 10_000 }).trim();
     const specData = JSON.parse(specOut);
-    const retroStateFile = path.join(HOMEAI_ROOT, 'data/learning/andy-spec-retro-state.json');
+    const retroStateFile = path.join(HOMEAI_DATA_ROOT, 'Data/learning/andy-spec-retro-state.json');
     let lastRetroAt = null;
     if (fs.existsSync(retroStateFile)) {
       try { lastRetroAt = JSON.parse(fs.readFileSync(retroStateFile, 'utf8')).lastRetroAt; } catch (_) {}
@@ -678,7 +679,7 @@ function buildHeartbeatContext() {
 
   // 检查 11：技术雷达状态
   try {
-    const selfSearchFile = path.join(HOMEAI_ROOT, 'data/learning/andy-self-search-state.json');
+    const selfSearchFile = path.join(HOMEAI_DATA_ROOT, 'Data/learning/andy-self-search-state.json');
     let lastSearch = null;
     if (fs.existsSync(selfSearchFile)) {
       try { lastSearch = JSON.parse(fs.readFileSync(selfSearchFile, 'utf8')).lastSearchAt; } catch (_) {}
@@ -695,7 +696,7 @@ function buildHeartbeatContext() {
 
   // 检查 12：代码图谱变化摘要（检查最近一次图谱重建的输出）
   try {
-    const graphChangeFile = path.join(HOMEAI_ROOT, 'data/learning/code-graph-changes.json');
+    const graphChangeFile = path.join(HOMEAI_DATA_ROOT, 'Data/learning/code-graph-changes.json');
     if (fs.existsSync(graphChangeFile)) {
       const changes = JSON.parse(fs.readFileSync(graphChangeFile, 'utf8'));
       if (changes && changes.summary) {
@@ -744,7 +745,7 @@ function buildHeartbeatContext() {
   try {
     // 从 opencode-results 中提取高频修改文件
     const debtSignals = { highFreqFiles: [], note: '' };
-    const opencodeResultsFile = path.join(HOMEAI_ROOT, 'data/learning/opencode-results.jsonl');
+    const opencodeResultsFile = path.join(HOMEAI_DATA_ROOT, 'Data/learning/opencode-results.jsonl');
     if (fs.existsSync(opencodeResultsFile)) {
       const lines = fs.readFileSync(opencodeResultsFile, 'utf8').trim().split('\n').filter(Boolean);
       const fileCounts = {};

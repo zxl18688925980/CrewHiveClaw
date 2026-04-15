@@ -15,10 +15,13 @@ const fs = require('fs').promises;
 const path = require('path');
 const { execSync, spawn } = require('child_process');
 
-const DATA_DIR = path.join(__dirname, '../data');
-const PENDING_FILE = path.join(DATA_DIR, 'finetune/pending-samples.jsonl');
+// 统一数据根目录：与插件 PROJECT_ROOT 一致（~/HomeAI/data）
+const HOMEAI_ROOT = process.env.HOMEAI_ROOT || path.join(require('os').homedir(), 'HomeAI');
+const DATA_DIR = path.join(HOMEAI_ROOT, 'data');
+const FINETUNE_QUEUE_FILE = path.join(DATA_DIR, 'learning/finetune-queue.jsonl');  // 插件写入
+const PENDING_FILE = path.join(DATA_DIR, 'finetune/pending-samples.jsonl');         // 训练脚本读取
 const HISTORY_FILE = path.join(DATA_DIR, 'finetune/finetune-history.jsonl');
-const LOG_FILE = path.join(__dirname, '../logs/finetune.log');
+const LOG_FILE = path.join(HOMEAI_ROOT, 'Logs/finetune.log');
 
 const MIN_SAMPLES = 50;
 const MIN_DAYS_BETWEEN = 7;
@@ -55,7 +58,54 @@ function getSystemLoad() {
   } catch (e) { return 0; }
 }
 
+/**
+ * 桥接：finetune-queue.jsonl（插件写入，{prompt,response,qualityScore}）
+ *     → pending-samples.jsonl（训练脚本读取，{input,output}）
+ * 追加模式：只转尚未转换的新条目（通过 pending 行数跳过已转换的）。
+ */
+async function convertQueueToPending() {
+  try {
+    // 读取 queue
+    const queueContent = await fs.readFile(FINETUNE_QUEUE_FILE, 'utf8').catch(() => '');
+    if (!queueContent.trim()) return;
+    const queueLines = queueContent.trim().split('\n').filter(Boolean);
+
+    // 读取已有的 pending（计算已转换数量）
+    const pendingContent = await fs.readFile(PENDING_FILE, 'utf8').catch(() => '');
+    const alreadyConverted = pendingContent.trim() ? pendingContent.trim().split('\n').filter(Boolean).length : 0;
+
+    if (alreadyConverted >= queueLines.length) return;  // 无新数据
+
+    // 转换新条目
+    const newSamples = [];
+    for (let i = alreadyConverted; i < queueLines.length; i++) {
+      try {
+        const entry = JSON.parse(queueLines[i]);
+        if (entry.prompt && entry.response) {
+          newSamples.push(JSON.stringify({
+            input: entry.prompt,
+            output: entry.response,
+            agentId: entry.agentId || 'unknown',
+            qualityScore: entry.qualityScore || 0,
+          }));
+        }
+      } catch (_) { /* skip malformed */ }
+    }
+
+    if (newSamples.length === 0) return;
+
+    await fs.mkdir(path.dirname(PENDING_FILE), { recursive: true });
+    await fs.appendFile(PENDING_FILE, newSamples.join('\n') + '\n', 'utf8');
+    await log(`桥接完成: ${newSamples.length} 条新样本 → ${PENDING_FILE}（总计 ${alreadyConverted + newSamples.length} 条）`);
+  } catch (e) {
+    await log(`桥接失败: ${e.message}`);
+  }
+}
+
 async function checkConditions() {
+  // 先将 finetune-queue 转为 pending-samples（桥接插件→训练脚本）
+  await convertQueueToPending();
+
   const pendingCount = await getPendingCount();
   const lastDate = await getLastFinetuneDate();
   const daysSinceLast = lastDate
