@@ -1481,63 +1481,120 @@ function isInviteValid(invites, code) {
   return true;
 }
 
+// ─── LLM 调用队列管理器 ─────────────────────────────────────────────────────
+// 内存队列：最多 3 并发，超过排队，队列 > 10 返回 503
+// 重试：error.code === 2064 或 HTTP 529 时指数退避（1s, 2s），最多 2 次
+class LLMQueueManager {
+  constructor() {
+    this.running = 0;
+    this.queue = [];
+    this.MAX_CONCURRENT = 3;
+    this.MAX_QUEUE = 10;
+  }
+
+  async enqueue(task) {
+    if (this.running >= this.MAX_CONCURRENT) {
+      if (this.queue.length >= this.MAX_QUEUE) {
+        return { ok: false, status: 503, message: 'AI 服务暂时繁忙，请稍后再试' };
+      }
+      return new Promise((resolve) => {
+        this.queue.push({ task, resolve });
+      });
+    }
+    return this._run(task);
+  }
+
+  async _run(task) {
+    this.running++;
+    try {
+      return await task();
+    } finally {
+      this.running--;
+      this._drain();
+    }
+  }
+
+  _drain() {
+    if (this.queue.length === 0) return;
+    if (this.running >= this.MAX_CONCURRENT) return;
+    const { task, resolve } = this.queue.shift();
+    resolve(this._run(task));
+  }
+}
+
+const llmQueue = new LLMQueueManager();
+
 // ─── Demo Chat 代理端点 ───────────────────────────────────────────────────────
 // 把前端发来的聊天请求转发给本机 OpenClaw Gateway（18789），避免 API Key 暴露在前端
 // 公网访问时 127.0.0.1:18789 对前端不可达，通过此代理解决跨域+内网访问问题
 app.post('/api/demo-proxy/chat', async (req, res) => {
-  if (isDemoDisabled()) return res.status(503).json({ error: 'demo_disabled', message: '演示功能暂时关闭' });
+  if (isDemoDisabled()) return res.status(503).json({ success: false, message: '演示功能暂时关闭' });
   const sessionToken = req.headers['x-session-uuid'];
   if (!sessionToken) {
-    return res.status(401).json({ error: 'session_required' });
+    return res.status(401).json({ success: false, message: 'session_required' });
   }
-  try {
-    const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '696673d08d0ee98f3e66a30698ab4c1152b7c8784ae424d0';
-    const gatewayUrl = process.env.GATEWAY_URL || 'http://localhost:18789';
-    const body = req.body;
-    // 有邀请码时解析到当前活跃主键（含 historicalToken 支持），无邀请码时退回 UUID
-    const inviteCode = req.headers['x-invite-code'];
-    const resolvedInviteCode = inviteCode
-      ? (resolveInviteCode(loadInvites(), inviteCode) || inviteCode)
-      : null;
-    const demoBody = {
-      ...body,
-      user: `visitor:${resolvedInviteCode || sessionToken}`,
-    };
-    const fetchResp = await fetch(`${gatewayUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${gatewayToken}`,
-        'x-openclaw-agent-id': 'lucas',
-      },
-      body: JSON.stringify(demoBody),
-    });
-    const data = await fetchResp.json();
-    const reply = data?.choices?.[0]?.message?.content || '';
-    const htmlMatch = reply.match(/```html\s*([\s\S]*?)```/i);
-    if (htmlMatch && fetchResp.status === 200) {
-      try {
-        const htmlCode = htmlMatch[1].trim();
-        const toolId = Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 4);
-        const toolDir = path.join(APP_GENERATED_DIR, 'demo-tools', toolId);
-        fs.mkdirSync(toolDir, { recursive: true });
-        fs.writeFileSync(path.join(toolDir, 'index.html'), htmlCode, 'utf8');
-        logger.info('Demo tool saved', { toolId, size: htmlCode.length });
-        if (data.choices[0].message) {
-          data.choices[0].message.content = reply.replace(
-            /```html[\s\S]*?```/i,
-            `\n\n✅ 工具已生成！[TOOL_LINK:${toolId}]`
-          );
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '696673d08d0ee98f3e66a30698ab4c1152b7c8784ae424d0';
+  const gatewayUrl = process.env.GATEWAY_URL || 'http://localhost:18789';
+  const body = req.body;
+  const inviteCode = req.headers['x-invite-code'];
+  const resolvedInviteCode = inviteCode
+    ? (resolveInviteCode(loadInvites(), inviteCode) || inviteCode)
+    : null;
+  const demoBody = {
+    ...body,
+    user: `visitor:${resolvedInviteCode || sessionToken}`,
+  };
+
+  const result = await llmQueue.enqueue(async () => {
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      const fetchResp = await fetch(`${gatewayUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${gatewayToken}`,
+          'x-openclaw-agent-id': 'lucas',
+        },
+        body: JSON.stringify(demoBody),
+      });
+      const data = await fetchResp.json();
+      const isRetryable = fetchResp.status === 529 || (data?.error?.code === 2064);
+      if (fetchResp.ok && !isRetryable) {
+        const reply = data?.choices?.[0]?.message?.content || '';
+        const htmlMatch = reply.match(/```html\s*([\s\S]*?)```/i);
+        if (htmlMatch) {
+          try {
+            const htmlCode = htmlMatch[1].trim();
+            const toolId = Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 4);
+            const toolDir = path.join(APP_GENERATED_DIR, 'demo-tools', toolId);
+            fs.mkdirSync(toolDir, { recursive: true });
+            fs.writeFileSync(path.join(toolDir, 'index.html'), htmlCode, 'utf8');
+            logger.info('Demo tool saved', { toolId, size: htmlCode.length });
+            if (data.choices[0].message) {
+              data.choices[0].message.content = reply.replace(
+                /```html[\s\S]*?```/i,
+                `\n\n✅ 工具已生成！[TOOL_LINK:${toolId}]`
+              );
+            }
+          } catch (toolErr) {
+            logger.warn('Demo tool save failed', { error: toolErr.message });
+          }
         }
-      } catch (toolErr) {
-        logger.warn('Demo tool save failed', { error: toolErr.message });
+        return { ok: true, status: fetchResp.status, data };
       }
+      if (isRetryable && attempt < 2) {
+        const delay = 1000 * Math.pow(2, attempt);
+        logger.info('LLM retry', { attempt, delay, status: fetchResp.status });
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return { ok: false, status: fetchResp.status, data };
     }
-    res.status(fetchResp.status).json(data);
-  } catch (err) {
-    logger.error('Demo proxy error', { err: err.message });
-    res.status(500).json({ error: 'proxy error', message: err.message });
+  });
+
+  if (!result.ok) {
+    return res.status(503).json({ success: false, message: 'AI 服务暂时繁忙，请稍后再试' });
   }
+  res.status(result.status).json(result.data);
 });
 
 // 获取历史对话记录（单一来源：ChromaDB，支持倒序分页滑动窗口）

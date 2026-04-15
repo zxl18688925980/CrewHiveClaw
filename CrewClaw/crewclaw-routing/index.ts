@@ -8092,9 +8092,15 @@ last_used: null
         if (!req.includes("忽略重复检查")) {
           const inflight = readTaskRegistry()
             .filter(e => e.status === "running" || e.status === "queued")
-            .map(e => ({ e, score: bigramScore(req, e.requirement) }))
-            .filter(s => s.score >= 3)
-            .sort((a, b) => b.score - a.score)
+            .map(e => {
+              const raw = bigramScore(req, e.requirement);
+              // 用重叠比率而非绝对数：中文常见前缀（做一个/开发一个/爸爸想要）贡献的 bigram 不应误判为相似
+              const denom = Math.min(req.length, e.requirement.length) - 1;
+              const ratio = denom > 0 ? raw / denom : 0;
+              return { e, score: raw, ratio };
+            })
+            .filter(s => s.ratio >= 0.7)
+            .sort((a, b) => b.ratio - a.ratio)
             .slice(0, 1);
 
           if (inflight.length > 0) {
@@ -8145,9 +8151,14 @@ last_used: null
           const capRegistry = readJsonlEntries(join(PROJECT_ROOT, "data/corpus/capability-registry.jsonl"));
           const similar = capRegistry
             .filter(e => e.status === "active" && !e.dormant && typeof e.requirement === "string")
-            .map(e => ({ e, score: bigramScore(req, e.requirement as string) }))
-            .filter(s => s.score >= 3)
-            .sort((a, b) => b.score - a.score)
+            .map(e => {
+              const raw = bigramScore(req, e.requirement as string);
+              const denom = Math.min(req.length, (e.requirement as string).length) - 1;
+              const ratio = denom > 0 ? raw / denom : 0;
+              return { e, score: raw, ratio };
+            })
+            .filter(s => s.ratio >= 0.7)
+            .sort((a, b) => b.ratio - a.ratio)
             .slice(0, 1);
 
           if (similar.length > 0) {
@@ -8180,9 +8191,14 @@ last_used: null
               }
             }
             const matched = skillEntries
-              .map(s => ({ s, score: bigramScore(req, s.name + " " + s.description) }))
-              .filter(x => x.score >= 2)
-              .sort((a, b) => b.score - a.score)
+              .map(s => {
+                const raw = bigramScore(req, s.name + " " + s.description);
+                const denom = Math.min(req.length, (s.name + " " + s.description).length) - 1;
+                const ratio = denom > 0 ? raw / denom : 0;
+                return { s, score: raw, ratio };
+              })
+              .filter(x => x.ratio >= 0.5)
+              .sort((a, b) => b.ratio - a.ratio)
               .slice(0, 1);
             if (matched.length > 0) {
               const sk = matched[0].s;
