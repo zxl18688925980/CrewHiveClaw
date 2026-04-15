@@ -9103,6 +9103,34 @@ last_used: null
                 }
               }
 
+              // ⑤ 代码现状预检：检测目标文件是否已有未提交变更
+              // ClaudeCode 类比：git status 看 dirty files，避免重复修改
+              // 不阻断——可能是前一次失败残留，但通知 Andy 和系统工程师知情
+              {
+                const precheckDiff = spawnSync("git", ["diff", "--name-only"], {
+                  cwd: PROJECT_ROOT, encoding: "utf8",
+                });
+                const dirtyFiles = new Set((precheckDiff.stdout ?? "").trim().split("\n").filter(Boolean));
+
+                const modifyIps = integrationPoints.filter(ip => {
+                  const isNew = ip.action && NEW_FILE_ACTIONS.some(a => ip.action!.includes(a));
+                  return !isNew && !!ip.file;
+                });
+
+                const alreadyDirty = modifyIps.filter(ip => {
+                  const rel = ip.file!.replace(/^CrewHiveClaw\//, "");
+                  return dirtyFiles.has(rel) || dirtyFiles.has(ip.file!);
+                });
+
+                if (alreadyDirty.length > 0) {
+                  log("pipeline", `[pre-check] dirty files detected: ${alreadyDirty.map(ip => ip.file).join(", ")}`);
+                  void notifyEngineer(
+                    `【${p.requirement_id ?? "?"}】代码现状预检：${alreadyDirty.length} 个目标文件已有未提交变更（${alreadyDirty.map(ip => ip.file).join(", ")}），Andy 仍触发了 Lisa 实现。请关注是否重复工作。`,
+                    "pipeline", DESIGNER_AGENT_ID,
+                  );
+                }
+              }
+
               // ④ 核心框架文件保护（渐进式信任：核心文件变更时 warn-and-proceed 通知工程师）
               // 不阻断流水线，但工程师会即时收到告警以便人工验收。
               // 保护列表：基础设施层核心文件，任何修改都需要工程师知情。
@@ -9454,6 +9482,25 @@ last_used: null
               }
               // ── 验证门结束 ──────────────────────────────────────────────
 
+              // 变更来源交叉校验：Lisa 的 git 变更是否覆盖了 spec 目标文件
+              if (success && specData) {
+                const crossIps = (specData.integration_points ?? []) as Array<{file?: string; action?: string}>;
+                const specFiles = crossIps.filter(ip => !!ip.file).map(ip => {
+                  const f = ip.file!;
+                  return f.replace(/^CrewHiveClaw\//, "");
+                });
+                const gitFiles = verify1.changedFiles;
+                const overlap = gitFiles.filter(gf => specFiles.some(sf => gf.endsWith(sf) || sf.endsWith(gf)));
+
+                if (specFiles.length > 0 && overlap.length === 0 && gitFiles.length > 0) {
+                  log("pipeline", `[verify] change-target mismatch: git changed [${gitFiles.join(",")}] but spec targets [${specFiles.join(",")}]`);
+                  void notifyEngineer(
+                    `【${reqId}】变更来源校验：Lisa 修改了 ${gitFiles.join(", ")}，但 spec 目标是 ${specFiles.join(", ")}，可能修改了错误文件。`,
+                    "pipeline", IMPLEMENTOR_AGENT_ID,
+                  );
+                }
+              }
+
               if (!success) {
                 // 验证失败 → 跳过后续 corpus/capability/验收，走失败路径
               } else {
@@ -9692,8 +9739,24 @@ last_used: null
           );
           await pushEventDriven(responseText, requestorId, success);
           // Fix 3：Lisa 完成后主动更新任务状态（覆盖 runAndyPipeline 可能已标的 failed）
+          // 增强约束：标记 completed 前，确认 git diff 仍有变更（防止 Lisa 幻觉或变更被撤销）
           if (reqId.startsWith("req_")) {
-            markTaskStatus(reqId, success ? "completed" : "failed");
+            if (success) {
+              const finalCheck = runProjectCompileCheck();
+              if (finalCheck.changedFiles.length === 0) {
+                log("pipeline", `[complete-check] ${reqId}: no git changes at completion time, marking failed`);
+                void notifyEngineer(
+                  `【${reqId}】完成标记被阻止：Lisa 报告成功但 git diff 无变更，可能变更被撤销或 Lisa 幻觉。任务标记为 failed。`,
+                  "pipeline", IMPLEMENTOR_AGENT_ID,
+                );
+                markTaskStatus(reqId, "failed");
+                success = false;
+              } else {
+                markTaskStatus(reqId, "completed");
+              }
+            } else {
+              markTaskStatus(reqId, "failed");
+            }
           }
           // 写入跟进队列：Lucas 在 20:00 HEARTBEAT 时扫到并主动跟进结果
           if (success && requestorId && !requestorId.startsWith("system")) {
