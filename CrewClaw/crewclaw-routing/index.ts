@@ -101,7 +101,6 @@ const AGENT_THREAD_TTL    = 7 * 24 * 60 * 60 * 1000;  // 7 天过期
 try { mkdirSync(AGENT_THREAD_DIR, { recursive: true }); } catch (_e) {}
 
 // ── Lisa Coding Tools：pi-coding-agent → OpenClaw registerTool 桥接 ──────
-const LISA_CWD = HOME; // 路径解析基点 = $HOME，覆盖全项目
 
 function wrapCodingTool(
   tool: { name: string; label: string; description: string; parameters: any; execute: any },
@@ -113,6 +112,7 @@ function wrapCodingTool(
     description: overrides.description,
     parameters: tool.parameters,
     execute: async (toolCallId: string, params: any, signal?: AbortSignal) => {
+      const HOME = process.env.HOME ?? "/";
       // Agent 门控：只有 Lisa 能用编码工具
       if (toolCtx.agentId && toolCtx.agentId !== IMPLEMENTOR_AGENT_ID) {
         return { content: [{ type: "text", text: "该工具是 Lisa 专属编码工具。" }], details: { error: "wrong_agent" } };
@@ -10145,13 +10145,14 @@ last_used: null
     // ━━ Lisa Coding Tools：来自 @mariozechner/pi-coding-agent ━━━━━━━━━━━━━━
     // 框架层：直接编码能力，run_opencode 降级为复杂任务备用
     {
-      const codingRead  = createReadTool(LISA_CWD);
-      const codingEdit  = createEditTool(LISA_CWD);
-      const codingWrite = createWriteTool(LISA_CWD);
-      const codingBash  = createBashTool(LISA_CWD);
-      const codingGrep  = createGrepTool(LISA_CWD);
-      const codingFind  = createFindTool(LISA_CWD);
-      const codingLs    = createLsTool(LISA_CWD);
+      const codingCwd   = process.env.HOME ?? "/";
+      const codingRead  = createReadTool(codingCwd);
+      const codingEdit  = createEditTool(codingCwd);
+      const codingWrite = createWriteTool(codingCwd);
+      const codingBash  = createBashTool(codingCwd);
+      const codingGrep  = createGrepTool(codingCwd);
+      const codingFind  = createFindTool(codingCwd);
+      const codingLs    = createLsTool(codingCwd);
 
       api.registerTool(wrapCodingTool(codingRead, {
         label: "读取文件",
