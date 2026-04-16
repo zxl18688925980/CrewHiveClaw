@@ -997,3 +997,21 @@ curl -s https://open.bigmodel.cn/api/paas/v4/chat/completions \
 
 **状态**：已修复
 **确认日期**：2026-04-14
+
+---
+
+### OpenClaw jiti 懒加载缓存：修改 crewclaw-routing/index.ts 后重启 Gateway 不生效
+
+**场景**：`crewclaw-routing/index.ts` 修改后，重启 Gateway（`launchctl bootout/load`），但新代码不生效——旧错误仍然出现。
+
+**现象**：修改了 `index.ts` 中的工具权限或逻辑，Gateway 重启后 `manage_nodes` 仍报旧错误。日志显示旧逻辑仍在执行。
+
+**根因**：OpenClaw 的 jiti 懒加载机制在 `node_modules/.cache/jiti/` 目录下缓存了编译后的 `.cjs` 文件（命名规则：`crewclaw-routing-index.{hash}.cjs`）。Gateway 重启时优先从 jiti 缓存加载，而不是重新编译 `.ts` 源文件。只有删除该缓存目录后，jiti 才会重新编译。
+
+**规避/修复方式**：
+1. 修改 `index.ts` 后，执行 `rm -rf ~/HomeAI/CrewHiveClaw/CrewClaw/crewclaw-routing/node_modules/.cache/jiti/`
+2. 再重启 Gateway：`pkill -9 -f openclaw-gateway; sleep 2; bash ~/.openclaw/start-gateway.sh`
+3. 验证新代码生效：观察 Gateway 日志确认重新编译，或让 Lucas 调用一次 `manage_nodes` 验证
+
+**状态**：活跃（2026-04-17 确认）
+**确认日期**：2026-04-17
