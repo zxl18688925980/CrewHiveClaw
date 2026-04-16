@@ -13540,7 +13540,7 @@ last_used: null
     }
 
     api.registerTool((toolCtx) => ({
-      label: "远程节点控制（Andy/Lisa）",
+      label: "远程节点控制（Lucas/Andy/Lisa）",
       name: "manage_nodes",
       description: [
         "管理和控制 Windows 远程节点（Cloudflare Tunnel + SSH）。",
@@ -13556,9 +13556,10 @@ last_used: null
         command: Type.Optional(Type.String({ description: 'action=invoke_command 时要执行的命令（PowerShell 语法）' })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        const ALLOWED = new Set([DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        // Lucas 是家庭成员节点的配置者（节点归属影子），Andy/Lisa 是框架层小弟的管理者
+        const ALLOWED = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (!ALLOWED.has(toolCtx.agentId ?? "")) {
-          return { content: [{ type: "text", text: "❌ nodes 工具仅 Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "❌ nodes 工具仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
         }
 
         const p = params as { action: string; nodeId?: string; command?: string };
