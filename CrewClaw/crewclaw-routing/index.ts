@@ -5550,7 +5550,15 @@ const crewclawRoutingPlugin = {
     // ━━ HTTP 路由：Windows 节点注册端点 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     //
     // windows-node-setup.ps1 在安装最后会 POST 到 /api/node/register 注册节点。
-    // 简单内存存储，记录节点注册信息，返回 200。
+    // 内存存储 + Kuzu 协作边（成员 ↔ 节点）。
+    //
+    // 请求体：
+    //   node_name       — 节点名称（如 "爸爸的 Windows PC"）
+    //   owner_userId    — 家庭成员 ID（如 "zengxiaolong"），建立 Kuzu 协作边
+    //   platform        — 平台（如 "windows"）
+    //   architecture    — 架构（如 "x86_64"）
+    //   hostname        — 机器主机名
+    //   gateway_url     — 节点上 Gateway 地址（可选）
 
     const nodeRegistryStore = new Map<string, Record<string, unknown>>();
 
@@ -5569,6 +5577,50 @@ const crewclawRoutingPlugin = {
             data.registered_at_local = nowCST();
             nodeRegistryStore.set(nodeName, data);
             api.logger.info(`[node-register] Node registered: ${nodeName} (${data.platform})`);
+
+            // ── Kuzu 协作边：成员 ↔ 节点（L3 影子节点设计）──────────────
+            const ownerUserId = String(data.owner_userId ?? "");
+            if (ownerUserId) {
+              const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
+              const SCRIPTS_DIR_T = join(PROJECT_ROOT, "CrewHiveClaw", "HomeAILocal", "Scripts");
+              const tmpScript = join(SCRIPTS_DIR_T, `_node_register_${Date.now()}.py`);
+              const nodeId = `node_${nodeName.replace(/[^a-zA-Z0-9]/g, "_")}`;
+              const scriptContent = [
+                "import kuzu, os",
+                `db = kuzu.Database(os.path.expanduser("~/HomeAI/Data/kuzu"))`,
+                "conn = kuzu.Connection(db)",
+                // 创建或合并 AI_Node 实体
+                `conn.execute(f"""`,
+                `  MERGE (n:AI_Node {node_id: '${nodeId}'})`,
+                `  SET n.node_name = '${nodeName.replace(/'/g, "''")}',`,
+                `      n.platform = '${String(data.platform ?? "unknown").replace(/'/g, "''")}',`,
+                `      n.architecture = '${String(data.architecture ?? "unknown").replace(/'/g, "''")}',`,
+                `      n.hostname = '${String(data.hostname ?? "").replace(/'/g, "''")}',`,
+                `      n.gateway_url = '${String(data.gateway_url ?? "").replace(/'/g, "''")}',`,
+                `      n.registered_at = '${data.registered_at_local}',`,
+                `      n.owner_userId = '${ownerUserId}'`,
+                `""")`,
+                // 建立成员 → 节点的 HAS_SHADOW_NODE 边
+                `conn.execute(f"""`,
+                `  MATCH (m:Entity {id: '${ownerUserId}'})`,
+                `  MERGE (m)-[r:HAS_SHADOW_NODE]->(n:AI_Node {node_id: '${nodeId}'})`,
+                `  SET r.created_at = '${data.registered_at_local}'`,
+                `""")`,
+              ].join("\n");
+              writeFileSync(tmpScript, scriptContent);
+              try {
+                const result = spawnSync(KUZU_PYTHON3, [tmpScript], { encoding: "utf8", timeout: 10000 });
+                if (result.status === 0) {
+                  api.logger.info(`[node-register] Kuzu edge created: ${ownerUserId} → ${nodeId}`);
+                } else {
+                  api.logger.warn(`[node-register] Kuzu edge failed: ${result.stderr?.slice(0, 200)}`);
+                }
+              } catch (kzErr) {
+                api.logger.warn(`[node-register] Kuzu error: ${kzErr}`);
+              } finally {
+                try { unlinkSync(tmpScript); } catch (_e) { /* ignore */ }
+              }
+            }
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true, message: "Node registered" }));

@@ -1733,8 +1733,8 @@ app.post('/api/demo-proxy/gen-invite', (req, res) => {
 // 供 Windows 节点安装脚本 POST /api/node/register，实现节点注册到 Gateway
 // 实际转发到 Gateway 内部路由，Windows 节点无需直接访问 127.0.0.1:18789
 app.post('/api/node/register', async (req, res) => {
-  const { node_name, platform, architecture, gateway_url, registered_at } = req.body || {};
-  
+  const { node_name, owner_userId, platform, architecture, hostname, gateway_url, registered_at } = req.body || {};
+
   if (!node_name) {
     return res.status(400).json({ success: false, error: 'node_name is required' });
   }
