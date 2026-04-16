@@ -5634,8 +5634,6 @@ const crewclawRoutingPlugin = {
 
     // ━━ HTTP 路由：Windows 节点心跳+命令+结果端点 ━━━━━━━━━━━━━━━━━━━━
     const nodeActivityStore = new Map<string, number>();
-    const nodePendingCommands = new Map<string, unknown[]>();
-    const nodeResultsStore = new Map<string, unknown>();
 
     // POST /api/node/heartbeat — 记录节点活动时间戳
     api.registerHttpRoute({
@@ -5649,7 +5647,10 @@ const crewclawRoutingPlugin = {
           for await (const chunk of req) body += chunk;
           const data = JSON.parse(body) as Record<string, unknown>;
           const nodeName = String(data.node_name ?? "");
-          if (nodeName) nodeActivityStore.set(nodeName, Date.now());
+          if (nodeName) {
+            const nodeId = `node_${nodeName.replace(/[^a-zA-Z0-9]/g, "_")}`;
+            nodeActivityStore.set(nodeId, Date.now());
+          }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true }));
         } catch (_e) {
@@ -5685,7 +5686,10 @@ const crewclawRoutingPlugin = {
           for await (const chunk of req) body += chunk;
           const data = JSON.parse(body) as Record<string, unknown>;
           const nodeName = String(data.node_name ?? "");
-          if (nodeName) nodeResultsStore.set(nodeName, data);
+          if (nodeName) {
+            const nodeId = `node_${nodeName.replace(/[^a-zA-Z0-9]/g, "_")}`;
+            nodeActivityStore.set(nodeId, Date.now());
+          }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true }));
         } catch (_e) {
@@ -13522,13 +13526,6 @@ last_used: null
     // 支持：列出节点、查询状态、在节点上执行命令。
     // 节点需先运行 setup-windows-node.ps1 完成安装配置。
 
-    const NODE_MONITOR_URL = process.env.NODE_MONITOR_URL || "http://localhost:3004";
-
-    function nodeApi(path, options = {}) {
-      const url = `${NODE_MONITOR_URL}${path}`;
-      return fetch(url, { headers: { "Content-Type": "application/json" }, ...options }).then(r => r.json());
-    }
-
     function execViaSsh(nodeId, command) {
       const { execSync } = require("child_process");
       const sshAlias = `windows-${nodeId}`;
@@ -13565,59 +13562,72 @@ last_used: null
         const p = params as { action: string; nodeId?: string; command?: string };
 
         if (p.action === "list") {
-          try {
-            const data = await nodeApi("/node-monitor/nodes");
-            const nodes: Record<string, unknown>[] = data.nodes ?? [];
-            if (nodes.length === 0) {
-              return { content: [{ type: "text", text: "当前没有任何已注册的节点。请先在 Windows 上运行 setup-windows-node.ps1。" }], details: { count: 0 } };
-            }
-            const lines = nodes.map((n: Record<string, unknown>) => {
-              const status = n.status === "online" ? "🟢 在线" : "🔴 离线";
-              const userId = n.userId as string;
-              const userTag = userId ? `（归属：${userId}）` : '（归属：未知）';
-              return `${status} **${n.nodeId as string}** (${n.hostname as string ?? n.nodeId}, ${n.os as string}) ${userTag}`;
-            });
-            return { content: [{ type: "text", text: `节点列表（共 ${nodes.length} 个）：\n\n${lines.join("\n")}` }], details: { count: nodes.length, nodes } };
-          } catch (e) {
-            return { content: [{ type: "text", text: `❌ 无法连接监控服务：${(e as Error).message}` }], details: { error: (e as Error).message } };
+          const nodes = Array.from(nodeRegistryStore.values());
+          if (nodes.length === 0) {
+            return { content: [{ type: "text", text: "当前没有任何已注册的节点。请先在 Windows 上运行 setup-windows-node.ps1。" }], details: { count: 0 } };
           }
+          const lines = nodes.map((n: Record<string, unknown>) => {
+            const nodeName = n.node_name as string;
+            const nodeId = `node_${String(nodeName).replace(/[^a-zA-Z0-9]/g, "_")}`;
+            const platform = n.platform as string;
+            const hostname = n.hostname as string;
+            const ownerUserId = n.owner_userId as string;
+            const userTag = ownerUserId ? `（归属：${ownerUserId}）` : '（归属：未知）';
+            const lastSeen = nodeActivityStore.get(nodeId);
+            const status = lastSeen && (Date.now() - lastSeen) < 120000 ? "🟢 在线" : "🔴 离线";
+            return `${status} **${nodeId}** (${hostname ?? nodeName}, ${platform ?? "unknown"}) ${userTag}`;
+          });
+          return { content: [{ type: "text", text: `节点列表（共 ${nodes.length} 个）：\n\n${lines.join("\n")}` }], details: { count: nodes.length, nodes } };
         }
 
         if (p.action === "status") {
           if (!p.nodeId) return { content: [{ type: "text", text: "❌ status 操作需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
-          try {
-            const data = await nodeApi(`/node-monitor/nodes/${p.nodeId}`);
-            if (data.error) return { content: [{ type: "text", text: `❌ 节点不存在：${p.nodeId}` }], details: { error: data.error } };
-            const status = data.status === "online" ? "🟢 在线" : "🔴 离线";
-            const ago = data.lastSeenAgo ? `（${Math.floor(data.lastSeenAgo / 60)}分钟前）` : "";
-            const info = [
-              `节点ID: ${data.nodeId}`,
-              `主机名: ${data.hostname}`,
-              `用户: ${data.username ?? "-"}`,
-              `系统: ${data.os ?? "Unknown"}`,
-              `IP: ${data.ipAddress ?? "-"}`,
-              `SSH: ${data.sshPort ?? 22}`,
-              `状态: ${status} ${ago}`,
-              `Tunnel: ${data.tunnelHost ?? "-"}`,
-            ].join("\n");
-            return { content: [{ type: "text", info }], details: data };
-          } catch (e) {
-            return { content: [{ type: "text", text: `❌ 查询失败：${(e as Error).message}` }], details: { error: (e as Error).message } };
+          // 从所有注册节点中找匹配的
+          let nodeData: Record<string, unknown> | null = null;
+          for (const v of nodeRegistryStore.values()) {
+            const nName = v.node_name as string;
+            const nId = `node_${String(nName).replace(/[^a-zA-Z0-9]/g, "_")}`;
+            if (nId === p.nodeId) { nodeData = v; break; }
           }
+          if (!nodeData) return { content: [{ type: "text", text: `❌ 节点不存在：${p.nodeId}` }], details: { error: "node_not_found" } };
+          const lastSeen = nodeActivityStore.get(p.nodeId);
+          const status = lastSeen && (Date.now() - lastSeen) < 120000 ? "🟢 在线" : "🔴 离线";
+          const ago = lastSeen ? `（${Math.floor((Date.now() - lastSeen) / 60000)}分钟前）` : "";
+          const info = [
+            `节点ID: ${p.nodeId}`,
+            `节点名: ${nodeData.node_name}`,
+            `主机名: ${nodeData.hostname ?? "-"}`,
+            `平台: ${nodeData.platform ?? "unknown"}`,
+            `架构: ${nodeData.architecture ?? "-"}`,
+            `归属: ${nodeData.owner_userId ?? "未知"}`,
+            `注册时间: ${nodeData.registered_at_local ?? "-"}`,
+            `状态: ${status} ${ago}`,
+          ].join("\n");
+          return { content: [{ type: "text", info }], details: { ...nodeData, nodeId: p.nodeId, status: status.includes("🟢") ? "online" : "offline" } };
         }
 
         if (p.action === "invoke_command") {
           if (!p.nodeId) return { content: [{ type: "text", text: "❌ invoke_command 需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
           if (!p.command) return { content: [{ type: "text", text: "❌ invoke_command 需要提供 command。" }], details: { error: "missing_command" } };
 
-          try {
-            const statusData = await nodeApi(`/node-monitor/nodes/${p.nodeId}`);
-            if (statusData.error) return { content: [{ type: "text", text: `❌ 节点不存在：${p.nodeId}` }], details: { error: statusData.error } };
-            if (statusData.status !== "online") return { content: [{ type: "text", text: `❌ 节点 ${p.nodeId} 当前离线，无法执行命令。` }], details: { error: "node_offline" } };
+          // 检查节点是否存在
+          let found = false;
+          for (const v of nodeRegistryStore.values()) {
+            const nName = v.node_name as string;
+            const nId = `node_${String(nName).replace(/[^a-zA-Z0-9]/g, "_")}`;
+            if (nId === p.nodeId) { found = true; break; }
+          }
+          if (!found) return { content: [{ type: "text", text: `❌ 节点不存在：${p.nodeId}` }], details: { error: "node_not_found" } };
 
+          // 检查在线状态
+          const lastSeen = nodeActivityStore.get(p.nodeId);
+          if (!lastSeen || (Date.now() - lastSeen) >= 120000) {
+            return { content: [{ type: "text", text: `⚠️ 节点 ${p.nodeId} 当前离线（无心跳），远程命令可能失败。仍尝试执行...` }], details: { warning: "node_offline" } };
+          }
+
+          try {
             const output = execViaSsh(p.nodeId, p.command);
             const truncated = output.length > 4000 ? output.slice(0, 4000) + "\n...[输出已截断]" : output;
-
             return {
               content: [{ type: "text", text: `✅ 命令在 ${p.nodeId} 上执行成功：\n\n\`\`\`\n${truncated}\n\`\`\`` }],
               details: { nodeId: p.nodeId, command: p.command, outputLength: output.length, truncated: output.length > 4000 },
