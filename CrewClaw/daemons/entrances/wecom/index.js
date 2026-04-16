@@ -1729,6 +1729,87 @@ app.post('/api/demo-proxy/gen-invite', (req, res) => {
   res.json({ ok: true, code, name, invitedBy, scopeTags, expiresAt: expiresDate });
 });
 
+// ─── Windows 节点注册代理端点 ──────────────────────────────────────────────
+// 供 Windows 节点安装脚本 POST /api/node/register，实现节点注册到 Gateway
+// 实际转发到 Gateway 内部路由，Windows 节点无需直接访问 127.0.0.1:18789
+app.post('/api/node/register', async (req, res) => {
+  const { node_name, platform, architecture, gateway_url, registered_at } = req.body || {};
+  
+  if (!node_name) {
+    return res.status(400).json({ success: false, error: 'node_name is required' });
+  }
+  
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '696673d08d0ee98f3e66a30698ab4c1152b7c8784ae424d0';
+  const gatewayUrl = process.env.GATEWAY_URL || 'http://localhost:18789';
+  
+  try {
+    const response = await fetch(`${gatewayUrl}/api/node/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${gatewayToken}`,
+      },
+      body: JSON.stringify(req.body),
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      res.json({ success: true, message: 'Node registered', data });
+    } else {
+      const data = await response.json().catch(() => ({}));
+      res.status(response.status).json({ success: false, error: data.error || 'Registration failed' });
+    }
+  } catch (err) {
+    logger.error('Node registration proxy error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to connect to gateway' });
+  }
+});
+
+// ━━ Windows 节点代理：heartbeat / commands / results ━━━━━━━━━━━━━━━━━━━━━
+const _nodeGatewayUrl = () => process.env.GATEWAY_URL || 'http://localhost:18789';
+const _nodeGatewayToken = () => process.env.OPENCLAW_GATEWAY_TOKEN || '696673d08d0ee98f3e66a30698ab4c1152b7c8784ae424d0';
+
+app.post('/api/node/heartbeat', async (req, res) => {
+  try {
+    const response = await fetch(`${_nodeGatewayUrl()}/api/node/heartbeat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${_nodeGatewayToken()}` },
+      body: JSON.stringify(req.body),
+    });
+    res.status(response.status).json(await response.json().catch(() => ({})));
+  } catch (err) {
+    logger.error('Node heartbeat proxy error', { error: err.message });
+    res.status(502).json({ success: false, error: 'Gateway unreachable' });
+  }
+});
+
+app.get('/api/node/commands/:nodeName', async (req, res) => {
+  try {
+    const response = await fetch(`${_nodeGatewayUrl()}/api/node/commands/${req.params.nodeName}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${_nodeGatewayToken()}` },
+    });
+    res.status(response.status).json(await response.json().catch(() => ({})));
+  } catch (err) {
+    logger.error('Node commands proxy error', { error: err.message });
+    res.status(502).json({ success: false, error: 'Gateway unreachable' });
+  }
+});
+
+app.post('/api/node/results', async (req, res) => {
+  try {
+    const response = await fetch(`${_nodeGatewayUrl()}/api/node/results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${_nodeGatewayToken()}` },
+      body: JSON.stringify(req.body),
+    });
+    res.status(response.status).json(await response.json().catch(() => ({})));
+  } catch (err) {
+    logger.error('Node results proxy error', { error: err.message });
+    res.status(502).json({ success: false, error: 'Gateway unreachable' });
+  }
+});
+
 // ─── Demo TTS 端点 ──────────────────────────────────────────────────────────
 // 接受文本，调用 edge-tts 生成 MP3，返回 base64 给前端播放
 app.post('/api/demo-proxy/tts', async (req, res) => {
@@ -5435,6 +5516,13 @@ function startBotLongConnection() {
             clearTimeout(_ackTimer);
             logger.info('callGatewayAgent 返回', { fromUser, replyLen: replyText.length });
 
+            // ── 重复回复防护：检测是否陷入循环 ──
+            const isRepetition = checkReplyRepetition(fromUser, replyText);
+            if (isRepetition) {
+              logger.warn('重复回复防护触发，替换为简短提示', { fromUser });
+              replyText = '我检测到自己在重复回复，可能系统工具暂时不可用。我正在恢复中，稍后回复你。';
+            }
+
             // 写回本轮对话到 chatHistory buffer（供下条消息使用）
             appendChatHistory(_histKey, `${memberTag}${_text}`, stripMarkdownForWecom(replyText));
 
@@ -6053,6 +6141,48 @@ const taskManager = new TaskManager({
   getFamilyMembers:     () => familyMembers,
   getBotClient:         () => globalBotClient,
 });
+// ─── 重复回复防护 ────────────────────────────────────────────────────
+// 当 Agent 工具不可用或模型异常时，可能对同一上下文重复输出相似内容。
+// 检测最近 N 条回复的相似度，超过阈值时替换为简短提示，防止刷屏。
+const REPEAT_GUARD_MAX_HISTORY = 3;
+const REPEAT_GUARD_SIMILARITY_THRESHOLD = 0.6; // 前 200 字符的 Jaccard 相似度
+const replyHistory = new Map(); // userId → string[]（最近 N 条回复的前 200 字符）
+
+function jaccardSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const setA = new Set(a.split(''));
+  const setB = new Set(b.split(''));
+  let intersection = 0;
+  for (const c of setA) if (setB.has(c)) intersection++;
+  return intersection / (setA.size + setB.size - intersection);
+}
+
+function checkReplyRepetition(userId, replyText) {
+  const fingerprint = (replyText || '').slice(0, 200).replace(/\s+/g, '');
+  const history = replyHistory.get(userId) || [];
+
+  // 与最近 N 条比较
+  let similarCount = 0;
+  for (const prev of history) {
+    if (jaccardSimilarity(fingerprint, prev) > REPEAT_GUARD_SIMILARITY_THRESHOLD) {
+      similarCount++;
+    }
+  }
+
+  // 更新历史
+  history.push(fingerprint);
+  if (history.length > REPEAT_GUARD_MAX_HISTORY) history.shift();
+  replyHistory.set(userId, history);
+
+  // 连续 2+ 条高度相似 → 判定为重复循环
+  if (similarCount >= 2) {
+    // 清空历史，避免后续消息也触发
+    replyHistory.delete(userId);
+    return true;
+  }
+  return false;
+}
+
 // 群消息发送限流：避免 errcode=846607（aibot 频率限制）
 // WeCom aibot 同一群每次发送间隔至少 5s，否则触发频率限制静默丢弃
 const groupBotLastSend = new Map(); // chatId -> timestamp

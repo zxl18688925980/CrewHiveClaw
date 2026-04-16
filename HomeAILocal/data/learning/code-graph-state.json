@@ -1,7 +1,7 @@
 {
-  "last_run": "2026-04-14T21:54:49.229813",
-  "mode": "full",
-  "files": 17411,
-  "nodes": 167336,
-  "edges": 476238
+  "last_run": "2026-04-16T05:15:04.308279",
+  "mode": "incremental",
+  "files": 1787,
+  "nodes": 9961,
+  "edges": 41102
 }

@@ -5580,6 +5580,70 @@ const crewclawRoutingPlugin = {
       },
     });
 
+    // ━━ HTTP 路由：Windows 节点心跳+命令+结果端点 ━━━━━━━━━━━━━━━━━━━━
+    const nodeActivityStore = new Map<string, number>();
+    const nodePendingCommands = new Map<string, unknown[]>();
+    const nodeResultsStore = new Map<string, unknown>();
+
+    // POST /api/node/heartbeat — 记录节点活动时间戳
+    api.registerHttpRoute({
+      path: "/api/node/heartbeat",
+      auth: "plugin",
+      match: "exact",
+      handler: async (req, res) => {
+        if (req.method !== "POST") return false;
+        try {
+          let body = "";
+          for await (const chunk of req) body += chunk;
+          const data = JSON.parse(body) as Record<string, unknown>;
+          const nodeName = String(data.node_name ?? "");
+          if (nodeName) nodeActivityStore.set(nodeName, Date.now());
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+        } catch (_e) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+        }
+        return true;
+      },
+    });
+
+    // GET /api/node/commands/{nodeName} — 返回空命令列表（后续扩展）
+    api.registerHttpRoute({
+      path: "/api/node/commands/",
+      auth: "plugin",
+      match: "prefix",
+      handler: async (req, res) => {
+        if (req.method !== "GET") return false;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ commands: [] }));
+        return true;
+      },
+    });
+
+    // POST /api/node/results — 接收节点执行结果并存储
+    api.registerHttpRoute({
+      path: "/api/node/results",
+      auth: "plugin",
+      match: "exact",
+      handler: async (req, res) => {
+        if (req.method !== "POST") return false;
+        try {
+          let body = "";
+          for await (const chunk of req) body += chunk;
+          const data = JSON.parse(body) as Record<string, unknown>;
+          const nodeName = String(data.node_name ?? "");
+          if (nodeName) nodeResultsStore.set(nodeName, data);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+        } catch (_e) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: false, error: "Invalid request body" }));
+        }
+        return true;
+      },
+    });
+
     // ━━ 启动时任务（并发执行，不阻塞插件注册）━━━━━━━━━━━━━━━━━━━━━━━━
     // 1. Andy / Lisa 本地软件依赖管理（Agent 自调度，非系统级）
     //    安装缺失工具 / 到期升级 / 升级失败自动回退
@@ -13456,7 +13520,9 @@ last_used: null
             }
             const lines = nodes.map((n: Record<string, unknown>) => {
               const status = n.status === "online" ? "🟢 在线" : "🔴 离线";
-              return `${status} **${n.nodeId as string}** (${n.hostname as string ?? n.nodeId}, ${n.os as string})`;
+              const userId = n.userId as string;
+              const userTag = userId ? `（归属：${userId}）` : '（归属：未知）';
+              return `${status} **${n.nodeId as string}** (${n.hostname as string ?? n.nodeId}, ${n.os as string}) ${userTag}`;
             });
             return { content: [{ type: "text", text: `节点列表（共 ${nodes.length} 个）：\n\n${lines.join("\n")}` }], details: { count: nodes.length, nodes } };
           } catch (e) {

@@ -290,14 +290,14 @@ Setup 阶段需要按实际家庭情况填写 SOUL.md：
 **start-gateway.sh 中的关键模型变量：**
 
 ```bash
-# ── 三角色云端模型（经验证的默认选择）────────────────────────
+# ── 三角色云端模型（2026-04-16 业主指令）──────────────────────
 export ANDY_PROVIDER="deepseek"
 export ANDY_MODEL="deepseek-reasoner"
 
-export LISA_PROVIDER="minimax"
-export LISA_MODEL="MiniMax-M2.7"
+export LISA_PROVIDER="zai"
+export LISA_MODEL="GLM-5.1"
 
-# Lucas 模型在 openclaw.json 中配置（provider: deepseek, model: deepseek-chat）
+# Lucas 模型在 openclaw.json 中配置（provider: dashscope, model: qwen3.6-plus）
 
 # ── 本地模型（Ollama）────────────────────────────────────────
 export OLLAMA_BASE_URL="http://localhost:11434"
@@ -312,8 +312,8 @@ export WECOM_BOT_ID=xxxxx
 {
   "agents": {
     "lucas": {
-      "provider": "deepseek",
-      "model": "deepseek-chat"
+      "provider": "dashscope",
+      "model": "qwen3.6-plus"
     }
   }
 }
@@ -339,9 +339,9 @@ CHROMADB_URL=http://localhost:8001
 
 | 角色 | 当前默认 | 说明 |
 |------|---------|------|
-| Lucas | DeepSeek / deepseek-chat | 响应快，工具调用稳定 |
+| Lucas | DashScope / qwen3.6-plus | 响应快，工具调用稳定 |
 | Andy | DeepSeek / deepseek-reasoner（R1） | 设计大脑，CoT 推理驱动 spec/research |
-| Lisa | MiniMax / MiniMax-M2.7 | 编排评估，大上下文处理 opencode 输出 |
+| Lisa | ZhipuAI / GLM-5.1 | 编排评估，大上下文处理 opencode 输出 |
 
 修改 openclaw.json + start-gateway.sh 中对应变量并重启 Gateway 即可切换。
 
