@@ -37,6 +37,7 @@ import { spawn, execSync, spawnSync } from "node:child_process";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { createReadTool, createEditTool, createWriteTool, createBashTool, createGrepTool, createFindTool, createLsTool } from "@mariozechner/pi-coding-agent";
 import { AgentRegistry } from "./agent-registry.js";
 import { buildDynamicContext, applyContextBudget, type ContextResolvers, type BudgetConfig } from "./context-handler.js";
 import type { SessionParams } from "./context-sources.js";
@@ -98,6 +99,40 @@ const AGENT_THREAD_STORE  = 20;   // 最多保留 20 轮
 const AGENT_THREAD_INJECT = 10;   // 每次注入最近 10 轮
 const AGENT_THREAD_TTL    = 7 * 24 * 60 * 60 * 1000;  // 7 天过期
 try { mkdirSync(AGENT_THREAD_DIR, { recursive: true }); } catch (_e) {}
+
+// ── Lisa Coding Tools：pi-coding-agent → OpenClaw registerTool 桥接 ──────
+const LISA_CWD = HOME; // 路径解析基点 = $HOME，覆盖全项目
+
+function wrapCodingTool(
+  tool: { name: string; label: string; description: string; parameters: any; execute: any },
+  overrides: { label: string; description: string; needsWriteSandbox?: boolean },
+): (toolCtx: any) => any {
+  return (toolCtx: any) => ({
+    label: overrides.label,
+    name: tool.name,          // 保留原始名：read, edit, write, bash, grep, find, ls
+    description: overrides.description,
+    parameters: tool.parameters,
+    execute: async (toolCallId: string, params: any, signal?: AbortSignal) => {
+      // Agent 门控：只有 Lisa 能用编码工具
+      if (toolCtx.agentId && toolCtx.agentId !== IMPLEMENTOR_AGENT_ID) {
+        return { content: [{ type: "text", text: "该工具是 Lisa 专属编码工具。" }], details: { error: "wrong_agent" } };
+      }
+      // 写操作路径沙箱（与 write_file 一致）
+      if (overrides.needsWriteSandbox && params.path) {
+        const expanded = params.path.startsWith("~/") ? HOME + params.path.slice(1) : params.path;
+        if (expanded.startsWith("/") && !expanded.startsWith(HOME + "/") && expanded !== HOME) {
+          return { content: [{ type: "text", text: "路径越权：只能操作主目录内的文件。" }], details: { error: "path_violation" } };
+        }
+      }
+      try {
+        return await tool.execute(toolCallId, params, signal);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { content: [{ type: "text", text: `执行失败：${msg}` }], details: { error: msg } };
+      }
+    },
+  });
+}
 
 // ── 增量蒸馏冷却（事件驱动感知侧，30 分钟/用户）────────────────────────────
 const DISTILL_COOLDOWN_MS               = 30 * 60 * 1000;
@@ -5512,6 +5547,39 @@ const crewclawRoutingPlugin = {
 
   register(api: OpenClawPluginApi) {
 
+    // ━━ HTTP 路由：Windows 节点注册端点 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    //
+    // windows-node-setup.ps1 在安装最后会 POST 到 /api/node/register 注册节点。
+    // 简单内存存储，记录节点注册信息，返回 200。
+
+    const nodeRegistryStore = new Map<string, Record<string, unknown>>();
+
+    api.registerHttpRoute({
+      path: "/api/node/register",
+      auth: "plugin",
+      match: "exact",
+      handler: async (req, res) => {
+        if (req.method !== "POST") return false;
+        try {
+          let body = "";
+          for await (const chunk of req) body += chunk;
+          const data = JSON.parse(body) as Record<string, unknown>;
+          const nodeName = String(data.node_name ?? "");
+          if (nodeName) {
+            data.registered_at_local = nowCST();
+            nodeRegistryStore.set(nodeName, data);
+            api.logger.info(`[node-register] Node registered: ${nodeName} (${data.platform})`);
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, message: "Node registered" }));
+        } catch (_e) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: false, error: "Invalid request body" }));
+        }
+        return true;
+      },
+    });
+
     // ━━ 启动时任务（并发执行，不阻塞插件注册）━━━━━━━━━━━━━━━━━━━━━━━━
     // 1. Andy / Lisa 本地软件依赖管理（Agent 自调度，非系统级）
     //    安装缺失工具 / 到期升级 / 升级失败自动回退
@@ -7722,8 +7790,8 @@ last_used: null
         }
       }
       // ── Lisa edit-tool 路径 codebase_observation ──────────────────────────────
-      // Lisa 有时选择直接用 edit/write 工具而非 run_opencode（工程判断）。
-      // run_opencode 路径由 proc.on("close") 写入；edit 路径没有此钩子，在 agent_end 补写。
+      // Lisa 直接编码工具（read/edit/write/bash/grep/find/ls）路径：
+      // run_opencode 路径由 proc.on("close") 写入；直接编码路径没有此钩子，在 agent_end 补写。
       if (ctx.agentId === IMPLEMENTOR_AGENT_ID && !isTestSession) {
         const usedEditTools = (toolUseCounts["edit"] ?? 0) + (toolUseCounts["write"] ?? 0) > 0;
         const usedOpencode  = (toolUseCounts["run_opencode"] ?? 0) > 0;
@@ -9468,9 +9536,11 @@ last_used: null
               IMPLEMENTOR_AGENT_ID,
               [
                 `【Implementation Spec】\n${p.spec}`,
-                "请阅读以上 spec，使用 run_opencode 工具在项目目录执行代码实现。",
+                "请阅读以上 spec，选择合适的实现方式：",
+                "• 简单修改（单文件、加路由、改字段）→ 用 read 读代码 + edit 修改 + bash 验证",
+                "• 复杂实现（多文件联动、需要 AI 迭代）→ 调用 run_opencode",
                 hasEditPatches
-                  ? "⚠️ 本 spec 包含 edit_patches 字段。对于 edit_patches 中定义的精准修改，请使用 patch_file 工具逐条直接执行（无需 run_opencode）。对于 edit_patches 之外的复杂实现，仍使用 run_opencode。"
+                  ? "• edit_patches 字段 → 用 edit 工具逐条执行（精准匹配比 patch_file 更好）"
                   : "",
                 "实现完成后输出交付报告：1) 完成了什么 2) 生成的文件路径 3) 验证结果（是否成功/失败原因）4) 使用方式",
                 "如果 spec 包含 Python 脚本，请在报告中包含 py_compile 验证结果（命令：python3 -m py_compile <脚本路径>）",
@@ -9480,47 +9550,10 @@ last_used: null
               threadId,
               DESIGNER_AGENT_ID,
             );
-            // 检测 Lisa 是否绕过了 run_opencode（用文本描述假装 edit/write 工具）
-            // patch_file 是合法工具（spec 含 edit_patches 时可用），不算绕过
-            const lisaUsedPatchFile = lisaResponse && /patch_file/.test(lisaResponse);
-            const lisaBypassedOpencode = lisaResponse && !lisaUsedPatchFile && (
-              /直接(用|使用).{0,10}edit.{0,10}工具/.test(lisaResponse) ||
-              /直接(用|使用).{0,10}write.{0,10}工具/.test(lisaResponse) ||
-              /按照.{0,20}工程判断.{0,20}应该直接/.test(lisaResponse)
-            );
-            if (lisaBypassedOpencode) {
-              // Lisa 幻觉了 edit/write 工具，任务失败，不能接受这个"交付"
-              void notifyEngineer(
-                `【Lisa 幻觉工具调用 · ${reqId}】Lisa 绕过了 run_opencode，声称直接用 edit/write 工具修改了文件，但这些工具不存在。代码未被修改，任务标记失败。\n\nLisa 原话节选：${lisaResponse.slice(0, 300)}`,
-                "pipeline", IMPLEMENTOR_AGENT_ID,
-              );
-              // Lucas 知情：Lisa 伪造交付，Lucas 需要应对用户可能的追问
-              void callGatewayAgent(FRONTEND_AGENT_ID, [
-                `【Lisa 幻觉工具调用检测 · ${reqId}】`,
-                `Lisa 绕过了 run_opencode，尝试用不存在的 edit/write 工具"实现"代码。`,
-                `交付已被标记为无效。Lucas 无需干预，仅知情。`,
-                `如果用户问起这个任务，告知"还在处理中"或"遇到了问题需要重新实现"。`,
-              ].join("\n"), 20_000, undefined, DESIGNER_AGENT_ID);
-              responseText = "❌ Lisa 实现失败：Lisa 绕过了 run_opencode，用不存在的 edit 工具假装修改了文件。代码未被实际更改。";
-              success = false;
-              // Andy 是 spec 的作者，应知道 Lisa bypass 并决定下一步
-              void (async () => {
-                try {
-                  await callGatewayAgent(DESIGNER_AGENT_ID, [
-                    `【Lisa 实现失败 · ${reqId}】Lisa 绕过了 run_opencode，用文字描述假装修改了文件，实现无效。`,
-                    `Spec 摘要：${p.spec.slice(0, 300)}`,
-                    ``,
-                    `请你决定下一步（选一个行动）：`,
-                    `1. spec 表述可以更明确以减少歧义 → 调用 trigger_lisa_implementation 提交修订版`,
-                    `2. 需要拆小任务 → 重新设计并分批触发`,
-                    `3. 判断是 Lisa 的系统性问题 → 调用 notify_engineer`,
-                  ].join("\n"), 180_000, threadId, FRONTEND_AGENT_ID);
-                } catch (_e) { /* 静默，不阻塞主流程 */ }
-              })();
-            } else {
-              success = !!lisaResponse;
-            }
-            if (lisaResponse && !lisaBypassedOpencode) {
+            // Lisa 现在有真实编码工具（read/edit/write/bash/grep/find/ls），
+            // 不再需要幻觉绕过检测。run_opencode 保留为复杂任务备用。
+            success = !!lisaResponse;
+            if (lisaResponse) {
               // ── 阶段推进：lisa_implementing → andy_verifying ──────────────────
               {
                 const phaseEntries = readTaskRegistry();
@@ -10108,6 +10141,55 @@ last_used: null
         };
       },
     }));
+
+    // ━━ Lisa Coding Tools：来自 @mariozechner/pi-coding-agent ━━━━━━━━━━━━━━
+    // 框架层：直接编码能力，run_opencode 降级为复杂任务备用
+    {
+      const codingRead  = createReadTool(LISA_CWD);
+      const codingEdit  = createEditTool(LISA_CWD);
+      const codingWrite = createWriteTool(LISA_CWD);
+      const codingBash  = createBashTool(LISA_CWD);
+      const codingGrep  = createGrepTool(LISA_CWD);
+      const codingFind  = createFindTool(LISA_CWD);
+      const codingLs    = createLsTool(LISA_CWD);
+
+      api.registerTool(wrapCodingTool(codingRead, {
+        label: "读取文件",
+        description: "Lisa 专属编码工具：读取文件内容。支持文本和图片。大文件自动截断（2000行/50KB），用 offset/limit 继续读取。参数：path（路径）、offset（起始行）、limit（行数限制）。适用于阅读源代码、查看配置、理解已有实现。",
+      }));
+
+      api.registerTool(wrapCodingTool(codingEdit, {
+        label: "精准编辑文件",
+        description: "Lisa 专属编码工具：对已有文件做精准文本替换。oldText 必须与文件内容完全匹配（含空格和缩进）。参数：path、oldText（原始文本）、newText（替换文本）。适用于修改代码、修复 bug、调整配置。创建新文件用 write 工具。路径限制：只能操作主目录内文件。",
+        needsWriteSandbox: true,
+      }));
+
+      api.registerTool(wrapCodingTool(codingWrite, {
+        label: "写入文件",
+        description: "Lisa 专属编码工具：创建或覆盖文件，父目录不存在时自动创建。参数：path（路径）、content（内容）。适用于创建新文件、完全重写。小修改优先用 edit 工具。路径限制：只能写入主目录内文件。",
+        needsWriteSandbox: true,
+      }));
+
+      api.registerTool(wrapCodingTool(codingBash, {
+        label: "执行命令",
+        description: "Lisa 专属编码工具：在 shell 中执行命令。参数：command（命令）、timeout（超时秒数，可选）。适用于运行测试（node --check）、安装依赖、查看进程、编译检查。输出过长时自动截断。",
+      }));
+
+      api.registerTool(wrapCodingTool(codingGrep, {
+        label: "搜索代码",
+        description: "Lisa 专属编码工具：在文件中搜索文本（支持正则），底层 ripgrep 极快。参数：pattern（搜索模式）、path（目录）、glob（文件过滤，如 *.ts）、ignoreCase（忽略大小写）、context（上下文行数）、limit（结果上限）。适用于查找函数定义、搜索错误信息、定位代码。",
+      }));
+
+      api.registerTool(wrapCodingTool(codingFind, {
+        label: "查找文件",
+        description: "Lisa 专属编码工具：按文件名模式查找文件，glob 匹配，自动遵循 .gitignore。参数：pattern（如 *.ts、**/*.spec.ts）、path（目录）、limit（结果上限）。适用于定位文件、探索项目结构。",
+      }));
+
+      api.registerTool(wrapCodingTool(codingLs, {
+        label: "列出目录",
+        description: "Lisa 专属编码工具：列出目录内容（文件和子目录）。参数：path（目录路径）、limit（条目上限）。适用于快速查看目录结构、确认文件存在。",
+      }));
+    }
 
     // ━━ report_implementation_issue：Lisa 专属，实现遇阻时向 Andy 反馈 ━━━━━━
     //
@@ -13316,6 +13398,120 @@ last_used: null
       },
     }));
 
+
+    // ── nodes：Windows 远程节点控制（Cloudflare Tunnel + SSH）────────────────
+    //
+    // 通过 SSH + Cloudflare Tunnel 远程控制 Windows 节点。
+    // 支持：列出节点、查询状态、在节点上执行命令。
+    // 节点需先运行 setup-windows-node.ps1 完成安装配置。
+
+    const NODE_MONITOR_URL = process.env.NODE_MONITOR_URL || "http://localhost:3004";
+
+    function nodeApi(path, options = {}) {
+      const url = `${NODE_MONITOR_URL}${path}`;
+      return fetch(url, { headers: { "Content-Type": "application/json" }, ...options }).then(r => r.json());
+    }
+
+    function execViaSsh(nodeId, command) {
+      const { execSync } = require("child_process");
+      const sshAlias = `windows-${nodeId}`;
+      const psCmd = command.includes(" ") && !command.startsWith("powershell")
+        ? `powershell -NoProfile -Command "${command.replace(/"/g, '\\"')}" `
+        : command;
+      const fullCmd = `ssh -o ConnectTimeout=30 -o BatchMode=yes ${sshAlias} ${psCmd}`;
+      return execSync(fullCmd, { encoding: "utf8", timeout: 300000, maxBuffer: 10 * 1024 * 1024 });
+    }
+
+    api.registerTool((toolCtx) => ({
+      label: "远程节点控制（Andy/Lisa）",
+      name: "nodes",
+      description: [
+        "管理和控制 Windows 远程节点（Cloudflare Tunnel + SSH）。",
+        "action=list：列出所有已注册的节点及在线状态。",
+        "action=status：查询指定节点的详细信息和在线状态，提供 nodeId。",
+        "action=invoke_command：在指定节点上执行命令，提供 nodeId + command；返回命令输出。",
+        "节点需先运行 setup-windows-node.ps1 完成安装，然后运行 setup-mac-config.sh 在 Mac 端完成配置。",
+        "适用场景：需要远程执行 Windows 命令时使用，如查看系统信息、运行脚本等。",
+      ].join("\n"),
+      parameters: Type.Object({
+        action: Type.String({ description: '"list" | "status" | "invoke_command"' }),
+        nodeId: Type.Optional(Type.String({ description: 'action=status/invoke_command 时指定节点ID' })),
+        command: Type.Optional(Type.String({ description: 'action=invoke_command 时要执行的命令（PowerShell 语法）' })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        const ALLOWED = new Set([DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
+        if (!ALLOWED.has(toolCtx.agentId ?? "")) {
+          return { content: [{ type: "text", text: "❌ nodes 工具仅 Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+        }
+
+        const p = params as { action: string; nodeId?: string; command?: string };
+
+        if (p.action === "list") {
+          try {
+            const data = await nodeApi("/node-monitor/nodes");
+            const nodes: Record<string, unknown>[] = data.nodes ?? [];
+            if (nodes.length === 0) {
+              return { content: [{ type: "text", text: "当前没有任何已注册的节点。请先在 Windows 上运行 setup-windows-node.ps1。" }], details: { count: 0 } };
+            }
+            const lines = nodes.map((n: Record<string, unknown>) => {
+              const status = n.status === "online" ? "🟢 在线" : "🔴 离线";
+              return `${status} **${n.nodeId as string}** (${n.hostname as string ?? n.nodeId}, ${n.os as string})`;
+            });
+            return { content: [{ type: "text", text: `节点列表（共 ${nodes.length} 个）：\n\n${lines.join("\n")}` }], details: { count: nodes.length, nodes } };
+          } catch (e) {
+            return { content: [{ type: "text", text: `❌ 无法连接监控服务：${(e as Error).message}` }], details: { error: (e as Error).message } };
+          }
+        }
+
+        if (p.action === "status") {
+          if (!p.nodeId) return { content: [{ type: "text", text: "❌ status 操作需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
+          try {
+            const data = await nodeApi(`/node-monitor/nodes/${p.nodeId}`);
+            if (data.error) return { content: [{ type: "text", text: `❌ 节点不存在：${p.nodeId}` }], details: { error: data.error } };
+            const status = data.status === "online" ? "🟢 在线" : "🔴 离线";
+            const ago = data.lastSeenAgo ? `（${Math.floor(data.lastSeenAgo / 60)}分钟前）` : "";
+            const info = [
+              `节点ID: ${data.nodeId}`,
+              `主机名: ${data.hostname}`,
+              `用户: ${data.username ?? "-"}`,
+              `系统: ${data.os ?? "Unknown"}`,
+              `IP: ${data.ipAddress ?? "-"}`,
+              `SSH: ${data.sshPort ?? 22}`,
+              `状态: ${status} ${ago}`,
+              `Tunnel: ${data.tunnelHost ?? "-"}`,
+            ].join("\n");
+            return { content: [{ type: "text", info }], details: data };
+          } catch (e) {
+            return { content: [{ type: "text", text: `❌ 查询失败：${(e as Error).message}` }], details: { error: (e as Error).message } };
+          }
+        }
+
+        if (p.action === "invoke_command") {
+          if (!p.nodeId) return { content: [{ type: "text", text: "❌ invoke_command 需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
+          if (!p.command) return { content: [{ type: "text", text: "❌ invoke_command 需要提供 command。" }], details: { error: "missing_command" } };
+
+          try {
+            const statusData = await nodeApi(`/node-monitor/nodes/${p.nodeId}`);
+            if (statusData.error) return { content: [{ type: "text", text: `❌ 节点不存在：${p.nodeId}` }], details: { error: statusData.error } };
+            if (statusData.status !== "online") return { content: [{ type: "text", text: `❌ 节点 ${p.nodeId} 当前离线，无法执行命令。` }], details: { error: "node_offline" } };
+
+            const output = execViaSsh(p.nodeId, p.command);
+            const truncated = output.length > 4000 ? output.slice(0, 4000) + "\n...[输出已截断]" : output;
+
+            return {
+              content: [{ type: "text", text: `✅ 命令在 ${p.nodeId} 上执行成功：\n\n\`\`\`\n${truncated}\n\`\`\`` }],
+              details: { nodeId: p.nodeId, command: p.command, outputLength: output.length, truncated: output.length > 4000 },
+            };
+          } catch (e) {
+            const err = e as Error;
+            const output = err.message || String(e);
+            return { content: [{ type: "text", text: `❌ 命令执行失败：${output}` }], details: { nodeId: p.nodeId, command: p.command, error: output } };
+          }
+        }
+
+        return { content: [{ type: "text", text: `❌ 未知 action: ${p.action}` }], details: { error: "unknown_action" } };
+      },
+    }));
 
     // ── session_todo：Andy/Lisa 会话内任务分解追踪（Hermes todo_tool 对齐）──────
     //

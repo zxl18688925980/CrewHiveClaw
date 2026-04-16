@@ -7,8 +7,27 @@
 > **第二个工程师使用方式**：先读最新的 10~20 条（最新在文件末尾），快速建立「系统已做了什么」的全景图，再用 `CLAUDE.md 当前状态区` 定位当前任务起点。
 >
 > **维护方式**：Claude Code 主动追加，不删不改。查找特定版本用 `grep "^## v"` 或按日期关键字搜索。
-> **版本**: v685
-> **最后更新**: 2026-04-15
+> **版本**: v687
+> **最后更新**: 2026-04-16
+
+---
+
+## v687 · Lisa 直接编码能力——Claude Code 级别（2026-04-16）
+
+**干预类型**：架构变更（L2 Lisa 能力升级）
+
+**背景**：Lisa 原来是"编排者"——所有编码任务必须委托 `run_opencode`（外部 CLI 进程）。她没有直接读写代码、搜索、执行命令的能力。AGENTS.md 铁律写着"你没有 edit 工具。你没有 write 工具。"这导致简单修改也要走完整的 opencode 流程，效率低、token 消耗大。
+
+**改造内容**：
+1. **工具层**：接入 `@mariozechner/pi-coding-agent` 的 7 个编码工具（read/edit/write/bash/grep/find/ls），直接注册给 Lisa
+2. **桥接层**：`wrapCodingTool` 桥接函数，含 agent 门控（只有 Lisa 可用）+ 写操作路径沙箱（$HOME 内）
+3. **幻觉防护移除**：Lisa 现在有真实的 edit/write 工具，原有的 `lisaBypassedOpencode` 幻觉检测块已删除
+4. **认知层**：重写 Lisa AGENTS.md + TOOLS.md，教她"直接编码优先，run_opencode 备用"的工作流
+5. **触发消息更新**：Andy→Lisa 的指令从"必须用 run_opencode"改为"简单任务直接编码，复杂任务用 run_opencode"
+
+**工具数变化**：39 → 46（Lisa 4专属 → 4+7 专属）
+
+**框架层判断**：这是框架层机制。任何 OpenClaw 部署都可以给 implementor agent 注册编码工具。工具名用原始名（read/edit/write/bash/grep/find/ls），不与现有工具冲突（现有：read_file/write_file/list_files/patch_file）。
 
 ---
 
