@@ -13425,7 +13425,7 @@ last_used: null
 
     api.registerTool((toolCtx) => ({
       label: "远程节点控制（Andy/Lisa）",
-      name: "nodes",
+      name: "manage_nodes",
       description: [
         "管理和控制 Windows 远程节点（Cloudflare Tunnel + SSH）。",
         "action=list：列出所有已注册的节点及在线状态。",
