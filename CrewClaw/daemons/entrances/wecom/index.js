@@ -2561,12 +2561,16 @@ async function executeMainTool(toolName, toolInput) {
         const status = p.pm2_env.status === 'online' ? '✅' : '❌';
         return `${status} ${p.name}  状态:${p.pm2_env.status}  重启:${p.pm2_env.restart_time}次  内存:${Math.round((p.monit?.memory || 0) / 1024 / 1024)}MB`;
       });
-      const services = [['gateway', 18789], ['wecom', 3003]];
-      const health = await Promise.all(services.map(async ([name, port]) => {
+      // gateway 用 /health（OpenClaw Gateway 原生端点）；wecom 用 /api/health（自定义端点）
+      const services = [['gateway', 18789, '/health'], ['wecom', 3003, '/api/health']];
+      const health = await Promise.all(services.map(async ([name, port, healthPath]) => {
         try {
-          await axios.get(`http://localhost:${port}/api/health`, { timeout: 2000 });
+          await axios.get(`http://localhost:${port}${healthPath}`, { timeout: 2000 });
           return `✅ ${name}:${port}`;
-        } catch {
+        } catch (err) {
+          const code = err.response?.status;
+          // 4xx（含 404）= 服务在线但路径不对，不算无响应
+          if (code && code >= 400 && code < 500) return `⚠️ ${name}:${port} 在线但端点异常(${code})`;
           return `❌ ${name}:${port} 无响应`;
         }
       }));
@@ -5610,7 +5614,7 @@ function startBotLongConnection() {
       sendFn: (msg, userId, history, extra) => {
         // sendFn 在聚合器 flush 时被调用，msg 可能是原 messageToLucas 或合并后的 prompt
         const { isGroup: _isGroup, chatId: _chatId, frame: _frame, groupAckTimer: _ackTimer, histKey: _histKey, text: _text } = extra;
-        (async () => {
+        enqueueUserRequest(fromUser, async () => {
           try {
             // 通过 Gateway → Lucas 嵌入式 agent（crewclaw-routing 插件处理三层路由）
             logger.info('callGatewayAgent 开始', { fromUser, historyRounds: history.length / 2 | 0 });
@@ -5698,7 +5702,7 @@ function startBotLongConnection() {
               logger.error('后备回复发送失败', { error: fallbackSendErr.message });
             }
           }
-        })();
+        });
       },
     });
   });
@@ -6234,6 +6238,16 @@ class MessageAggregator {
 }
 
 const messageAggregator = new MessageAggregator();
+
+// ─── per-user 请求队列：同一用户的请求串行化，防止并发打挂 Gateway ────────
+// 每个用户同时只有一个 callGatewayAgent 在跑，后续消息等前一条回来再发。
+const _userQueues = new Map(); // userId → Promise
+function enqueueUserRequest(userId, fn) {
+  const prev = _userQueues.get(userId) || Promise.resolve();
+  const next = prev.then(fn).catch(() => {});
+  _userQueues.set(userId, next);
+  next.then(() => { if (_userQueues.get(userId) === next) _userQueues.delete(userId); });
+}
 
 // ─── 抖音转录结果缓冲：多条抖音完成时合并推送 ──────────────────────────
 const transcriptionBuffer = new Map(); // userId → Array<{ meta, douyinUrl, memberTag }>
