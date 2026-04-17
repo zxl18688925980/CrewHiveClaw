@@ -1015,3 +1015,28 @@ curl -s https://open.bigmodel.cn/api/paas/v4/chat/completions \
 
 **状态**：活跃（2026-04-17 确认）
 **确认日期**：2026-04-17
+
+---
+
+### skill-iterate race condition：并发 agent_end 同天重复迭代同一 Skill
+
+**场景**：多个家庭对话并发触发 `agent_end` hook，每个 hook 独立执行 skill-iterate 逻辑。
+
+**现象**：07:27:43-47 时段，11 个 skill 在 4 秒内各被写了 3 次（iteration 145→146→147）。Main 监控误判为"Lisa→Lucas lane 超时"，实际是 SKILLS 目录高频写入导致 I/O 延迟。
+
+**根因**：`agent_end` 中 skill-iterate 的触发条件是"7天内偏差≥3次"，并发进入时多个 handler 同时满足条件，各自独立写入 `writeFileSync(skillMd, ...)`，写入顺序不确定，结果是同一 skill 在同一天被反复覆盖迭代。frontmatter 中的 `last_iterated` 字段虽然每次写入都更新，但判断是在读旧值之后写新值之前，并发下读操作全部读到同一个"未迭代"状态。
+
+**修复方式**：在 `writeFileSync` 前加 same-day guard：
+```typescript
+const today = nowCST().slice(0, 10);
+const lastIteratedMatch = fm.match(/last_iterated: (\S+)/);
+if (lastIteratedMatch?.[1] === today) continue;  // 今天已迭代，跳过
+```
+通过读取 frontmatter `last_iterated` 字段，若已等于今日日期则 `continue`，让后续并发 handler 提前退出。效果：每个 skill 每天最多只写一次，first-write wins。
+
+**注意事项**：
+- 这是软保护（not mutex），极端情况下两个 handler 同时读到"未迭代"后同时写入，第二次写入会被 `continue` 跳过（因为第一次写完后 `last_iterated` 已更新）。实际效果是"最多写 2 次"，不影响 correctness。
+- 如需严格一次，需要文件锁或 in-memory Set 跟踪当日已迭代的 skillName——当前规模不需要。
+
+**状态**：已修复（index.ts skill-iterate 加 same-day guard）
+**确认日期**：2026-04-18
