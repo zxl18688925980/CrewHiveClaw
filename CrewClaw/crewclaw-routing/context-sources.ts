@@ -175,14 +175,6 @@ export const contextSources: Record<string, ContextSource[]> = {
       tier: 3,
     },
 
-    // 进行中需求
-    {
-      source: "chromadb", id: "pending-requirements",
-      collection: "requirements", queryMode: "pending-requirements",
-      topK: 5, label: "进行中需求", inject: "append-system",
-      tier: 3,
-    },
-
     // 团队近期动态
     {
       source: "chromadb", id: "agent-interactions",
@@ -412,14 +404,6 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "agent_interactions", queryMode: "agent-interactions", agentFilter: "andy",
       topK: 3, label: "协作历史", inject: "prepend",
       tier: 3,
-    },
-
-    // 进行中需求（Andy 判断是否已有能力覆盖用）
-    {
-      source: "chromadb", id: "pending-requirements",
-      collection: "requirements", queryMode: "pending-requirements",
-      topK: 5, label: "进行中需求", inject: "prepend",
-      tier: 2,
     },
 
     // 历史实现记录（过渡态：写入 Kuzu code_history 节点后接管）

@@ -2613,15 +2613,42 @@ async function queryPendingSchedulableRequirements(): Promise<string> {
 // 仅返回 outcome="" 的进行中需求，提醒 Andy 有哪些需求还在跑
 
 async function queryPendingRequirements(prompt: string): Promise<string> {
+  // 语义相关性阈值：cosine distance > 0.55 视为无关，不注入
+  // 防止「当前最近任务」污染无关咨询（如 ask_andy 问转录机制时注入 Windows 节点任务）
+  const RELEVANCE_THRESHOLD = 0.55;
   try {
     const embedding = await embedText(prompt);
-    const raw = await chromaQuery("requirements", embedding, 6, { outcome: { $eq: "" } });
-    const results = timeWeightedRerank(raw, 3);
-    if (results.length === 0) return "";
-    const lines = results.map(r => {
-      const meta = r.metadata as { intentType?: string; timestamp?: string };
-      const date = toCST(meta.timestamp);
-      return `- [${date}] ${r.document.slice(0, 100)}（${meta.intentType ?? ""}）`;
+    const colId = await getChromaCollectionId("requirements");
+    const resp = await fetch(`${CHROMA_BASE}/${colId}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query_embeddings: [embedding],
+        n_results: 6,
+        include: ["documents", "metadatas", "distances"],
+        where: { outcome: { $eq: "" } },
+      }),
+    });
+    if (!resp.ok) return "";
+    const data = await resp.json() as {
+      documents: string[][];
+      metadatas: Record<string, unknown>[][];
+      distances: number[][];
+    };
+    const docs  = data.documents[0] ?? [];
+    const metas = data.metadatas[0] ?? [];
+    const dists = data.distances[0] ?? [];
+
+    // 过滤不相关结果，再取 top-3
+    const relevant = docs
+      .map((doc, i) => ({ doc, meta: metas[i] ?? {}, dist: dists[i] ?? 1 }))
+      .filter(item => item.dist <= RELEVANCE_THRESHOLD)
+      .slice(0, 3);
+
+    if (relevant.length === 0) return "";
+    const lines = relevant.map(({ doc, meta }) => {
+      const m = meta as { intentType?: string; timestamp?: string };
+      return `- [${toCST(m.timestamp)}] ${doc.slice(0, 100)}（${m.intentType ?? ""}）`;
     });
     return `【进行中的需求】\n${lines.join("\n")}`;
   } catch (_e) {
@@ -2867,9 +2894,12 @@ async function callGatewayAgent(
   const historyMessages = threadId ? buildAgentThreadMessages(threadId) : [];
   const messages = [...historyMessages, { role: "user", content: message }];
 
-  // 跨 Agent 通信时，用 Agent ID 作为 user，避免目标 Agent 误认为在与人类用户对话
-  // 例如 Lucas→Andy 时，Andy 看到 user=lucas 而非 ZengXiaoLong，不会称「爸爸」
-  const user = callerAgentId ? `agent:${callerAgentId}` : undefined;
+  // 跨 Agent 通信时，用 Agent ID + timestamp 作为 user：
+  //   - Agent ID 前缀让目标 Agent 知道发起方是 Agent 而非用户，不会称「爸爸」
+  //   - timestamp 后缀确保每次调用是独立 session（per-call session），
+  //     与 Lucas wecom 入口的 userId:timestamp 设计一致，避免 session 跨任务累积污染
+  //   - 历史连续性由 threadId 机制保证，不依赖 session 持久化
+  const user = `agent:${callerAgentId ?? agentId}:${Date.now()}`;
 
   const resp = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
     method: "POST",
