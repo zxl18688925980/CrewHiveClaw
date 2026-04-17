@@ -178,17 +178,11 @@ Step 5：理解系统现状
   09-evolution-version.md（架构决策全记录）
 ```
 
-### 关键陷阱（重建时最常见的坑）
+### 重建者须知
 
-1. **jiti 缓存**：修改 `crewclaw-routing/index.ts` 后，即使 Gateway 重启，如果不清除 `node_modules/.cache/jiti/` 目录，Gateway 仍从缓存加载旧代码——等于没改。修改后必须先跑 `check-plugin.sh` 编译验证，再清缓存重启。
+这套系统踩过不少坑。有些是平台层面的硬约束（组件析构崩溃、API 静默截断），有些是架构设计里容易犯的认知错误（比如以为写进配置文件的规则 Agent 会一直记得——不会，每轮都要重新注入）。
 
-2. **Kuzu SIGBUS（macOS ARM64）**：Kuzu 0.11.3 析构时在 macOS ARM64 触发 SIGBUS。所有使用 Kuzu 的 Python 脚本，数据操作完成后必须调用 `os._exit(0)`，防止 GC 触发析构崩溃。
-
-3. **ChromaDB 分页**：单次 `get` 最多返回 500 条。集合超 500 条后不分页，新数据静默丢失——不报错，只是查不到。所有遍历集合的查询必须分页循环。
-
-4. **行为规则必须每轮注入**：AGENTS.md 里的行为约束必须通过 `appendSystemContext` 每轮注入，不能依赖 Agent 长期记忆。规则不注入，等于不存在。
-
-5. **推理模型 max_tokens 陷阱**：GLM-5.1、DeepSeek R1 等推理模型响应含 `reasoning_content`（思考过程）和 `content`（实际输出）两个字段。`max_tokens` 太小时，token 全被思考耗尽，`content` 返回空字符串，HTTP 200 无报错。推理模型 `max_tokens` ≥ 2000。
+这些坑的技术细节记录在两个地方：[10-engineering-notes.md](10-engineering-notes.md) 收录具体的实现陷阱和平台约束；[09-evolution-version.md](09-evolution-version.md) 记录每次踩坑的决策过程和修复方案。第二个工程师重建时，理性脑应该在 Step 1 阅读阶段把这两份文档过一遍——不用全记住，但知道「有这些坑」比「踩了才知道」省太多时间。
 
 ### 如果你是感性脑（业主/系统工程师）
 
