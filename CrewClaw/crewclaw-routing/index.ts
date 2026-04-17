@@ -7832,10 +7832,13 @@ ${toolDescriptions}
                           .slice(0, 5)
                           .map(([t]) => t);
                         if (topTools.length >= 2) {
+                          const today = nowCST().slice(0, 10);
+                          // same-day guard：防止并发 agent_end 在同一天对同一 skill 重复迭代
+                          const lastIteratedMatch = fm.match(/last_iterated: (\S+)/);
+                          if (lastIteratedMatch?.[1] === today) continue;
                           const newSteps = topTools.map(t => `- ${t}: 根据实际使用模式自动更新`).join("\n");
                           const iterationMatch = fm.match(/iteration_count: (\d+)/);
                           const iterationCount = parseInt(iterationMatch?.[1] ?? "0") + 1;
-                          const today = nowCST().slice(0, 10);
                           // 更新 frontmatter
                           let newFm = fm
                             .replace(/status: \w+/, "status: active")
