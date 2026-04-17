@@ -5591,6 +5591,19 @@ const crewclawRoutingPlugin = {
     //   gateway_url     — 节点上 Gateway 地址（可选）
 
     const nodeRegistryStore = new Map<string, Record<string, unknown>>();
+    const NODE_REGISTRY_FILE = join(PROJECT_ROOT, "HomeAI", "Data", "node-registry.json");
+
+    // ── 启动时从 JSON 文件恢复节点注册表（避免 Kuzu 启动期锁冲突）──
+    try {
+      if (existsSync(NODE_REGISTRY_FILE)) {
+        const saved = JSON.parse(readFileSync(NODE_REGISTRY_FILE, "utf8")) as Record<string, unknown>[];
+        for (const node of saved) {
+          const nn = String(node.node_name ?? "");
+          if (nn) nodeRegistryStore.set(nn, node);
+        }
+        api.logger.info(`[node-register] Recovered ${saved.length} node(s) from registry file`);
+      }
+    } catch (_e) { /* 启动恢复失败不影响主流程 */ }
 
     api.registerHttpRoute({
       path: "/api/node/register",
@@ -5607,6 +5620,10 @@ const crewclawRoutingPlugin = {
             data.registered_at_local = nowCST();
             nodeRegistryStore.set(nodeName, data);
             api.logger.info(`[node-register] Node registered: ${nodeName} (${data.platform})`);
+            // 持久化到文件，供下次启动恢复
+            try {
+              writeFileSync(NODE_REGISTRY_FILE, JSON.stringify(Array.from(nodeRegistryStore.values()), null, 2), "utf8");
+            } catch (_e) { /* 持久化失败不影响注册流程 */ }
 
             // ── Kuzu 协作边：成员 ↔ 节点（L3 影子节点设计）──────────────
             const ownerUserId = String(data.owner_userId ?? "");
@@ -5616,11 +5633,11 @@ const crewclawRoutingPlugin = {
               const tmpScript = join(SCRIPTS_DIR_T, `_node_register_${Date.now()}.py`);
               const nodeId = `node_${nodeName.replace(/[^a-zA-Z0-9]/g, "_")}`;
               const scriptContent = [
-                "import kuzu, os",
+                "import kuzu, os, sys",
                 `db = kuzu.Database(os.path.expanduser("~/HomeAI/Data/kuzu"))`,
                 "conn = kuzu.Connection(db)",
-                // 创建或合并 AI_Node 实体
-                `conn.execute(f"""`,
+                // MERGE AI_Node（更新已有节点或新建）
+                `conn.execute("""`,
                 `  MERGE (n:AI_Node {node_id: '${nodeId}'})`,
                 `  SET n.node_name = '${nodeName.replace(/'/g, "''")}',`,
                 `      n.platform = '${String(data.platform ?? "unknown").replace(/'/g, "''")}',`,
@@ -5630,12 +5647,15 @@ const crewclawRoutingPlugin = {
                 `      n.registered_at = '${data.registered_at_local}',`,
                 `      n.owner_userId = '${ownerUserId}'`,
                 `""")`,
-                // 建立成员 → 节点的 HAS_SHADOW_NODE 边
-                `conn.execute(f"""`,
-                `  MATCH (m:Entity {id: '${ownerUserId}'})`,
-                `  MERGE (m)-[r:HAS_SHADOW_NODE]->(n:AI_Node {node_id: '${nodeId}'})`,
-                `  SET r.created_at = '${data.registered_at_local}'`,
-                `""")`,
+                // 大小写不敏感查找 Entity，再 CREATE 边（避免 MERGE 重复主键冲突）
+                `r = conn.execute("MATCH (m:Entity) WHERE toLower(m.id) = toLower('${ownerUserId}') RETURN m.id LIMIT 1")`,
+                `if r.has_next():`,
+                `    real_id = r.get_next()[0]`,
+                `    try:`,
+                `        conn.execute(f"MATCH (mm:Entity {{id: '{real_id}'}}), (n:AI_Node {{node_id: '${nodeId}'}}) CREATE (mm)-[:HAS_SHADOW_NODE {{created_at: '${data.registered_at_local}'}}]->(n)")`,
+                `        sys.stderr.write(f'edge: {real_id} -> ${nodeId}\\n')`,
+                `    except Exception:`,
+                `        pass  # edge already exists`,
               ].join("\n");
               writeFileSync(tmpScript, scriptContent);
               try {
@@ -6936,6 +6956,20 @@ const crewclawRoutingPlugin = {
           // 已完成但 Lucas 尚未告知家人的任务
           const pendingAckTasks = allTasks.filter(e => e.status === "completed" && e.lucasAcked === false);
           if (pendingAckTasks.length > 0) {
+            // 先标记 lucasAcked=true，防止主动循环或并发会话重复触发同一通知
+            try {
+              const regEntries = readTaskRegistry();
+              let changed = false;
+              for (const t of pendingAckTasks) {
+                const re = regEntries.find(x => x.id === t.id);
+                if (re && re.lucasAcked === false) {
+                  re.lucasAcked = true;
+                  (re as any).lucasAckedAt = nowCST();
+                  changed = true;
+                }
+              }
+              if (changed) writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(regEntries, null, 2), "utf8");
+            } catch (_ae) {}
             const ackLines = pendingAckTasks.map(t => {
               const brief = t.deliveryBrief ?? "功能已实现完成。";
               return `• [${t.id}] ${brief.slice(0, 100)}`;
