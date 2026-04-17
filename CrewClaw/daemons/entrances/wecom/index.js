@@ -5293,11 +5293,19 @@ async function sendWeComMessage(toUser, text) {
  *       fallback 到企业应用 HTTP API（显示「系统工程师」）。
  */
 async function botPushOrFallback(target, text) {
-  // chatId 以 wr 开头（群聊），直接走 bot sendMessage
+  // 先尝试 bot 通道（显示「启灵」），失败再 fallback 到企业应用 HTTP API（显示「系统工程师」）
+  if (globalBotClient && globalBotReady) {
+    try {
+      await globalBotClient.sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
+      return;
+    } catch (botErr) {
+      logger.warn('botPushOrFallback: bot sendMessage 失败，fallback 到 HTTP API', { target, error: botErr.message });
+    }
+  }
+  // 群聊 fallback 到群发 API，私聊 fallback 到企业应用
   if (target.startsWith('wr')) {
-    await globalBotClient.sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
+    await sendWeComGroupMessage(target, text);
   } else {
-    // 私聊 userId：bot sendMessage 必定 40008，直接走 HTTP API
     await sendWeComMessage(target, text);
   }
 }
@@ -5485,19 +5493,25 @@ function startBotLongConnection() {
           const items = transcriptionBuffer.flush(fromUser);
           if (!items || items.length === 0) return;
           try {
+            // 单条转录截断 1500 字，多条每条截断 600 字，避免合并 prompt 过大超时
+            const truncateInjection = (meta, url, maxChars) => {
+              const full = formatVideoInjection(meta, url);
+              return full.length > maxChars ? full.slice(0, maxChars) + '\n…（内容已截断）' : full;
+            };
             let followUpPrompt;
             if (items.length === 1) {
-              // 单条：原逻辑
+              // 单条：原逻辑，截断到 1500 字
               const b = items[0];
-              followUpPrompt = `${b.memberTag}[系统：刚才你分享的抖音视频语音转录已完成，以下是内容，请做简洁总结后直接回复家人：]\n${formatVideoInjection(b.meta, b.douyinUrl)}`;
+              followUpPrompt = `${b.memberTag}[系统：刚才你分享的抖音视频语音转录已完成，以下是内容，请做简洁总结后直接回复家人：]\n${truncateInjection(b.meta, b.douyinUrl, 1500)}`;
             } else {
-              // 多条：合并
+              // 多条：合并，每条截断到 600 字
               const mergedParts = items.map((b, i) =>
-                `视频${i+1}「${b.meta.title || '未知'}」:\n${formatVideoInjection(b.meta, b.douyinUrl)}`
+                `视频${i+1}「${b.meta.title || '未知'}」:\n${truncateInjection(b.meta, b.douyinUrl, 600)}`
               ).join('\n---\n');
               followUpPrompt = `${items[0].memberTag}[系统：${items.length} 个抖音视频语音转录全部完成，请做简洁总结：]\n${mergedParts}`;
             }
-            const analysis = await callGatewayAgent('lucas', followUpPrompt, followUpSessionKey);
+            // 批量视频转录 prompt 可能较大，超时设 5 分钟
+            const analysis = await callGatewayAgent('lucas', followUpPrompt, followUpSessionKey, 300000);
             if (analysis && globalBotClient && globalBotReady) {
               botPushOrFallback(botTarget, analysis).catch(e => logger.warn('Bot 抖音转录合并推送失败', { error: e?.message || String(e) }));
             }
