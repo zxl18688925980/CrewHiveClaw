@@ -22,7 +22,7 @@ const path = require('path');
 // ─── 常量 ────────────────────────────────────────────────────────────────────
 
 const CHAT_HISTORY_STORE  = 50;                        // 持久化保留轮数上限
-const CHAT_HISTORY_INJECT = 15;                        // 每次注入轮数（≤ STORE）
+const CHAT_HISTORY_INJECT = 10;                        // 每次注入轮数（≤ STORE）
 const CHAT_HISTORY_TTL    = 7 * 24 * 60 * 60 * 1000;  // 一周过期
 
 const CHAT_HISTORY_DIR = path.join(process.env.HOME || '', '.homeai', 'chat-history');
@@ -118,7 +118,7 @@ function buildHistoryMessages(key) {
     role:    h.role,
     content: h.role === 'assistant'
       ? h.text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/\[VOICE\]/g, '').trim().slice(0, 300)
-      : h.text,
+      : h.text.slice(0, 500),
   })).filter(m => m.content.length > 0);
 }
 
