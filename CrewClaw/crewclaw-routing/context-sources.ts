@@ -91,10 +91,11 @@ export interface KuzuSource {
 // ── 文件来源（过渡态）────────────────────────────────────────────────────
 
 export type FileQueryMode =
-  | "user-profile"     // 读 ~/.openclaw/workspace-lucas/family/{userId}.inject.md
-  | "user-now"         // 读 ~/.openclaw/workspace-lucas/family/{userId}.now.md（动态家人摘要）
-  | "app-capabilities" // 读 data/corpus/app-capabilities.jsonl，关键词匹配
-  | "static-file";     // 读固定路径文件，整体注入（filePath 必须指定）
+  | "user-profile"      // 读 ~/.openclaw/workspace-lucas/family/{userId}.inject.md
+  | "user-now"          // 读 ~/.openclaw/workspace-lucas/family/{userId}.now.md（动态家人摘要）
+  | "app-capabilities"  // 读 data/corpus/app-capabilities.jsonl，关键词匹配
+  | "static-file"       // 读固定路径文件，整体注入（filePath 必须指定）
+  | "auto-skill-recall"; // 从 data/learning/auto-skills/{agentId}/ 按 prompt 关键词召回工作流模式（top-3）
 
 export interface FileSource {
   source:    "file";
@@ -333,6 +334,15 @@ export const contextSources: Record<string, ContextSource[]> = {
       ready: true,
       tier: 3,
     },
+
+    // 自动积累工作流模式（plugin 管理，按 prompt 关键词召回 top-3）
+    // 写入路径：data/learning/auto-skills/lucas/（不在 OpenClaw native skills 目录，不全量注入）
+    {
+      source: "file", id: "auto-skills",
+      queryMode: "auto-skill-recall",
+      label: "相关工作流模式", inject: "append-system",
+      tier: 3,
+    },
   ],
 
   // ── Andy ───────────────────────────────────────────────────────────────
@@ -457,6 +467,14 @@ export const contextSources: Record<string, ContextSource[]> = {
       ready: true,
       tier: 2,
     },
+
+    // 自动积累工作流模式（plugin 管理，按 prompt 关键词召回 top-3）
+    {
+      source: "file", id: "auto-skills",
+      queryMode: "auto-skill-recall",
+      label: "相关工作流模式", inject: "prepend",
+      tier: 3,
+    },
   ],
 
   // ── Lisa ───────────────────────────────────────────────────────────────
@@ -569,6 +587,14 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 10, label: "实现模式积累", inject: "append-system",
       ready: true,
       tier: 2,
+    },
+
+    // 自动积累工作流模式（plugin 管理，按 prompt 关键词召回 top-3）
+    {
+      source: "file", id: "auto-skills",
+      queryMode: "auto-skill-recall",
+      label: "相关工作流模式", inject: "prepend",
+      tier: 3,
     },
   ],
 };

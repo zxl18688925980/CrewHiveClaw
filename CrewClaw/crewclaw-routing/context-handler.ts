@@ -38,10 +38,11 @@ export interface ContextResolvers {
     query: (cypher: string, boundParams: Record<string, unknown>) => Promise<string[]>;
   };
   file: {
-    "user-profile":     (userId: string) => string;
-    "user-now":         (userId: string) => string;
-    "app-capabilities": (prompt: string) => string;
-    "static-file":      (filePath: string) => string;
+    "user-profile":      (userId: string) => string;
+    "user-now":          (userId: string) => string;
+    "app-capabilities":  (prompt: string) => string;
+    "static-file":       (filePath: string) => string;
+    "auto-skill-recall": (prompt: string, agentId: string) => string;
   };
 }
 
@@ -161,6 +162,8 @@ function resolveFile(
       return resolvers["app-capabilities"](params.prompt);
     case "static-file":
       return resolvers["static-file"](src.filePath ?? "");
+    case "auto-skill-recall":
+      return resolvers["auto-skill-recall"](params.prompt, params.agentId);
   }
 }
 

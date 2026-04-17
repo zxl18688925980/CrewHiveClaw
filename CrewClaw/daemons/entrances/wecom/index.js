@@ -4050,16 +4050,24 @@ os._exit(0)
 
     // ══ 系统层：自我改进机制 ══
 
-    // S1. 进化信号积累（skill-candidates + dpo-candidates 合计）
-    let totalSignals = 0;
+    // S1. 进化信号积累（区分"待处理"vs"已完成"，不堆总量）
+    let totalDpo = 0, pendingDpo = 0, totalSkillCand = 0, pendingSkillCand = 0;
     try {
-      for (const f of ['skill-candidates.jsonl', 'dpo-candidates.jsonl']) {
-        const p = path.join(learningDir, f);
-        if (fs.existsSync(p)) totalSignals += fs.readFileSync(p, 'utf8').split('\n').filter(l => l.trim()).length;
+      const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
+      if (fs.existsSync(dpoCandPath)) {
+        const lines = fs.readFileSync(dpoCandPath, 'utf8').split('\n').filter(l => l.trim());
+        totalDpo = lines.length;
+        pendingDpo = lines.filter(l => { try { return !JSON.parse(l).good_response; } catch { return false; } }).length;
       }
-      const ok = totalSignals >= 3;
-      sysLayerResults.push(`${ok ? '✅' : '⚠️'} 进化信号积累：${totalSignals} 条（skill-candidates + dpo-candidates）${totalSignals === 0 ? '（冷启动期无输入）' : ''}`);
-      if (!ok && score === '✅') score = totalSignals > 0 ? '⚠️' : score;
+      const skillCandPath = path.join(learningDir, 'skill-candidates.jsonl');
+      if (fs.existsSync(skillCandPath)) {
+        const lines = fs.readFileSync(skillCandPath, 'utf8').split('\n').filter(l => l.trim());
+        totalSkillCand = lines.length;
+        pendingSkillCand = lines.filter(l => { try { return JSON.parse(l).status === 'pending'; } catch { return false; } }).length;
+      }
+      const hasSignals = totalDpo + totalSkillCand >= 3;
+      sysLayerResults.push(`${hasSignals ? '✅' : '⚠️'} 进化信号：DPO ${totalDpo} 条（待处理 ${pendingDpo}）/ Skill候选 ${totalSkillCand} 条（待处理 ${pendingSkillCand}）`);
+      if (!hasSignals && score === '✅') score = '⚠️';
     } catch (e) {
       sysLayerResults.push(`⚠️ 进化信号读取失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
@@ -4090,20 +4098,25 @@ os._exit(0)
       sysLayerResults.push(`⚠️ 知识内化检查失败：${e.message.slice(0, 60)}`);
     }
 
-    // S3. Skill 积累总量
+    // S3. Skill 积累（native精选 + archive积累分开统计）
+    // native：~/.openclaw/workspace-*/skills/（OpenClaw原生，全量注入，应保持精简）
+    // archive：data/learning/auto-skills/*/（插件管理，按需召回，无上限）
     try {
       const ocHome = path.join(process.env.HOME, '.openclaw');
+      const autoSkillsRoot = path.join(HOMEAI_ROOT, 'Data', 'learning', 'auto-skills');
       const agents = ['lucas', 'andy', 'lisa'];
-      const skillCounts = agents.map(agent => {
-        const skillDir = path.join(ocHome, `workspace-${agent}`, 'skills');
-        if (!fs.existsSync(skillDir)) return `${agent}:0`;
-        const skills = fs.readdirSync(skillDir).filter(f => {
-          try { return fs.statSync(path.join(skillDir, f)).isDirectory(); } catch { return false; }
-        });
-        return `${agent}:${skills.length}`;
+      const skillLines = agents.map(agent => {
+        const nativeDir = path.join(ocHome, `workspace-${agent}`, 'skills');
+        const archiveDir = path.join(autoSkillsRoot, agent);
+        const countDir = d => {
+          if (!fs.existsSync(d)) return 0;
+          try { return fs.readdirSync(d).filter(f => { try { return fs.statSync(path.join(d, f)).isDirectory(); } catch { return false; } }).length; } catch { return 0; }
+        };
+        return `${agent}:${countDir(nativeDir)}精选+${countDir(archiveDir)}积累`;
       });
-      const total = skillCounts.reduce((sum, s) => sum + parseInt(s.split(':')[1]), 0);
-      sysLayerResults.push(`✅ Skill 积累：${total} 个（${skillCounts.join(' / ')}）`);
+      const totalNative  = skillLines.reduce((s, l) => s + parseInt(l.match(/:(\d+)/)?.[1] ?? '0'), 0);
+      const totalArchive = skillLines.reduce((s, l) => s + parseInt(l.match(/\+(\d+)/)?.[1] ?? '0'), 0);
+      sysLayerResults.push(`✅ Skill 积累：精选 ${totalNative} 个 + 归档 ${totalArchive} 个（${skillLines.join(' / ')}）`);
     } catch (e) {
       sysLayerResults.push(`⚠️ Skill 统计失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
@@ -4745,7 +4758,100 @@ ${factsDesc}`;
     } catch (_) {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}\n\n---\n📊 [交互式仪表盘](${EVAL_DASHBOARD_URL})`;
+
+    // ── 进化意见生成（规则驱动，不靠模型推断）──────────────────────────────
+    // 检测各层明确条件 → 生成 actionable 建议 → 行动就绪的自动写入 pending-tasks
+    const evolutionAdvice = (() => {
+      const advice = [];
+      const autoTasks = [];
+      const nowIso = new Date().toISOString();
+      const tasksPath = path.join(HOMEAI_ROOT, 'Data', 'main-pending-tasks.json');
+
+      // L1：Lucas 问题率
+      const l1IssueM = l1.match(/(\d+) 条疑似问题/);
+      const l1DocM   = l1.match(/最近 (\d+) 条/);
+      if (l1IssueM && l1DocM) {
+        const issues = parseInt(l1IssueM[1]), docs = parseInt(l1DocM[1]);
+        const rate = docs > 0 ? issues / docs : 0;
+        if (rate > 0.25) {
+          advice.push(`🔴 L1：Lucas 问题率 ${(rate * 100).toFixed(0)}%（${issues}/${docs}），行为铁律需加强`);
+          autoTasks.push({ priority: 'high', action_type: 'agents_md',
+            title: `Lucas 质量恶化（问题率 ${(rate * 100).toFixed(0)}%）`,
+            description: `evaluate_l1 检测到 Lucas 问题率 ${(rate * 100).toFixed(0)}%（${issues}/${docs} 条）。建议：检查近期 conversations 集合找典型模式，更新 lucas-behavioral-rules.json 补充铁律。` });
+        } else if (rate > 0.12) {
+          advice.push(`⚠️ L1：Lucas 问题率 ${(rate * 100).toFixed(0)}%（${issues}/${docs}），建议在日报后审查`);
+        }
+      }
+
+      // L2：端到端交付成功率
+      const l2RateM = l2.match(/交付成功率：(\d+)\/(\d+)/);
+      if (l2RateM) {
+        const succ = parseInt(l2RateM[1]), total = parseInt(l2RateM[2]);
+        if (total >= 5 && succ / total < 0.6) {
+          advice.push(`⚠️ L2：交付成功率 ${succ}/${total}（${(succ/total*100).toFixed(0)}%），三角色协作链需检查`);
+          autoTasks.push({ priority: 'medium', action_type: 'code_fix',
+            title: `L2 交付成功率低（${(succ/total*100).toFixed(0)}%），协作链需排查`,
+            description: `evaluate_l2 检测到交付成功率 ${succ}/${total}。建议查看 task-registry.json 中 failed 任务的失败原因，检查 Andy→Lisa 触发链。` });
+        }
+      }
+
+      // L4：DPO 模式达内化阈值
+      const ripePatterns = (l4.match(/🔴[^\n]+已达阈值[^\n]*/g) || []);
+      if (ripePatterns.length > 0) {
+        advice.push(`🔴 L4：${ripePatterns.length} 个 DPO 模式达内化阈值，应触发微调训练`);
+        autoTasks.push({ priority: 'high', action_type: 'code_fix',
+          title: `DPO ${ripePatterns.length} 个模式达内化阈值，待触发微调`,
+          description: `evaluate_l4 检测到模式达 50 条阈值：${ripePatterns.slice(0, 3).map(m => m.trim()).join('；')}。建议运行 run-finetune.sh 启动微调训练。` });
+      }
+
+      // L4：进化信号待处理积压（DPO pending + skill pending 合计 > 30）
+      const dpoPendM   = l4.match(/DPO \d+ 条（待处理 (\d+)）/);
+      const skillPendM = l4.match(/Skill候选 \d+ 条（待处理 (\d+)）/);
+      const totalPend  = (dpoPendM ? parseInt(dpoPendM[1]) : 0) + (skillPendM ? parseInt(skillPendM[1]) : 0);
+      if (totalPend > 30) {
+        advice.push(`⚠️ L4：进化信号积压 ${totalPend} 条待处理，建议 Andy HEARTBEAT 加速结晶`);
+      }
+
+      // L4：Andy HEARTBEAT 超时
+      const andyHbM = l4.match(/Andy HEARTBEAT 上次巡检[^（]*（([\d.]+)h 前）/);
+      if (andyHbM && parseFloat(andyHbM[1]) > 48) {
+        advice.push(`⚠️ L4：Andy HEARTBEAT 已 ${andyHbM[1]}h 未触发，L4 自进化停滞`);
+        autoTasks.push({ priority: 'medium', action_type: 'code_fix',
+          title: `Andy HEARTBEAT 停滞（${andyHbM[1]}h 未运行）`,
+          description: `Andy HEARTBEAT 已 ${andyHbM[1]}h 未巡检，L4 系统层自进化停滞。建议检查 runAndyHeartbeatLoop 是否正常调度。` });
+      }
+
+      // 最弱层（得分 < 2.5）
+      const layerNums = Object.entries(_evalScores)
+        .map(([k, v]) => ({ layer: k, score: v?.weighted ?? null }))
+        .filter(x => x.score !== null)
+        .sort((a, b) => a.score - b.score);
+      if (layerNums.length > 0 && layerNums[0].score < 2.5) {
+        advice.push(`📌 最弱层：${layerNums[0].layer}（${layerNums[0].score.toFixed(1)}/5.0），下次工程师介入优先聚焦此层`);
+      }
+
+      // 无意见时：给出正向确认
+      if (advice.length === 0) {
+        return '\n\n**▶ 进化意见：无需干预** — 各层状态正常，系统自主运行中。';
+      }
+
+      // 写入 pending-tasks
+      if (autoTasks.length > 0) {
+        try {
+          let stored = { tasks: [] };
+          try { stored = JSON.parse(fs.readFileSync(tasksPath, 'utf8')); } catch {}
+          for (const t of autoTasks) {
+            stored.tasks.push({ id: `mt-ev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, createdAt: nowIso, source: 'evaluate_system', status: 'pending', ...t });
+          }
+          fs.writeFileSync(tasksPath, JSON.stringify(stored, null, 2), 'utf8');
+        } catch (_) {}
+      }
+
+      return `\n\n**▶ 进化意见（${advice.length} 条）**\n${advice.join('\n')}` +
+        (autoTasks.length > 0 ? `\n_已自动写入 ${autoTasks.length} 条改进任务_` : '');
+    })();
+
+    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}${evolutionAdvice}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}\n\n---\n📊 [交互式仪表盘](${EVAL_DASHBOARD_URL})`;
   }
 
   if (toolName === 'evaluate_trend') {

@@ -5900,6 +5900,43 @@ const crewclawRoutingPlugin = {
     // topK / agentFilter 参数由 context-sources.ts 注册表定义，但现有函数内部
     // 有各自的 hardcode 值，适配层暂时忽略这两个参数（符合当前数据量规模）。
     // 等 topK 真正需要调优时，再改各查询函数的签名。
+    // ── auto-skill 语义召回（关键词交集评分，不依赖 ChromaDB）─────────────────
+    // 从 data/learning/auto-skills/{agentId}/ 读取所有归档 skill，
+    // 按 prompt 分词与 description 分词的交集数量排序，返回 top-K 描述行。
+    // 不命中（score=0）则返回空字符串，不注入任何内容。
+    function recallAutoSkills(prompt: string, agentId: string, topK = 3): string {
+      try {
+        const archiveDir = join(PROJECT_ROOT, `data/learning/auto-skills/${agentId}`);
+        if (!existsSync(archiveDir)) return "";
+        const entries = readdirSync(archiveDir, { withFileTypes: true });
+        const promptWords = new Set(
+          prompt.toLowerCase().split(/[\s，。！？、；：""''【】（）()\[\]\r\n]+/).filter(w => w.length > 1),
+        );
+        const hits: Array<{ description: string; score: number }> = [];
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const skillMd = join(archiveDir, entry.name, "SKILL.md");
+          if (!existsSync(skillMd)) continue;
+          const content = readFileSync(skillMd, "utf8");
+          const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+          if (!fmMatch) continue;
+          if (fmMatch[1].includes("status: deprecated")) continue;
+          const descMatch = fmMatch[1].match(/description:\s*(.+)/);
+          const description = descMatch?.[1]?.trim() ?? "";
+          if (!description) continue;
+          const descWords = description.toLowerCase().split(/[\s，。！？、；：""'']+/).filter(w => w.length > 1);
+          const score = descWords.filter(w => promptWords.has(w)).length;
+          if (score > 0) hits.push({ description, score });
+        }
+        if (hits.length === 0) return "";
+        hits.sort((a, b) => b.score - a.score);
+        const top = hits.slice(0, topK);
+        return `【相关工作流模式】\n${top.map(s => `• ${s.description}`).join("\n")}`;
+      } catch (_e) {
+        return "";
+      }
+    }
+
     function buildContextResolvers(): ContextResolvers {
       return {
         chromadb: {
@@ -5956,10 +5993,11 @@ const crewclawRoutingPlugin = {
           },
         },
         file: {
-          "user-profile":     (userId) => readFamilyProfile(userId),
-          "user-now":         (userId) => readNowFile(userId),
-          "app-capabilities": (prompt) => queryAppCapabilities(prompt),
-          "static-file":      (filePath) => {
+          "user-profile":      (userId) => readFamilyProfile(userId),
+          "user-now":          (userId) => readNowFile(userId),
+          "app-capabilities":  (prompt) => queryAppCapabilities(prompt),
+          "auto-skill-recall": (prompt, agentId) => recallAutoSkills(prompt, agentId),
+          "static-file":       (filePath) => {
             if (!filePath) return "";
             try {
               const resolved = filePath.startsWith("~/")
@@ -7167,10 +7205,11 @@ const crewclawRoutingPlugin = {
     // 幂等：已存在 draft 草稿则更新 trigger_count/last_seen；已 active 的不覆盖
     function writeSkillDraft(agentId: string, comboKey: string, actionTools: string[], triggerContext: string): void {
       try {
-        const home = process.env.HOME ?? "/";
         const hash6 = comboKey.split("").reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(16).replace("-", "a").slice(0, 6);
         const skillName = `auto-${comboKey.replace(/\+/g, "-").slice(0, 40)}-${hash6}`;
-        const skillDir = join(home, `.openclaw/workspace-${agentId}/skills/${skillName}`);
+        // auto-detect skill 写入归档目录（不写 OpenClaw native skills/，避免全量注入膨胀）
+        // plugin 在 before_prompt_build 通过 auto-skill-recall 按 prompt 关键词召回 top-3
+        const skillDir = join(PROJECT_ROOT, `data/learning/auto-skills/${agentId}/${skillName}`);
         const skillFile = join(skillDir, "SKILL.md");
         const now = nowCST();
         const today = now.slice(0, 10);
@@ -7828,8 +7867,7 @@ ${toolDescriptions}
             if (topicSlug.length >= 3) {
               const hash6 = topicSlug.split("").reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(16).replace("-", "a").slice(0, 6);
               const skillName = `spec-${topicSlug}-${hash6}`;
-              const home = process.env.HOME ?? "/";
-              const skillDir = join(home, `.openclaw/workspace-andy/skills/${skillName}`);
+              const skillDir = join(PROJECT_ROOT, `data/learning/auto-skills/andy/${skillName}`);
               const skillFile = join(skillDir, "SKILL.md");
               if (!existsSync(skillFile)) {
                 mkdirSync(skillDir, { recursive: true });
@@ -7873,8 +7911,7 @@ last_used: null
             if (topicSlug.length >= 3) {
               const hash6 = topicSlug.split("").reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0).toString(16).replace("-", "a").slice(0, 6);
               const skillName = `impl-${topicSlug}-${hash6}`;
-              const home = process.env.HOME ?? "/";
-              const skillDir = join(home, `.openclaw/workspace-lisa/skills/${skillName}`);
+              const skillDir = join(PROJECT_ROOT, `data/learning/auto-skills/lisa/${skillName}`);
               const skillFile = join(skillDir, "SKILL.md");
               if (!existsSync(skillFile)) {
                 mkdirSync(skillDir, { recursive: true });
