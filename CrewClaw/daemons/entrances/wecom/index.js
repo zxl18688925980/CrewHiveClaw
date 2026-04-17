@@ -5474,9 +5474,6 @@ function startBotLongConnection() {
           return;
         }
         logger.info('Bot 抖音后台提取完成', { fromUser, hasTranscript: !!meta.transcript });
-        // 合并推送：检查同一用户是否还有其他抖音在处理中
-        const pendingDouyin = douyinUrlMatch && lucasText_orig ? 
-          (lucasText_orig.match(/douyin\.com/g) || []).length - 1 : 0; // 粗略估计
         transcriptionBuffer.add(fromUser, { meta, douyinUrl, memberTag });
         const buffered = transcriptionBuffer.get(fromUser);
         // 简单策略：如果 3 秒内没来新的转录结果，就推送当前所有
