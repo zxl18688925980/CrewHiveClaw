@@ -5684,6 +5684,27 @@ const crewclawRoutingPlugin = {
 
     // ━━ HTTP 路由：Windows 节点心跳+命令+结果端点 ━━━━━━━━━━━━━━━━━━━━
     const nodeActivityStore = new Map<string, number>();
+    const NODE_ACTIVITY_FILE = join(PROJECT_ROOT, "Data", "node-activity.json");
+
+    // ── 持久化：启动时从 JSON 文件恢复节点活动时间戳 ──
+    try {
+      if (existsSync(NODE_ACTIVITY_FILE)) {
+        const saved = JSON.parse(readFileSync(NODE_ACTIVITY_FILE, "utf8")) as Record<string, number>;
+        for (const [id, ts] of Object.entries(saved)) {
+          if (typeof ts === "number") nodeActivityStore.set(id, ts);
+        }
+        api.logger.info(`[node-activity] Recovered ${nodeActivityStore.size} activity record(s) from file`);
+      }
+    } catch (_e) { /* 恢复失败不影响主流程 */ }
+
+    /** 将节点活动时间戳持久化到 JSON 文件（fire-and-forget） */
+    function persistNodeActivity() {
+      try {
+        const obj: Record<string, number> = {};
+        for (const [id, ts] of nodeActivityStore) obj[id] = ts;
+        writeFileSync(NODE_ACTIVITY_FILE, JSON.stringify(obj, null, 2), "utf8");
+      } catch (_e) { /* 持久化失败不影响心跳流程 */ }
+    }
 
     // POST /api/node/heartbeat — 记录节点活动时间戳
     api.registerHttpRoute({
@@ -5700,6 +5721,7 @@ const crewclawRoutingPlugin = {
           if (nodeName) {
             const nodeId = `node_${nodeName.replace(/[^a-zA-Z0-9]/g, "_")}`;
             nodeActivityStore.set(nodeId, Date.now());
+            setImmediate(persistNodeActivity);
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true }));
@@ -5739,6 +5761,7 @@ const crewclawRoutingPlugin = {
           if (nodeName) {
             const nodeId = `node_${nodeName.replace(/[^a-zA-Z0-9]/g, "_")}`;
             nodeActivityStore.set(nodeId, Date.now());
+            setImmediate(persistNodeActivity);
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true }));
@@ -13647,14 +13670,17 @@ last_used: null
         "管理和控制 Windows 远程节点（Cloudflare Tunnel + SSH）。",
         "action=list：列出所有已注册的节点及在线状态。",
         "action=status：查询指定节点的详细信息和在线状态，提供 nodeId。",
+        "action=diagnose：诊断指定节点的完整状态，包括注册状态、最后心跳时间、SSH 连通性测试结果，提供 nodeId。",
         "action=invoke_command：在指定节点上执行命令，提供 nodeId + command；返回命令输出。",
+        "action=invoke_cc：通过 SSH 在节点上运行 claude CLI 执行任务（CC→CC 协同），提供 nodeId + task（自然语言任务描述）；Windows CC 执行后返回结果。这是 L3 跨节点协同的主路径。",
         "节点需先运行 setup-windows-node.ps1 完成安装，然后运行 setup-mac-config.sh 在 Mac 端完成配置。",
-        "适用场景：需要远程执行 Windows 命令时使用，如查看系统信息、运行脚本等。",
+        "适用场景：需要远程执行 Windows 命令时使用，如查看系统信息、运行脚本等。invoke_cc 用于 CC→CC 跨节点任务协同（L3）。",
       ].join("\n"),
       parameters: Type.Object({
-        action: Type.String({ description: '"list" | "status" | "invoke_command"' }),
-        nodeId: Type.Optional(Type.String({ description: 'action=status/invoke_command 时指定节点ID' })),
+        action: Type.String({ description: '"list" | "status" | "diagnose" | "invoke_command" | "invoke_cc"' }),
+        nodeId: Type.Optional(Type.String({ description: 'action=status/diagnose/invoke_command/invoke_cc 时指定节点ID' })),
         command: Type.Optional(Type.String({ description: 'action=invoke_command 时要执行的命令（PowerShell 语法）' })),
+        task: Type.Optional(Type.String({ description: 'action=invoke_cc 时发给目标节点 CC 的任务描述（自然语言）' })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         // Lucas 是家庭成员节点的配置者（节点归属影子），Andy/Lisa 是框架层小弟的管理者
@@ -13741,6 +13767,102 @@ last_used: null
             const output = err.message || String(e);
             return { content: [{ type: "text", text: `❌ 命令执行失败：${output}` }], details: { nodeId: p.nodeId, command: p.command, error: output } };
           }
+        }
+
+        if (p.action === "invoke_cc") {
+          // CC→CC：通过 SSH 在目标节点上运行 claude CLI，把任务交给节点 CC 执行
+          const ccParams = params as { action: string; nodeId?: string; task?: string };
+          if (!ccParams.nodeId) return { content: [{ type: "text", text: "❌ invoke_cc 需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
+          if (!ccParams.task) return { content: [{ type: "text", text: "❌ invoke_cc 需要提供 task。" }], details: { error: "missing_task" } };
+
+          // 确认节点存在，并获取 ssh_alias（registry 里记录的真实 SSH Host）
+          let ccSshAlias: string | null = null;
+          for (const v of nodeRegistryStore.values()) {
+            const nName = v.node_name as string;
+            const nId = `node_${String(nName).replace(/[^a-zA-Z0-9]/g, "_")}`;
+            if (nId === ccParams.nodeId) {
+              ccSshAlias = (v.ssh_alias as string) || `windows-${nName}`;
+              break;
+            }
+          }
+          if (!ccSshAlias) return { content: [{ type: "text", text: `❌ 节点不存在：${ccParams.nodeId}` }], details: { error: "node_not_found" } };
+
+          // 转义任务描述中的单引号，直接用 execSync + ssh_alias（不走 execViaSsh，避免 PowerShell 包装破坏单引号）
+          const { execSync: ccExecSync } = require("child_process");
+          const safetask = ccParams.task.replace(/'/g, "'\\''");
+          try {
+            const output = ccExecSync(
+              `ssh -o ConnectTimeout=30 -o BatchMode=yes ${ccSshAlias} claude --print '${safetask}'`,
+              { encoding: "utf8", timeout: 300000, maxBuffer: 10 * 1024 * 1024 }
+            );
+            const truncated = output.length > 4000 ? output.slice(0, 4000) + "\n...[输出已截断]" : output;
+            return {
+              content: [{ type: "text", text: `✅ [${ccParams.nodeId}/CC] 执行结果：\n\n${truncated}` }],
+              details: { nodeId: ccParams.nodeId, task: ccParams.task, outputLength: output.length },
+            };
+          } catch (e) {
+            const err = e as Error;
+            return { content: [{ type: "text", text: `❌ invoke_cc 失败：${err.message?.split("\n")[0]}` }], details: { error: err.message, nodeId: ccParams.nodeId } };
+          }
+        }
+
+        if (p.action === "diagnose") {
+          if (!p.nodeId) return { content: [{ type: "text", text: "❌ diagnose 操作需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
+
+          // 检查注册状态
+          let nodeData: Record<string, unknown> | null = null;
+          for (const v of nodeRegistryStore.values()) {
+            const nName = v.node_name as string;
+            const nId = `node_${String(nName).replace(/[^a-zA-Z0-9]/g, "_")}`;
+            if (nId === p.nodeId) { nodeData = v; break; }
+          }
+
+          if (!nodeData) {
+            return {
+              content: [{ type: "text", text: `🔍 诊断结果：${p.nodeId}\n\n❌ 节点未注册。请先在 Windows 上运行 setup-windows-node.ps1 完成注册。` }],
+              details: { nodeId: p.nodeId, registered: false, error: "node_not_found" },
+            };
+          }
+
+          const lastSeen = nodeActivityStore.get(p.nodeId);
+          const isOnline = lastSeen && (Date.now() - lastSeen) < 120000;
+          const ago = lastSeen ? `（${Math.floor((Date.now() - lastSeen) / 60000)}分钟前）` : "从未收到心跳";
+
+          // SSH 连通性测试
+          let sshResult = "";
+          let sshOk = false;
+          try {
+            const sshAlias = `windows-${p.nodeId}`;
+            const { execSync: _exec } = require("child_process");
+            _exec(`ssh -o ConnectTimeout=10 -o BatchMode=yes ${sshAlias} echo ok`, { encoding: "utf8", timeout: 15000 });
+            sshOk = true;
+            sshResult = "✅ SSH 连接成功";
+          } catch (e) {
+            const err = e as Error;
+            sshResult = `❌ SSH 连接失败：${err.message?.split("\n")[0] || String(e)}`;
+          }
+
+          const lines = [
+            `🔍 诊断结果：${p.nodeId}`,
+            ``,
+            `📋 注册信息：`,
+            `  节点名: ${nodeData.node_name}`,
+            `  主机名: ${nodeData.hostname ?? "-"}`,
+            `  平台: ${nodeData.platform ?? "unknown"}`,
+            `  归属: ${nodeData.owner_userId ?? "未知"}`,
+            `  注册时间: ${nodeData.registered_at_local ?? "-"}`,
+            ``,
+            `💓 心跳状态：`,
+            `  ${isOnline ? "🟢 在线" : "🔴 离线"} ${ago}`,
+            ``,
+            `🔗 SSH 连通性：`,
+            `  ${sshResult}`,
+          ];
+
+          return {
+            content: [{ type: "text", text: lines.join("\n") }],
+            details: { nodeId: p.nodeId, registered: true, online: !!isOnline, lastSeen: lastSeen ?? null, sshOk },
+          };
         }
 
         return { content: [{ type: "text", text: `❌ 未知 action: ${p.action}` }], details: { error: "unknown_action" } };
