@@ -5591,7 +5591,7 @@ const crewclawRoutingPlugin = {
     //   gateway_url     — 节点上 Gateway 地址（可选）
 
     const nodeRegistryStore = new Map<string, Record<string, unknown>>();
-    const NODE_REGISTRY_FILE = join(PROJECT_ROOT, "HomeAI", "Data", "node-registry.json");
+    const NODE_REGISTRY_FILE = join(PROJECT_ROOT, "Data", "node-registry.json");
 
     // ── 启动时从 JSON 文件恢复节点注册表（避免 Kuzu 启动期锁冲突）──
     try {
