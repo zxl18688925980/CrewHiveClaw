@@ -4998,7 +4998,61 @@ async function saveTechDocToObsidian(category, doc) {
 // Main 主入口：Claude 对话 + 工具循环
 // source: 'wecom_remote'（企业微信远程）| 'cli_local'（CLI 本地，业主在身边）
 async function handleMainCommand(content, userId = 'owner', source = 'wecom_remote', imageBase64 = null, imageMime = null, imageRelativePath = null) {
-  // 微信公众号链接：预先用 Playwright 抓取正文注入，避免 Claude 用 curl 直接请求被拦截
+  // ── 审批命令（拦截优先于 Claude，不消耗 token）────────────────────────────
+  const APPROVALS_FILE = path.join(HOMEAI_ROOT, 'Data', 'pending-approvals.json');
+  const trimmed = content.trim();
+
+  // 查待审批
+  if (/^(查待审批|查审批|待审批列表|审批列表)$/.test(trimmed)) {
+    let approvals = [];
+    try { approvals = JSON.parse(fs.readFileSync(APPROVALS_FILE, 'utf8')); } catch {}
+    const pending = approvals.filter(a => a.status === 'pending');
+    if (pending.length === 0) return '当前没有待审批事项。';
+    const lines = pending.map((a, i) =>
+      `[${i + 1}] ID: ${a.id}\n类别: ${a.category}  紧急度: ${a.urgency ?? 'normal'}\n标题: ${a.title}\n说明: ${a.description}\n提议操作: ${a.proposed_action}\n提交时间: ${a.created_at}`
+    );
+    return `待审批事项（${pending.length} 条）：\n\n${lines.join('\n\n---\n\n')}\n\n回复「批准 [ID]」或「拒绝 [ID] [原因]」执行决策。`;
+  }
+
+  // 批准 [ID]
+  const approveMatch = trimmed.match(/^批准\s+(\S+)$/);
+  if (approveMatch) {
+    const id = approveMatch[1];
+    let approvals = [];
+    try { approvals = JSON.parse(fs.readFileSync(APPROVALS_FILE, 'utf8')); } catch {}
+    const idx = approvals.findIndex(a => a.id === id);
+    if (idx === -1) return `❌ 找不到审批 ID：${id}`;
+    if (approvals[idx].status !== 'pending') return `⚠️ 该条目状态已是 ${approvals[idx].status}，无需重复操作。`;
+    const nowIso = new Date().toLocaleString('sv', { timeZone: 'Asia/Shanghai' }).replace(' ', 'T') + '+08:00';
+    approvals[idx].status = 'approved';
+    approvals[idx].decided_at = nowIso;
+    approvals[idx].decided_by = 'ZengXiaoLong';
+    fs.writeFileSync(APPROVALS_FILE, JSON.stringify(approvals, null, 2), 'utf8');
+    logger.info('Main 审批批准', { id, title: approvals[idx].title });
+    return `✅ 已批准：${approvals[idx].title}\n\nAndy 将在下次 HEARTBEAT 自动执行，完成后状态变更为 done。`;
+  }
+
+  // 拒绝 [ID] [原因]
+  const rejectMatch = trimmed.match(/^拒绝\s+(\S+)(?:\s+(.+))?$/);
+  if (rejectMatch) {
+    const id = rejectMatch[1];
+    const reason = rejectMatch[2] ?? '未说明原因';
+    let approvals = [];
+    try { approvals = JSON.parse(fs.readFileSync(APPROVALS_FILE, 'utf8')); } catch {}
+    const idx = approvals.findIndex(a => a.id === id);
+    if (idx === -1) return `❌ 找不到审批 ID：${id}`;
+    if (approvals[idx].status !== 'pending') return `⚠️ 该条目状态已是 ${approvals[idx].status}，无需重复操作。`;
+    const nowIso = new Date().toLocaleString('sv', { timeZone: 'Asia/Shanghai' }).replace(' ', 'T') + '+08:00';
+    approvals[idx].status = 'rejected';
+    approvals[idx].decided_at = nowIso;
+    approvals[idx].decided_by = 'ZengXiaoLong';
+    approvals[idx].decision_note = reason;
+    fs.writeFileSync(APPROVALS_FILE, JSON.stringify(approvals, null, 2), 'utf8');
+    logger.info('Main 审批拒绝', { id, title: approvals[idx].title, reason });
+    return `❌ 已拒绝：${approvals[idx].title}\n原因：${reason}`;
+  }
+
+  // ── 微信公众号链接：预先用 Playwright 抓取正文注入，避免 Claude 用 curl 直接请求被拦截
   const wechatUrlMatch = !imageBase64 && content.match(/https?:\/\/mp\.weixin\.qq\.com\/[^\s\u4e00-\u9fa5\uff00-\uffef，。！？、；：""''【】《》]+/);
   if (wechatUrlMatch) {
     const wechatUrl = wechatUrlMatch[0];
@@ -7428,7 +7482,14 @@ ${precomputedArchProposalSignals}
 【预计算数据 - 检查 14：技术债信号（每两周一次）】
 ${precomputedTechDebtSignals}
 
-请按 HEARTBEAT.md 中的检查流程执行巡检。所有预计算数据已注入，直接读取即可，无需 exec 查询。检查 8（主动学习）满足条件时用 read_file 读决策记录。检查 10-14 为新增主动性检查（事件感知/知识获取/自主判断 三维度），按触发条件执行。`;
+请按 HEARTBEAT.md 中的检查流程执行巡检。所有预计算数据已注入，直接读取即可，无需 exec 查询。检查 8（主动学习）满足条件时用 read_file 读决策记录。检查 10-14 为新增主动性检查（事件感知/知识获取/自主判断 三维度），按触发条件执行。
+
+【检查 0（每次必执行，优先于其他所有检查）：执行已批准的审批事项】
+1. read_file ~/HomeAI/Data/pending-approvals.json
+2. 找所有 status="approved" 的条目
+3. 若有，按每条 proposed_action 的描述执行（认知文件修改用 write_file/patch_file，代码改动建议用 trigger_lisa_implementation，配置修改直接写对应文件）
+4. 执行后把该条目的 status 改为 "done"，decided_at 写当前时间，再用 write_file 覆盖写入 pending-approvals.json
+5. 有执行则在巡检报告里加一段「已执行审批: [标题列表]」；无 approved 条目则跳过，不提及`;
 
     // 调用 Andy（独立 session，不影响正常流水线）
     logger.info('Andy HEARTBEAT：发送巡检 prompt', { patternCount: precomputedPatterns === '无高置信度候选（confidence >= 0.8）' ? 0 : 'N/A' });

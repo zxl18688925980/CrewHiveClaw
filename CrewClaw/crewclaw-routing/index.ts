@@ -11513,6 +11513,74 @@ last_used: null
       },
     }));
 
+    // ── request_approval：Andy 专属，向系统工程师提交需审批事项 ─────────────
+    //
+    // Andy 自决范围：ChromaDB 写入、知识蒸馏、spec 草稿、Skill 生成
+    // 需审批范围：认知文件修改（AGENTS.md/SOUL.md/MEMORY.md/TOOLS.md）、
+    //             模型路由阈值变更、index.ts 插件代码改动建议、新工具注册、架构设计变更
+    // 审批后 Andy 自己执行（下次 HEARTBEAT 扫描 approved 条目），SE 只写 approved/rejected
+
+    api.registerTool((toolCtx) => ({
+      label: "提交审批请求",
+      name: "request_approval",
+      description: [
+        "Andy 专属工具：向系统工程师提交需要审批的改进事项。",
+        "适用于：认知文件修改（AGENTS.md/SOUL.md/MEMORY.md/TOOLS.md）/ 模型路由阈值变更 / 插件代码改动建议 / 新工具注册 / 架构设计变更。",
+        "不适用于：ChromaDB 写入、知识蒸馏、spec 草稿、Skill 生成——这些 Andy 自决。",
+        "提交后系统自动推送工程师通知。SE 批准后下次 HEARTBEAT Andy 自动执行 proposed_action。",
+        "category 取值：cognitive_file_update / routing_threshold / code_change / tool_register / architecture / config_change",
+      ].join("\n"),
+      parameters: Type.Object({
+        category: Type.String({ description: "事项类别：cognitive_file_update / routing_threshold / code_change / tool_register / architecture / config_change" }),
+        title: Type.String({ description: "一句话标题，50 字以内" }),
+        description: Type.String({ description: "为什么要做这个改动，观察到什么现象，背景是什么" }),
+        proposed_action: Type.String({ description: "具体要执行的操作，Andy 批准后据此执行：文件修改写明路径和改动内容；阈值变更写明文件和新值；代码改动写明需求 spec 摘要" }),
+        urgency: Type.Optional(Type.String({ description: '"normal"（默认）或 "high"（影响正常流水线）' })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
+          return { content: [{ type: "text", text: "❌ request_approval 是 Andy 专属工具。" }], details: { error: "wrong_agent" } };
+        }
+        const p = params as { category: string; title: string; description: string; proposed_action: string; urgency?: string };
+        if (!p.category || !p.title || !p.description || !p.proposed_action) {
+          return { content: [{ type: "text", text: "❌ request_approval 缺少必填字段：category / title / description / proposed_action" }], details: { error: "missing_fields" } };
+        }
+
+        const APPROVALS_FILE = join(process.env["HOME"] ?? "", "HomeAI/Data/pending-approvals.json");
+        const { readFileSync, writeFileSync } = require("fs");
+        let approvals: Record<string, unknown>[] = [];
+        try { approvals = JSON.parse(readFileSync(APPROVALS_FILE, "utf8")); } catch {}
+
+        const nowIso = new Date().toLocaleString("sv", { timeZone: "Asia/Shanghai" }).replace(" ", "T") + "+08:00";
+        const id = `approval_${nowIso.slice(0, 10).replace(/-/g, "")}_${String(Math.floor(Math.random() * 900) + 100)}`;
+        const entry: Record<string, unknown> = {
+          id, source: "andy", category: p.category, urgency: p.urgency ?? "normal",
+          title: p.title, description: p.description, proposed_action: p.proposed_action,
+          created_at: nowIso, status: "pending",
+          decided_at: null, decided_by: null, decision_note: null,
+        };
+        approvals.push(entry);
+        writeFileSync(APPROVALS_FILE, JSON.stringify(approvals, null, 2), "utf8");
+
+        // 推送工程师通知
+        const urgencyTag = p.urgency === "high" ? "🔴 紧急" : "🟡 普通";
+        const notifyText = `[Andy 审批请求 ${urgencyTag}]\nID: ${id}\n类别: ${p.category}\n标题: ${p.title}\n\n${p.description}\n\n---\n提议操作：${p.proposed_action}`;
+        try {
+          await fetch("http://localhost:3003/api/wecom/notify-engineer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "approval_request", message: notifyText }),
+            signal: AbortSignal.timeout(8000),
+          });
+        } catch {}
+
+        return {
+          content: [{ type: "text", text: `✅ 审批请求已提交：${id}\n类别：${p.category}\n标题：${p.title}\n\n系统工程师已收到通知，批准后下次 HEARTBEAT 自动执行。` }],
+          details: { id, status: "pending" },
+        };
+      },
+    }));
+
     // ── restart_service：Andy 专属，重启 HomeAI 关键进程 ──────────────────
     //
     // Andy 作为架构师，需要能重启关键进程以应对系统故障和部署变更。
@@ -13706,16 +13774,14 @@ last_used: null
             const hostname = n.hostname as string;
             const ownerUserId = n.owner_userId as string;
             const userTag = ownerUserId ? `（归属：${ownerUserId}）` : '（归属：未知）';
-            const lastSeen = nodeActivityStore.get(nodeId);
-            const status = lastSeen && (Date.now() - lastSeen) < 120000 ? "🟢 在线" : "🔴 离线";
-            return `${status} **${nodeId}** (${hostname ?? nodeName}, ${platform ?? "unknown"}) ${userTag}`;
+            const gwUrl = (n.gateway_public_url as string) || (n.gateway_url as string) || "-";
+            return `📍 **${nodeId}** (${hostname ?? nodeName}, ${platform ?? "unknown"}) ${userTag}\n   └─ 接入：${gwUrl}`;
           });
-          return { content: [{ type: "text", text: `节点列表（共 ${nodes.length} 个）：\n\n${lines.join("\n")}` }], details: { count: nodes.length, nodes } };
+          return { content: [{ type: "text", text: `节点列表（共 ${nodes.length} 个）：\n\n${lines.join("\n")}\n\n用 action=status 查某节点的实时在线状态。` }], details: { count: nodes.length, nodes } };
         }
 
         if (p.action === "status") {
           if (!p.nodeId) return { content: [{ type: "text", text: "❌ status 操作需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
-          // 从所有注册节点中找匹配的
           let nodeData: Record<string, unknown> | null = null;
           for (const v of nodeRegistryStore.values()) {
             const nName = v.node_name as string;
@@ -13723,9 +13789,30 @@ last_used: null
             if (nId === p.nodeId) { nodeData = v; break; }
           }
           if (!nodeData) return { content: [{ type: "text", text: `❌ 节点不存在：${p.nodeId}` }], details: { error: "node_not_found" } };
-          const lastSeen = nodeActivityStore.get(p.nodeId);
-          const status = lastSeen && (Date.now() - lastSeen) < 120000 ? "🟢 在线" : "🔴 离线";
-          const ago = lastSeen ? `（${Math.floor((Date.now() - lastSeen) / 60000)}分钟前）` : "";
+          // 主动 HTTP probe /health，不依赖心跳
+          const probeUrl = (nodeData.gateway_public_url as string) || (nodeData.gateway_url as string) || null;
+          let probeStatus = "⚠️ 无法探测（无 gateway_url）";
+          let probeOnline = false;
+          if (probeUrl) {
+            try {
+              const probeCode = await new Promise<number>((resolve, reject) => {
+                const urlMod = require("url");
+                const parsed = urlMod.parse(`${probeUrl}/health`);
+                const mod = String(probeUrl).startsWith("https") ? require("https") : require("http");
+                const req = mod.request(
+                  { hostname: parsed.hostname, port: parsed.port || (String(probeUrl).startsWith("https") ? 443 : 80), path: parsed.path || "/health", method: "GET" },
+                  (res: any) => resolve(res.statusCode as number)
+                );
+                req.on("error", reject);
+                req.setTimeout(6000, () => { req.destroy(); reject(new Error("timeout")); });
+                req.end();
+              });
+              probeOnline = probeCode >= 200 && probeCode < 400;
+              probeStatus = probeOnline ? "🟢 在线" : `🔴 离线（HTTP ${probeCode}）`;
+            } catch (e: any) {
+              probeStatus = `🔴 离线（${e.message || "连接失败"}）`;
+            }
+          }
           const info = [
             `节点ID: ${p.nodeId}`,
             `节点名: ${nodeData.node_name}`,
@@ -13733,10 +13820,11 @@ last_used: null
             `平台: ${nodeData.platform ?? "unknown"}`,
             `架构: ${nodeData.architecture ?? "-"}`,
             `归属: ${nodeData.owner_userId ?? "未知"}`,
+            `接入URL: ${probeUrl ?? "-"}`,
             `注册时间: ${nodeData.registered_at_local ?? "-"}`,
-            `状态: ${status} ${ago}`,
+            `状态: ${probeStatus}`,
           ].join("\n");
-          return { content: [{ type: "text", info }], details: { ...nodeData, nodeId: p.nodeId, status: status.includes("🟢") ? "online" : "offline" } };
+          return { content: [{ type: "text", text: info }], details: { ...nodeData, nodeId: p.nodeId, online: probeOnline, probeUrl } };
         }
 
         if (p.action === "invoke_command") {
