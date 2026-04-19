@@ -101,10 +101,18 @@ function masterRoleFromAgentId(agentId: string): MasterRole {
 }
 
 function dryRunError(toolName: string, detail?: string): AgentToolResult<Record<string, unknown>> {
+  const msg = `${toolName}: ${detail ?? "not yet implemented (Dry Run)"}`;
   return {
-    result: {
-      error: `${toolName}: ${detail ?? "not yet implemented (Dry Run)"}`,
-    },
+    content: [{ type: "text", text: msg }],
+    details: { error: msg },
+  };
+}
+
+function ok(data: unknown): AgentToolResult<Record<string, unknown>> {
+  const d = data as Record<string, unknown>;
+  return {
+    content: [{ type: "text", text: JSON.stringify(d) }],
+    details: d,
   };
 }
 
@@ -156,7 +164,7 @@ const hiveclawRoutingPlugin = {
             master_version_seq: params.master_version_seq,
             storage_root: STORAGE_ROOT,
           });
-          return { result: { ...result } };
+          return ok(result);
         } catch (err) {
           return dryRunError("corpus_intake", String(err));
         }
@@ -173,7 +181,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await corpusDedup({ role: params.role as MasterRole, storage_root: STORAGE_ROOT });
-          return { result: { ...result } };
+          return ok(result);
         } catch (err) {
           return dryRunError("corpus_dedup", String(err));
         }
@@ -190,7 +198,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await corpusClassify({ role: params.role as MasterRole, storage_root: STORAGE_ROOT });
-          return { result: { ...result } };
+          return ok(result);
         } catch (err) {
           return dryRunError("corpus_classify", String(err));
         }
@@ -212,7 +220,7 @@ const hiveclawRoutingPlugin = {
             min_score: params.min_score,
             storage_root: STORAGE_ROOT,
           });
-          return { result: { ...result } };
+          return ok(result);
         } catch (err) {
           return dryRunError("corpus_quality_filter", String(err));
         }
@@ -229,7 +237,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await corpusBalanceCheck({ role: params.role as MasterRole, storage_root: STORAGE_ROOT });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("corpus_balance_check", String(err));
         }
@@ -248,7 +256,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await checkTrainingQueue({ role: params.role as MasterRole, storage_root: STORAGE_ROOT });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("check_training_queue", String(err));
         }
@@ -281,7 +289,7 @@ const hiveclawRoutingPlugin = {
             },
             scheduler,
           );
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("submit_training_job", String(err));
         }
@@ -298,7 +306,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await getJobStatus({ job_id: params.job_id, storage_root: STORAGE_ROOT });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("get_job_status", String(err));
         }
@@ -315,7 +323,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await listModelVersions({ role: params.role as MasterRole, storage_root: STORAGE_ROOT });
-          return { result: { versions: result } };
+          return ok({ versions: result });
         } catch (err) {
           return dryRunError("list_model_versions", String(err));
         }
@@ -342,7 +350,7 @@ const hiveclawRoutingPlugin = {
             pct: params.pct,
             storage_root: STORAGE_ROOT,
           });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("start_canary", String(err));
         }
@@ -360,7 +368,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await promoteVersion({ role: params.role as MasterRole, version: params.version, storage_root: STORAGE_ROOT });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("promote_version", String(err));
         }
@@ -378,7 +386,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await rollbackVersion({ role: params.role as MasterRole, version: params.version, storage_root: STORAGE_ROOT });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("rollback_version", String(err));
         }
@@ -401,7 +409,7 @@ const hiveclawRoutingPlugin = {
             eval_set_path: EVAL_SET_PATH,
             storage_root: STORAGE_ROOT,
           });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("run_eval", String(err));
         }
@@ -420,7 +428,7 @@ const hiveclawRoutingPlugin = {
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         try {
           const result = await compareVersions({ role: params.role as MasterRole, v1: params.v1, v2: params.v2, storage_root: STORAGE_ROOT });
-          return { result: result as unknown as Record<string, unknown> };
+          return ok(result);
         } catch (err) {
           return dryRunError("compare_versions", String(err));
         }
@@ -445,7 +453,7 @@ const hiveclawRoutingPlugin = {
           kb_root: KB_ROOT,
           top_k: params.top_k,
         });
-        return { result: { samples: results } };
+        return ok({ samples: results });
       },
     }));
 
@@ -458,7 +466,7 @@ const hiveclawRoutingPlugin = {
       }),
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const result = getDesignPrinciple({ topic: params.topic, kb_root: KB_ROOT });
-        return { result: { content: result } };
+        return ok({ content: result });
       },
     }));
 
@@ -471,7 +479,7 @@ const hiveclawRoutingPlugin = {
       }),
       execute: async (_id, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const results = searchAntipatterns({ scenario: params.scenario, kb_root: KB_ROOT });
-        return { result: { antipatterns: results } };
+        return ok({ antipatterns: results });
       },
     }));
 
@@ -498,7 +506,7 @@ const hiveclawRoutingPlugin = {
           intake_form: params.intake_form as Parameters<typeof generateReadmeDraft>[0]["intake_form"],
           kb_root: KB_ROOT,
         });
-        return { result: { draft: result } };
+        return ok({ draft: result });
       },
     }));
 
@@ -518,7 +526,7 @@ const hiveclawRoutingPlugin = {
           current_content: params.current_content,
           kb_root: KB_ROOT,
         });
-        return { result: { refined: result } };
+        return ok({ refined: result });
       },
     }));
 
@@ -544,7 +552,7 @@ const hiveclawRoutingPlugin = {
           },
           kb_root: KB_ROOT,
         });
-        return { result: result as unknown as Record<string, unknown> };
+        return ok(result);
       },
     }));
 
@@ -566,7 +574,7 @@ const hiveclawRoutingPlugin = {
           source_instance_type: params.source_instance_type as OrgType,
           kb_root: KB_ROOT,
         });
-        return { result: result as unknown as Record<string, unknown> };
+        return ok(result);
       },
     }));
 
