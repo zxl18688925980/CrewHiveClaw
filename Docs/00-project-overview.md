@@ -3738,7 +3738,7 @@ dormant Revival（访客重新打开 demo-chat）
 |------|------|------|
 | 语音输入 | `/api/demo-proxy/stt` | Web Speech API 优先（Chrome 桌面），MediaRecorder fallback → ffmpeg + Whisper |
 | 语音播放 | `/api/demo-proxy/tts` | edge-tts YunxiNeural，返回 base64 MP3，前端 Audio API 播放 |
-| 图片理解 | `/api/demo-proxy/vision` | 接收 base64 图片 → `describeImageWithLlava`（qwen3.6 Ollama 多模态 → 旧 mlx-vision 8081 → GLM-4v-flash 三层降级链）→ 返回中文描述 → 自动以 `【图片】描述` 格式发送给 Lucas |
+| 图片理解 | `/api/demo-proxy/vision` | 接收 base64 图片 → `describeImageWithLlava`（qwen3.6 Ollama 多模态 → GLM-4v-flash 云端降级）→ 返回中文描述 → 自动以 `【图片】描述` 格式发送给 Lucas |
 | 文字对话 | `/api/demo-proxy/chat` | 代理到 Gateway，agentId=lucas，userId=visitor:TOKEN |
 
 访客图片处理与家人发图走同一条 `describeImageWithLlava` 链路，能力一致。

@@ -476,7 +476,7 @@ async function scrapeWechatArticle(url) {
 }
 
 /**
- * 图片视觉描述：qwen3.6 Ollama（主）→ mlx-vision 旧模型（备，8081）→ GLM vision（降级）
+ * 图片视觉描述：qwen3.6 Ollama（主）→ GLM vision 云端（降级）
  */
 async function describeImageWithLlava(imagePath) {
   const base64Image = fs.readFileSync(imagePath).toString('base64');
@@ -509,36 +509,10 @@ async function describeImageWithLlava(imagePath) {
       return result;
     }
     if (result) {
-      logger.warn('qwen3.6 返回拒绝回复，降级 mlx-vision', { preview: result.slice(0, 80) });
+      logger.warn('qwen3.6 返回拒绝回复，降级 GLM', { preview: result.slice(0, 80) });
     }
   } catch (e) {
-    logger.warn('qwen3.6 vision 失败，降级 mlx-vision', { error: e.message });
-  }
-
-  // 备用：旧版 mlx-vision（Qwen2.5-VL-32B via mlx_vlm，8081，优雅降级）
-  try {
-    const resp = await axios.post(
-      'http://127.0.0.1:8081/v1/chat/completions',
-      {
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-            { type: 'text', text: prompt },
-          ],
-        }],
-        max_tokens: 512,
-        temperature: 0,
-      },
-      { timeout: 120000 }
-    );
-    const result = resp.data?.choices?.[0]?.message?.content?.trim();
-    if (result && !VISION_REFUSAL_RE.test(result)) {
-      logger.info('mlx-vision 旧模型降级成功', { model: 'qwen2.5-vl-32b' });
-      return result;
-    }
-  } catch (e) {
-    logger.warn('mlx-vision 失败，降级 GLM', { error: e.message });
+    logger.warn('qwen3.6 vision 失败，降级 GLM', { error: e.message });
   }
 
   // 降级：GLM vision
