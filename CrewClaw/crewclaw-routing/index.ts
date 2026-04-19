@@ -13672,15 +13672,18 @@ last_used: null
         "action=status：查询指定节点的详细信息和在线状态，提供 nodeId。",
         "action=diagnose：诊断指定节点的完整状态，包括注册状态、最后心跳时间、SSH 连通性测试结果，提供 nodeId。",
         "action=invoke_command：在指定节点上执行命令，提供 nodeId + command；返回命令输出。",
-        "action=invoke_cc：通过 SSH 在节点上运行 claude CLI 执行任务（CC→CC 协同），提供 nodeId + task（自然语言任务描述）；Windows CC 执行后返回结果。这是 L3 跨节点协同的主路径。",
+        "action=invoke_cc：通过 SSH 在节点上运行 claude CLI 执行任务（CC→CC 协同，系统工程师通道），提供 nodeId + task（自然语言任务描述）；适用于基础设施/调试任务。",
+        "action=call_agent：通过 HTTP 调用目标节点的 OpenClaw Gateway（业务通道，L3 协同），提供 nodeId + message（任务描述）+ agentId（可选，默认 openclaw）；适用于抖音制作、内容发布等业务任务，节点 OpenClaw 会自主完成任务。",
         "节点需先运行 setup-windows-node.ps1 完成安装，然后运行 setup-mac-config.sh 在 Mac 端完成配置。",
-        "适用场景：需要远程执行 Windows 命令时使用，如查看系统信息、运行脚本等。invoke_cc 用于 CC→CC 跨节点任务协同（L3）。",
+        "适用场景：invoke_cc 用于 CC→CC 系统管理；call_agent 用于 Lucas→Windows OpenClaw 业务委托（L3 主路径）。",
       ].join("\n"),
       parameters: Type.Object({
-        action: Type.String({ description: '"list" | "status" | "diagnose" | "invoke_command" | "invoke_cc"' }),
-        nodeId: Type.Optional(Type.String({ description: 'action=status/diagnose/invoke_command/invoke_cc 时指定节点ID' })),
+        action: Type.String({ description: '"list" | "status" | "diagnose" | "invoke_command" | "invoke_cc" | "call_agent"' }),
+        nodeId: Type.Optional(Type.String({ description: 'action=status/diagnose/invoke_command/invoke_cc/call_agent 时指定节点ID' })),
         command: Type.Optional(Type.String({ description: 'action=invoke_command 时要执行的命令（PowerShell 语法）' })),
         task: Type.Optional(Type.String({ description: 'action=invoke_cc 时发给目标节点 CC 的任务描述（自然语言）' })),
+        message: Type.Optional(Type.String({ description: 'action=call_agent 时发给目标节点 OpenClaw 的任务消息' })),
+        agentId: Type.Optional(Type.String({ description: 'action=call_agent 时指定目标节点的 Agent ID（如 main），默认 openclaw' })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         // Lucas 是家庭成员节点的配置者（节点归属影子），Andy/Lisa 是框架层小弟的管理者
@@ -13803,6 +13806,79 @@ last_used: null
           } catch (e) {
             const err = e as Error;
             return { content: [{ type: "text", text: `❌ invoke_cc 失败：${err.message?.split("\n")[0]}` }], details: { error: err.message, nodeId: ccParams.nodeId } };
+          }
+        }
+
+        if (p.action === "call_agent") {
+          // Lucas→OpenClaw 业务通道：通过 HTTP 调用目标节点的 OpenClaw Gateway
+          const caParams = params as { action: string; nodeId?: string; message?: string; agentId?: string };
+          if (!caParams.nodeId) return { content: [{ type: "text", text: "❌ call_agent 需要提供 nodeId。" }], details: { error: "missing_nodeId" } };
+          if (!caParams.message) return { content: [{ type: "text", text: "❌ call_agent 需要提供 message。" }], details: { error: "missing_message" } };
+
+          // 查找节点的 gateway_public_url 和 gateway_token
+          let caGwUrl: string | null = null;
+          let caGwToken: string | null = null;
+          for (const v of nodeRegistryStore.values()) {
+            const nName = v.node_name as string;
+            const nId = `node_${String(nName).replace(/[^a-zA-Z0-9]/g, "_")}`;
+            if (nId === caParams.nodeId) {
+              caGwUrl = (v.gateway_public_url as string) || (v.gateway_url as string) || null;
+              caGwToken = (v.gateway_token as string) || null;
+              break;
+            }
+          }
+          if (!caGwUrl) return { content: [{ type: "text", text: `❌ 节点不存在或未配置 gateway_public_url：${caParams.nodeId}` }], details: { error: "no_gateway_url" } };
+
+          const agentModel = caParams.agentId ? `openclaw/${caParams.agentId}` : "openclaw";
+          const reqBody = JSON.stringify({
+            model: agentModel,
+            messages: [{ role: "user", content: caParams.message }],
+            stream: false,
+          });
+
+          try {
+            const https = require("https");
+            const url = require("url");
+            const parsed = url.parse(`${caGwUrl}/v1/chat/completions`);
+            const output = await new Promise<string>((resolve, reject) => {
+              const options = {
+                hostname: parsed.hostname,
+                port: parsed.port || 443,
+                path: parsed.path,
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Content-Length": Buffer.byteLength(reqBody),
+                  ...(caGwToken ? { "Authorization": `Bearer ${caGwToken}` } : {}),
+                },
+                timeout: 120000,
+              };
+              const req = https.request(options, (res: any) => {
+                let data = "";
+                res.on("data", (c: any) => data += c);
+                res.on("end", () => {
+                  try {
+                    const j = JSON.parse(data);
+                    const content = j?.choices?.[0]?.message?.content || data.slice(0, 2000);
+                    resolve(content);
+                  } catch {
+                    resolve(data.slice(0, 2000));
+                  }
+                });
+              });
+              req.on("error", reject);
+              req.on("timeout", () => { req.destroy(); reject(new Error("request timeout (120s)")); });
+              req.write(reqBody);
+              req.end();
+            });
+            const truncated = output.length > 4000 ? output.slice(0, 4000) + "\n...[输出已截断]" : output;
+            return {
+              content: [{ type: "text", text: `✅ [${caParams.nodeId}/OpenClaw] 执行结果：\n\n${truncated}` }],
+              details: { nodeId: caParams.nodeId, agentModel, messageLength: caParams.message.length, outputLength: output.length },
+            };
+          } catch (e) {
+            const err = e as Error;
+            return { content: [{ type: "text", text: `❌ call_agent 失败：${err.message?.split("\n")[0]}` }], details: { error: err.message, nodeId: caParams.nodeId } };
           }
         }
 
