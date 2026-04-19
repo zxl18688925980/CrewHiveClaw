@@ -7009,6 +7009,19 @@ const crewclawRoutingPlugin = {
       // 语义搜索 topK=5 名额竞争激烈；直近投喂必须走专用时序通道，不依赖语义召回。
       // 只在 Andy HEARTBEAT 时注入，避免干扰正常设计对话。
       if (agentId === DESIGNER_AGENT_ID && /HEARTBEAT/i.test(event.prompt ?? "")) {
+        // ── Andy HEARTBEAT 检查 0：MLX-LM Qwen3.6 支持自动检测（每次必执行，最优先）──
+        try {
+          const mlxCheckScript = join(SCRIPTS_DIR, "check-mlx-qwen36.py");
+          if (existsSync(mlxCheckScript)) {
+            const mlxResult = execSync(
+              `/opt/homebrew/opt/python@3.11/bin/python3.11 "${mlxCheckScript}"`,
+              { timeout: 15_000, encoding: "utf8" }
+            ).trim();
+            if (mlxResult.includes("✅")) {
+              appendSystem.push(`【MLX-LM 检测】${mlxResult} — T7/T8 已就绪，可启动 Qwen3.6 DPO 微调流程`);
+            }
+          }
+        } catch (_mlxErr) { /* 静默，不阻塞 HEARTBEAT */ }
         // ── Andy HEARTBEAT：skill-candidates 结晶信号注入 ──
         // Lucas 通过 flag_for_skill 和自动检测写入 skill-candidates.jsonl，
         // Andy 在 HEARTBEAT 时消费，判断是否值得结晶为正式 Skill/Tool。

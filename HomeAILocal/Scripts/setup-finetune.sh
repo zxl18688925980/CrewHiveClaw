@@ -1,13 +1,13 @@
 #!/bin/bash
 # setup-finetune.sh — HomeAI 初始化训练脚本（一次性）
-# 使用 Qwen2.5-Coder-32B-Instruct + MLX LoRA
+# 使用 Qwen3.6-35B-A3B（Qwen3-35B-A3B）+ MLX LoRA
 # 用法：bash scripts/setup-finetune.sh
 
 set -eo pipefail
 
 HOMEAI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-HF_MODEL_PATH="$HOMEAI_DIR/models/huggingface/Qwen/Qwen2.5-Coder-32B-Instruct"
-MLX_MODEL_PATH="$HOMEAI_DIR/models/mlx/Qwen2.5-Coder-32B-4bit"
+HF_MODEL_PATH="$HOMEAI_DIR/models/huggingface/Qwen/Qwen3-35B-A3B"
+MLX_MODEL_PATH="$HOMEAI_DIR/models/mlx/Qwen3.6-35B-A3B-4bit"
 RAW_DATA="$HOMEAI_DIR/data/finetune/prepared/train.jsonl"
 DATA_DIR="$HOMEAI_DIR/data/finetune/setup-split"
 ADAPTER_DIR="$HOMEAI_DIR/models/adapters/setup"
@@ -84,7 +84,7 @@ PYEOF
 # 6. 释放尽量多的 GPU 内存（避免 Metal OOM → kernel panic）
 log "停止所有 Ollama 已加载模型，释放 GPU 内存..."
 ollama stop homeai-assistant 2>/dev/null || true
-ollama stop qwen2.5-coder:32b 2>/dev/null || true
+ollama stop qwen3.6 2>/dev/null || true
 sleep 5
 log "当前空闲内存: $(vm_stat | awk '/Pages free/{print $3*16/1024"MB"}')"
 
@@ -130,19 +130,24 @@ mlx_lm.fuse \
 log "融合完成: $FUSED_DIR"
 
 # 9. 注册到 Ollama
-# 注意：MLX 4-bit fuse 产出的是 MLX safetensors 格式，Ollama 不支持直接导入（U32 量化类型）
-# 改为以 qwen2.5-coder:32b（Ollama 已有的 GGUF）为 base，写入微调后的系统提示
-# LoRA adapter 权重通过 mlx_lm.generate --adapter-path 在推理时叠加
-log "注册 homeai-assistant（基于 qwen2.5-coder:32b + 微调系统提示）到 Ollama ..."
+# Method A：极简 Modelfile，不含 SYSTEM（由插件 before_prompt_build 动态注入，避免双重 token 消耗）
+# 注意：MLX fuse 产出 safetensors 格式，Ollama 不支持直接导入
+# 此处以 qwen3.6（Ollama 已有 GGUF）为 base 建立 homeai-assistant
+log "注册 homeai-assistant（基于 qwen3.6，Method A 极简 Modelfile）到 Ollama ..."
 cat > /tmp/homeai-setup-modelfile <<EOF
-FROM qwen2.5-coder:32b
-SYSTEM "你是曾家的家庭助手 Lucas，专注家庭服务与智能协作。基于 Qwen2.5-Coder-32B-Instruct 微调。"
+FROM qwen3.6
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER top_k 20
+PARAMETER num_ctx 8192
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|endoftext|>"
 EOF
 
 ollama create homeai-assistant -f /tmp/homeai-setup-modelfile
 rm /tmp/homeai-setup-modelfile
 
-log "homeai-assistant 注册完成（qwen2.5-coder:32b base）"
+log "homeai-assistant 注册完成（qwen3.6 base，Method A）"
 log "LoRA adapter 路径: $ADAPTER_DIR"
 log "MLX 推理命令: mlx_lm.generate --model $MLX_MODEL_PATH --adapter-path $ADAPTER_DIR --prompt '你好'"
 log "=== Setup 微调全部完成 ==="

@@ -14,7 +14,7 @@ HOMEAI_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DATA_ROOT="${HOMEAI_ROOT:-$HOME/HomeAI}"
 
 PROFILE="$HOMEAI_DIR/config/machine-profile.json"
-MLX_MODEL_PATH="$HOMEAI_DIR/models/mlx/Qwen2.5-Coder-32B-4bit"
+MLX_MODEL_PATH="$HOMEAI_DIR/models/mlx/Qwen3.6-35B-A3B-4bit"
 SETUP_ADAPTER_DIR="$HOMEAI_DIR/models/adapters/setup"
 ADAPTERS_BASE="$HOMEAI_DIR/models/adapters"
 PENDING_FILE="$DATA_ROOT/data/finetune/pending-samples.jsonl"
@@ -187,41 +187,16 @@ if [ -f "$GGUF_FILE" ]; then
   log "GGUF 导出成功: $GGUF_FILE"
 
   # 创建 Ollama Modelfile 并更新 homeai-assistant
+  # Method A：极简 Modelfile，不含 SYSTEM（由插件 before_prompt_build 动态注入，避免双重 token 消耗）
   MODELFILE_TMP="/tmp/homeai-assistant-modelfile-$RUN_DATE"
-  cat > "$MODELFILE_TMP" << 'MODELEOF'
-FROM __GGUF_PATH__
-TEMPLATE """{{- if .Suffix }}<|fim_prefix|>{{ .Prompt }}<|fim_suffix|>{{ .Suffix }}<|fim_middle|>
-{{- else if .Messages }}
-{{- if or .System .Tools }}<|im_start|>system
-{{- if .System }}
-{{ .System }}
-{{- end }}
-{{- if .Tools }}
-# Tools
-
-You may call one or more functions to assist with the user question.
-You are provided with function signatures in <XML> tags:
-{{- range .Tools }}
-{"type": "function", "function": {{ .Function }}}
-{{- end }}
-{{- end }}
-{{- end }}
-<|im_end|>
-{{- end }}
-{{- range .Messages }}
-<|im_start|>{{ .Role }}
-{{ .Content }}
-<|im_end|>
-{{- end }}
-<|im_start|>assistant
-{{- if .Response }}
-{{ .Response }}
-{{- end }}"""
-SYSTEM """你是 Lucas，曾家的小儿子。你对家人充满好奇和热情，喜欢和大家聊天。你说话直接但温暖，不会过度礼貌但真心关心每个人。遇到不确定的事会诚实说不知道，从不编造信息。"""
+  cat > "$MODELFILE_TMP" << MODELEOF
+FROM $GGUF_FILE
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER top_k 20
+PARAMETER num_ctx 8192
 PARAMETER stop "<|im_end|>"
 PARAMETER stop "<|endoftext|>"
-PARAMETER temperature 0.7
-PARAMETER num_ctx 8192
 MODELEOF
 
   # 替换 GGUF 路径

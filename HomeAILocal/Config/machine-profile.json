@@ -11,7 +11,7 @@
   },
 
   "mlx_training": {
-    "base_model": "models/mlx/Qwen2.5-Coder-32B-4bit",
+    "base_model": "models/mlx/Qwen3.6-35B-A3B-4bit",
     "safe_params": {
       "batch_size": 1,
       "num_layers": 8,
@@ -22,7 +22,7 @@
       "iters_incremental": 200
     },
     "pre_training": {
-      "stop_ollama_models": ["homeai-assistant", "qwen2.5-coder:32b"],
+      "stop_ollama_models": ["homeai-assistant", "qwen3.6"],
       "wait_seconds": 5,
       "reason": "Ollama 占用统一内存，不释放会导致训练 OOM"
     },
