@@ -1,0 +1,14 @@
+{
+  "name": "@hiveclaw/routing",
+  "version": "2026.4.19",
+  "description": "HiveClaw 云端大师插件：语料管理 / 训练调度 / 版本管理 / Readme 大师协议",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}

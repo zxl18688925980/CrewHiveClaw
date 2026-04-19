@@ -10,5 +10,6 @@
   {"taskId": "l4-dpo-scan",             "lx": "L4", "category": "深度学习", "schedule": "weekly", "expectedDay": 1,    "maxAgeHours": 196,"description": "DPO周级扫描（周一凌晨7点，错开 Andy HEARTBEAT 6点）"},
   {"taskId": "lucas-heartbeat",          "lx": "L1", "category": "Agent巡检", "schedule": "daily", "expectedHour": 20, "maxAgeHours": 28, "description": "Lucas HEARTBEAT（开发任务跟进）"},
   {"taskId": "pipeline-cleanup",         "lx": "L0", "category": "基础设施", "schedule": "daily", "expectedHour": 4,  "maxAgeHours": 28, "description": "Pipeline目录TTL清理（15天过期）"},
-  {"taskId": "visitor-silence",          "lx": "L0", "category": "基础设施", "schedule": "daily", "expectedHour": 3,  "maxAgeHours": 28, "description": "访客沉寂检测（30天→dormant/90天→归档）"}
+  {"taskId": "visitor-silence",          "lx": "L0", "category": "基础设施", "schedule": "daily", "expectedHour": 3,  "maxAgeHours": 28, "description": "访客沉寂检测（30天→dormant/90天→归档）"},
+  {"taskId": "hiveclaw-corpus-upload",   "lx": "L4", "category": "HiveClaw", "schedule": "weekly", "expectedDay": 2,   "maxAgeHours": 196,"description": "HiveClaw 语料上传（周二凌晨3点，检查触发条件，满足时上传三角色语料到云端大师）", "_dry_run": true}
 ]

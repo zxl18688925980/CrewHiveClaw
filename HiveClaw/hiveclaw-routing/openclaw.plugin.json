@@ -1,0 +1,13 @@
+{
+  "id": "hiveclaw-routing",
+  "description": "HiveClaw 云端大师插件：语料管理 / 训练调度 / 版本管理 / Readme 生成协议",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "storageRoot":  { "type": "string", "description": "语料和版本存储根目录" },
+      "computeProvider": { "type": "string", "enum": ["siliconflow", "volcengine", "together"] },
+      "evalSetPath":  { "type": "string", "description": "Canary 评估集路径" }
+    }
+  }
+}

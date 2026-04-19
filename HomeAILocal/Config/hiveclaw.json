@@ -1,0 +1,39 @@
+{
+  "_comment": "HomeAI 实例的 HiveClaw 云端接入配置（Dry Run：endpoint 为占位地址，待云端就绪后填入真实值）",
+
+  "instance_id": "homeai-zxl",
+  "org_type": "family",
+
+  "cloud": {
+    "corpus_upload_endpoint": "https://hive.{domain}/api/corpus/upload",
+    "register_endpoint":      "https://hive.{domain}/api/instances/register",
+    "health_endpoint":        "https://hive.{domain}/health",
+    "_note": "域名待云端服务器部署后替换"
+  },
+
+  "master_endpoints": {
+    "lucas": "https://hive.{domain}/api/agent/lucas-master/chat",
+    "andy":  "https://hive.{domain}/api/agent/andy-master/chat",
+    "lisa":  "https://hive.{domain}/api/agent/lisa-master/chat",
+    "readme": "https://hive.{domain}/api/agent/readme-master/chat",
+    "_note": "openclaw.json 的 hiveclaw provider baseUrl 指向此处"
+  },
+
+  "upload_triggers": {
+    "min_new_dpo_samples": 50,
+    "_note_dpo": "本地积累 DPO 样本触发阈值（云端要求 ≥200，本地触发更小以更频繁同步）",
+    "min_days_between_uploads": 30,
+    "manual_override": false
+  },
+
+  "corpus": {
+    "lucas_file":  "~/HomeAI/Data/corpus/lucas-corpus.jsonl",
+    "andy_file":   "~/HomeAI/Data/corpus/andy-corpus.jsonl",
+    "lisa_file":   "~/HomeAI/Data/corpus/lisa-corpus.jsonl",
+    "upload_history": "~/HomeAI/Data/corpus/hiveclaw-upload-history.jsonl",
+    "archive_dir":    "~/HomeAI/Data/corpus/hiveclaw-archived/"
+  },
+
+  "dry_run": true,
+  "_dry_run_note": "true = 校验格式 + 打印上传摘要但不实际发送；false = 真实上传（需 api_key 已配置）"
+}
