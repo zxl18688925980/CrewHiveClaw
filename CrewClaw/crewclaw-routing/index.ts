@@ -8594,8 +8594,18 @@ last_used: null
         let clawhubScanNote = "";
         if (!req.includes("忽略Clawhub检查") && !req.includes("忽略重复检查")) {
           try {
-            // 用 understanding_summary 提取搜索关键词（已由 Lucas 过滤过的语义摘要）
-            const searchQuery = (understandingSummary || req).slice(0, 60).replace(/[^\w\u4e00-\u9fa5\s]/g, " ").trim();
+            // 提取搜索关键词：去开头指令动词 + 取逗号前第一段 + 去末尾泛化名词
+            // 目的：中文需求句长分散 TF-IDF 权重，精简后得分更聚焦
+            const rawText = understandingSummary || req;
+            const firstSegment = rawText.split(/[，。！？,.]/)[0];
+            const stripped = firstSegment
+              .replace(/^[\s]*(帮我|我想要?|我需要|请帮我?|你能|请你)[\s]*(做|开发|实现|写|创建|设计|添加|新增|构建)?[\s]*(一个|个)?[\s]*/, "")
+              .replace(/(功能|工具|系统|应用程序|应用|服务|模块|接口|插件)[\s]*$/, "")
+              .replace(/[^\w\u4e00-\u9fa5\s]/g, " ")
+              .replace(/\s+/g, " ")
+              .trim();
+            // fallback：清洗后为空则用原始文本前30字
+            const searchQuery = (stripped || rawText.replace(/[^\w\u4e00-\u9fa5\s]/g, " ").trim()).slice(0, 30);
             const clawhubResult = spawnSync("clawhub", ["search", searchQuery], {
               timeout: 5000,
               encoding: "utf8",
@@ -8603,6 +8613,7 @@ last_used: null
             });
             if (clawhubResult.status === 0 && clawhubResult.stdout) {
               // 解析输出：每行格式 "slug  Name  (score)"
+              // 阈值校准（中文句查询）：无关请求最高 ~1.0，相关请求 1.1~2.0，精准短查询 >2.0
               const lines = clawhubResult.stdout.trim().split("\n").filter(Boolean);
               const highRelevance: string[] = [];
               const lowRelevance: string[] = [];
@@ -8611,11 +8622,11 @@ last_used: null
                 if (!m) continue;
                 const score = parseFloat(m[3]);
                 const entry = `- ${m[1]} (${m[2]}, 评分 ${m[3]}): clawhub install ${m[1]}`;
-                if (score >= 2.5) highRelevance.push(entry);
-                else if (score >= 1.8) lowRelevance.push(entry);
+                if (score >= 2.0) highRelevance.push(entry);
+                else if (score >= 1.1) lowRelevance.push(entry);
               }
               if (highRelevance.length > 0) {
-                clawhubScanNote = `【Clawhub 生态扫描】发现高相关性 Skill/工具（评分≥2.5）：\n${highRelevance.slice(0, 3).join("\n")}\n${lowRelevance.length > 0 ? `\n一般相关（评分1.8~2.5）：\n${lowRelevance.slice(0, 2).join("\n")}` : ""}`;
+                clawhubScanNote = `【Clawhub 生态扫描】发现高相关性 Skill/工具（评分≥2.0）：\n${highRelevance.slice(0, 3).join("\n")}\n${lowRelevance.length > 0 ? `\n一般相关（评分1.1~2.0）：\n${lowRelevance.slice(0, 2).join("\n")}` : ""}`;
                 // 高相关时软拦截：建议先评估生态方案，给逃脱口
                 return {
                   content: [{
@@ -8626,7 +8637,7 @@ last_used: null
                 };
               } else if (lowRelevance.length > 0) {
                 // 低相关：仅注入 Andy brief，不拦截
-                clawhubScanNote = `【Clawhub 生态参考】找到若干低相关性条目（评分1.8~2.5），供 Andy 参考是否复用：\n${lowRelevance.slice(0, 3).join("\n")}`;
+                clawhubScanNote = `【Clawhub 生态参考】找到若干相关条目（评分1.1~2.0），供 Andy 参考是否复用：\n${lowRelevance.slice(0, 3).join("\n")}`;
               }
             }
           } catch (_e) {
