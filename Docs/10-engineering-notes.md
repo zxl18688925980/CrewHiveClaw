@@ -1040,3 +1040,28 @@ if (lastIteratedMatch?.[1] === today) continue;  // 今天已迭代，跳过
 
 **状态**：已修复（index.ts skill-iterate 加 same-day guard）
 **确认日期**：2026-04-18
+
+---
+
+## 2026-04-20
+
+### OpenClaw Skill 追踪机制：手写 Skill 必须有 `## 操作步骤` 节
+
+**场景**：crewclaw-routing 插件追踪 Skill 使用情况（`used`/`completed`/`skipped` 计数），用于 lifecycle-manager --gc 判断是否淘汰。
+
+**现象**：所有手写 Skill 显示 `used=0 completed=0`，即使 Agent 多次调用了 Skill 中描述的工具。
+
+**根因**：追踪机制（`index.ts` `agent_end` 钩子）通过解析 `## 操作步骤` 节中的 `- toolName:` 格式提取工具列表，再与当次 session 实际调用的工具对比来判断 Skill 是否被执行。手写 Skill 的正文是叙事散文，没有结构化的 `## 操作步骤` 节，解析结果为空 → 无法匹配 → 计数永不增加。
+
+**规避方式**：所有 Skill（包括手写认知类 Skill）必须在正文中加入 `## 操作步骤` 节，格式：
+```markdown
+## 操作步骤
+- toolName1: 描述
+- toolName2: 描述
+```
+纯认知类 Skill（不调工具）可以用 `- think:` 或 `- read:` 作为占位符，只要格式正确就不影响追踪。
+
+**注意**：自动生成的 Skill（writeSkillDraft 路径）由代码生成，天然有操作步骤节，不受影响。手写 Skill 是受害场景。
+
+**状态**：已修复（14 个手写 Skill 补充了 `## 操作步骤` 节）
+**确认日期**：2026-04-20
