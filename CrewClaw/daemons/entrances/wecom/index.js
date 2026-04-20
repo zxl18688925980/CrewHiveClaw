@@ -6303,15 +6303,23 @@ const taskManager = new TaskManager({
 // 当 Agent 工具不可用或模型异常时，可能对同一上下文重复输出相似内容。
 // 检测最近 N 条回复的相似度，超过阈值时替换为简短提示，防止刷屏。
 const REPEAT_GUARD_MAX_HISTORY = 3;
-const REPEAT_GUARD_SIMILARITY_THRESHOLD = 0.6; // 前 200 字符的 Jaccard 相似度
+const REPEAT_GUARD_SIMILARITY_THRESHOLD = 0.75; // bigram Jaccard 阈值（原 0.6 单字符导致中文误杀）
 const replyHistory = new Map(); // userId → string[]（最近 N 条回复的前 200 字符）
 
+// 用 bigram（字符对）而非单字符计算 Jaccard，对中文更准确
+// 单字符集合在中文中误杀率高：同一话题的不同回复共享大量高频汉字
 function jaccardSimilarity(a, b) {
   if (!a || !b) return 0;
-  const setA = new Set(a.split(''));
-  const setB = new Set(b.split(''));
+  const toBigrams = s => {
+    const bg = new Set();
+    for (let i = 0; i < s.length - 1; i++) bg.add(s.slice(i, i + 2));
+    return bg;
+  };
+  const setA = toBigrams(a);
+  const setB = toBigrams(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
   let intersection = 0;
-  for (const c of setA) if (setB.has(c)) intersection++;
+  for (const bg of setA) if (setB.has(bg)) intersection++;
   return intersection / (setA.size + setB.size - intersection);
 }
 

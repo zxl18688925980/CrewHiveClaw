@@ -73,6 +73,12 @@ const FRONTEND_AGENT_ID    = process.env.FRONTEND_AGENT_ID    ?? "lucas";
 const DESIGNER_AGENT_ID    = process.env.DESIGNER_AGENT_ID    ?? "andy";
 // 实现者 Agent ID：负责代码实现、工程执行
 const IMPLEMENTOR_AGENT_ID = process.env.IMPLEMENTOR_AGENT_ID ?? "lisa";
+// 监控 Agent ID：系统工程师通道
+const MONITOR_AGENT_ID     = process.env.MONITOR_AGENT_ID     ?? "main";
+// 家庭成员 userId 白名单（逗号分隔，实例通过 FAMILY_USER_IDS 环境变量设置）
+const FAMILY_USER_IDS_SET  = new Set(
+  (process.env.FAMILY_USER_IDS ?? "ZengXiaoLong,XiaMoQiuFengLiang,ZiFeiYu").split(",").map(s => s.trim()).filter(Boolean)
+);
 // 基础 Agent 集合：不受子 Agent Tier 约束，skills 目录初始化包含此集合
 const BASE_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID, "main"]);
 // 最近一次 frontend agent 会话的 userId（供工具在无 session 上下文时使用，单用户场景安全）
@@ -1629,10 +1635,9 @@ interface ConvMeta {
 }
 
 // ── 用户类型识别 ───────────────────────────────────────────────────────────
-const FAMILY_USER_IDS = ["ZengXiaoLong", "XiaMoQiuFengLiang", "ZiFeiYu"];
 function getUserType(userId: string): "visitor" | "family" | "engineer" {
   if (userId.startsWith("visitor:")) return "visitor";
-  if (FAMILY_USER_IDS.includes(userId)) return "family";
+  if (FAMILY_USER_IDS_SET.has(userId)) return "family";
   return "engineer";
 }
 
@@ -3357,6 +3362,7 @@ async function runAndyPipeline(params: {
   lucasContext?: string;      // Lucas 补充的需求背景
   originalSymptom?: string;  // 用户原始表达（bug 症状 / 用户原话），evaluator 独立验证根因用
   visitorCode?: string;      // 访客邀请码
+  clawhubScanNote?: string;  // Clawhub 生态扫描结果（低相关参考，供 Andy 设计时决策）
 }): Promise<void> {
   const requirementId = `req_${Date.now()}`;
 
@@ -3446,6 +3452,7 @@ async function runAndyPipeline(params: {
           `【需求发起人 user_id】${params.userId}`,
           ...(params.understandingSummary ? [`【Lucas 理解摘要】${params.understandingSummary}（这是 Lucas 对需求的理解，Andy 设计时以此为准，有偏差请先核实再出 spec）`] : []),
           ...(params.lucasContext ? [`【Lucas 补充背景】${params.lucasContext}（这是家人的真实情绪/时间需求/可接受替代方案，设计时优先考虑）`] : []),
+          ...(params.clawhubScanNote ? [`${params.clawhubScanNote}\n（生态扫描供参考：如可复用请在 spec 注明 clawhub install 路径；如不满足需求，请在 spec 说明原因后自定义实现）`] : []),
           ``,
           `【澄清检查（优先）】在做任何事之前，先判断以下 4 种情形是否成立；满足任意一条就先调 query_requirement_owner 问清楚，不要带着模糊假设往下走：`,
           `  1. 目标用户不明确（谁用？在哪里用？什么设备？）`,
@@ -5944,7 +5951,7 @@ const crewclawRoutingPlugin = {
         intent = "architecture_design";
       } else if (ctx.agentId === IMPLEMENTOR_AGENT_ID) {
         intent = "code_implementation";
-      } else if (ctx.agentId === "main") {
+      } else if (ctx.agentId === MONITOR_AGENT_ID) {
         intent = "system_engineer";
       }
 
@@ -8094,14 +8101,14 @@ last_used: null
         const modelInfo = sessionModel.get(ctx.sessionKey ?? "");
         // channel / fromType 按 Agent 和来源推断
         const convChannel  = ctx.agentId === FRONTEND_AGENT_ID ? (isGroup ? `${CHANNEL_NAME}_group` : `${CHANNEL_NAME}_private`)
-          : ctx.agentId === "main"  ? `${CHANNEL_NAME}_private`
+          : ctx.agentId === MONITOR_AGENT_ID  ? `${CHANNEL_NAME}_private`
           : "pipeline";
-        const convFromType: "human" | "agent" = (ctx.agentId === FRONTEND_AGENT_ID || ctx.agentId === "main")
+        const convFromType: "human" | "agent" = (ctx.agentId === FRONTEND_AGENT_ID || ctx.agentId === MONITOR_AGENT_ID)
           ? "human" : "agent";
         // 前台Agent/Main 的 fromId 是用户 userId；Andy/Lisa 的 fromId 是调用方 Agent（sessionKey 前缀）
         // 访客 fromId 优先用真实姓名（跨 token 轮换后历史仍可通过 fromId===visitorName 路径检索）
         let convFromId: string;
-        if (ctx.agentId === FRONTEND_AGENT_ID || ctx.agentId === "main") {
+        if (ctx.agentId === FRONTEND_AGENT_ID || ctx.agentId === MONITOR_AGENT_ID) {
           if (userId.startsWith("visitor:")) {
             const visitTok = userId.replace("visitor:", ""); // 已 lowercase（经 normalizeUserId）
             let visitorName: string | null = null;
@@ -8581,6 +8588,52 @@ last_used: null
           }
         }
 
+        // ── Clawhub 生态扫描（软拦截，5s 超时，失败静默）──────────────────────
+        // 原则：先查生态，有合适的直接用/适配；无合适的才自建。同时把扫描结果注入 Andy brief。
+        // 逃脱口：需求包含"忽略Clawhub检查"或"忽略重复检查"时跳过
+        let clawhubScanNote = "";
+        if (!req.includes("忽略Clawhub检查") && !req.includes("忽略重复检查")) {
+          try {
+            // 用 understanding_summary 提取搜索关键词（已由 Lucas 过滤过的语义摘要）
+            const searchQuery = (understandingSummary || req).slice(0, 60).replace(/[^\w\u4e00-\u9fa5\s]/g, " ").trim();
+            const clawhubResult = spawnSync("clawhub", ["search", searchQuery], {
+              timeout: 5000,
+              encoding: "utf8",
+              shell: false,
+            });
+            if (clawhubResult.status === 0 && clawhubResult.stdout) {
+              // 解析输出：每行格式 "slug  Name  (score)"
+              const lines = clawhubResult.stdout.trim().split("\n").filter(Boolean);
+              const highRelevance: string[] = [];
+              const lowRelevance: string[] = [];
+              for (const line of lines.slice(0, 10)) {
+                const m = line.match(/^(\S+)\s+(.+?)\s+\(([0-9.]+)\)/);
+                if (!m) continue;
+                const score = parseFloat(m[3]);
+                const entry = `- ${m[1]} (${m[2]}, 评分 ${m[3]}): clawhub install ${m[1]}`;
+                if (score >= 2.5) highRelevance.push(entry);
+                else if (score >= 1.8) lowRelevance.push(entry);
+              }
+              if (highRelevance.length > 0) {
+                clawhubScanNote = `【Clawhub 生态扫描】发现高相关性 Skill/工具（评分≥2.5）：\n${highRelevance.slice(0, 3).join("\n")}\n${lowRelevance.length > 0 ? `\n一般相关（评分1.8~2.5）：\n${lowRelevance.slice(0, 2).join("\n")}` : ""}`;
+                // 高相关时软拦截：建议先评估生态方案，给逃脱口
+                return {
+                  content: [{
+                    type: "text",
+                    text: `🔍 **Clawhub 生态扫描**发现与需求高度相关的现成方案：\n\n${highRelevance.slice(0, 3).join("\n")}\n\n建议先告知家人：「我找到一个现成工具可能满足需求，让我试装一下」，然后调 \`exec\` 运行 \`clawhub install <slug> --dir ~/.openclaw/workspace-lucas/skills\`。\n\n如确认现有生态方案不满足需求，在需求中注明「忽略Clawhub检查」重新提交。`,
+                  }],
+                  details: { clawhub_scan: highRelevance, decision: "clawhub_ecosystem_found" },
+                };
+              } else if (lowRelevance.length > 0) {
+                // 低相关：仅注入 Andy brief，不拦截
+                clawhubScanNote = `【Clawhub 生态参考】找到若干低相关性条目（评分1.8~2.5），供 Andy 参考是否复用：\n${lowRelevance.slice(0, 3).join("\n")}`;
+              }
+            }
+          } catch (_e) {
+            // clawhub 不可用或超时，静默跳过，不影响流水线
+          }
+        }
+
         // 调度决策：非紧急 + 当前在白天 → 写入延迟队列
         const nowHour = new Date().getHours();
         const isOffPeak = nowHour >= OFF_PEAK_START || nowHour < OFF_PEAK_END;
@@ -8617,6 +8670,8 @@ last_used: null
           originalSymptom: req,  // 用户原始表达作为独立字段，evaluator 验证根因时使用
           ...(lucasContext ? { lucasContext } : {}),
           ...(visitorCode ? { visitorCode } : {}),
+          // Clawhub 低相关参考：不拦截流水线，仅供 Andy 设计时参考
+          ...(clawhubScanNote ? { clawhubScanNote } : {}),
         }).catch(() => {});
 
         return {
@@ -11567,7 +11622,7 @@ last_used: null
         const nowIso = new Date().toLocaleString("sv", { timeZone: "Asia/Shanghai" }).replace(" ", "T") + "+08:00";
         const id = `approval_${nowIso.slice(0, 10).replace(/-/g, "")}_${String(Math.floor(Math.random() * 900) + 100)}`;
         const entry: Record<string, unknown> = {
-          id, source: "andy", category: p.category, urgency: p.urgency ?? "normal",
+          id, source: DESIGNER_AGENT_ID, category: p.category, urgency: p.urgency ?? "normal",
           title: p.title, description: p.description, proposed_action: p.proposed_action,
           created_at: nowIso, status: "pending",
           decided_at: null, decided_by: null, decision_note: null,
@@ -11646,7 +11701,7 @@ last_used: null
               fetch("http://localhost:3003/api/wecom/notify-engineer", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: `Andy 尝试重启 Gateway 但插件编译检查失败，需要人工介入。原因：${reason}`, type: "intervention", fromAgent: "andy" }),
+                body: JSON.stringify({ message: `Andy 尝试重启 Gateway 但插件编译检查失败，需要人工介入。原因：${reason}`, type: "intervention", fromAgent: DESIGNER_AGENT_ID }),
               }).catch(() => {});
               return {
                 content: [{ type: "text", text: `❌ 插件编译检查失败，Gateway 未重启。需要系统工程师介入修复。` }],
@@ -11669,7 +11724,7 @@ last_used: null
           fetch("http://localhost:3003/api/wecom/notify-engineer", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: `Andy 重启了 ${service}。原因：${reason}`, type: "pipeline", fromAgent: "andy" }),
+            body: JSON.stringify({ message: `Andy 重启了 ${service}。原因：${reason}`, type: "pipeline", fromAgent: DESIGNER_AGENT_ID }),
           }).catch(() => {});
 
           return {
@@ -12688,6 +12743,20 @@ last_used: null
           return { content: [{ type: "text", text: `❌ send_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
         }
         const { userId, text } = params as { userId: string; text: string };
+        // App 使用追踪：检测消息中是否包含家庭 App 链接（fire-and-forget，不阻塞发送）
+        try {
+          const appUrlMatch = text.match(/https?:\/\/[^\s]+\/app\/([^\s?#]+)/);
+          if (appUrlMatch) {
+            const APP_USAGE_FILE = join(PROJECT_ROOT, "Data/learning/app-usage.jsonl");
+            const appPath = appUrlMatch[1];
+            appendFileSync(APP_USAGE_FILE, JSON.stringify({
+              timestamp: nowCST(),
+              appPath,
+              sentTo: userId,
+              agentId: toolCtx.agentId ?? FRONTEND_AGENT_ID,
+            }) + "\n", "utf8");
+          }
+        } catch (_e) { /* App 追踪失败不影响发送 */ }
         try {
           const resp = await fetch(CHANNEL_SEND_URL, {
             method: "POST",
@@ -13075,7 +13144,7 @@ last_used: null
               try {
                 const summaryPrompt = `以下是关于「${query}」的历史对话片段，请用2-3句话提炼最相关的事实和结论，去掉重复内容：\n\n${rawLines.join("\n---\n").slice(0, 2000)}`;
                 const summaryResp = await Promise.race([
-                  callAgentModel("lucas", summaryPrompt, 300),
+                  callAgentModel(FRONTEND_AGENT_ID, summaryPrompt, 300),
                   new Promise<string>((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000)),
                 ]);
                 if (summaryResp && summaryResp.length > 20) {
@@ -13275,12 +13344,7 @@ last_used: null
           };
         }
         const HOME = process.env.HOME ?? "/";
-        const agentWorkspaceMap: Record<string, string> = {
-          [FRONTEND_AGENT_ID]: "lucas",
-          [DESIGNER_AGENT_ID]: "andy",
-          [IMPLEMENTOR_AGENT_ID]: "lisa",
-        };
-        const agentLabel = agentWorkspaceMap[agentId] ?? agentId;
+        const agentLabel = agentId; // workspace 目录名 = agentId，框架层无需硬编码映射
         const skillsDir = join(HOME, `.openclaw/workspace-${agentLabel}/skills`);
         // category 支持：按子目录组织
         const skillDir = p.category
@@ -13564,12 +13628,7 @@ last_used: null
           return { content: [{ type: "text", text: "❌ skill_view 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
         }
         const HOME = process.env.HOME ?? "/";
-        const agentWorkspaceMap: Record<string, string> = {
-          [FRONTEND_AGENT_ID]: "lucas",
-          [DESIGNER_AGENT_ID]: "andy",
-          [IMPLEMENTOR_AGENT_ID]: "lisa",
-        };
-        const agentLabel = agentWorkspaceMap[agentId] ?? agentId;
+        const agentLabel = agentId; // workspace 目录名 = agentId，框架层无需硬编码映射
         const skillsDir = join(HOME, `.openclaw/workspace-${agentLabel}/skills`);
         // 搜索 Skill（可能在 category 子目录下）
         let skillDir = join(skillsDir, p.skill_name);
@@ -13645,12 +13704,7 @@ last_used: null
           return { content: [{ type: "text", text: "❌ skills_list 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
         }
         const HOME = process.env.HOME ?? "/";
-        const agentWorkspaceMap: Record<string, string> = {
-          [FRONTEND_AGENT_ID]: "lucas",
-          [DESIGNER_AGENT_ID]: "andy",
-          [IMPLEMENTOR_AGENT_ID]: "lisa",
-        };
-        const agentLabel = agentWorkspaceMap[agentId] ?? agentId;
+        const agentLabel = agentId; // workspace 目录名 = agentId，框架层无需硬编码映射
         const skillsDir = join(HOME, `.openclaw/workspace-${agentLabel}/skills`);
         if (!existsSync(skillsDir)) {
           return { content: [{ type: "text", text: "当前没有任何 Skill。" }], details: { count: 0 } };

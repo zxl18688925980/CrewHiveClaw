@@ -466,6 +466,12 @@ def _write_pending_event(conn, user_id: str, value: str, context: str,
             "MERGE (e:Entity {id: $id}) SET e.type = 'pending_event', e.name = $name",
             {"id": event_id, "name": value[:120]},
         )
+        # 先删除该实体已有的所有 has_pending_event 边（防止每次蒸馏重复 CREATE）
+        conn.execute(
+            "MATCH (p:Entity {id: $pid})-[f:Fact {relation: 'has_pending_event'}]->(e:Entity {id: $eid}) "
+            "DELETE f",
+            {"pid": user_id, "eid": event_id},
+        )
         conn.execute(
             "MATCH (p:Entity {id: $pid}), (e:Entity {id: $eid}) "
             "CREATE (p)-[:Fact {relation: 'has_pending_event', context: $ctx, "
