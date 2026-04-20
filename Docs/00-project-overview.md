@@ -707,7 +707,7 @@ Capability → [IMPLEMENTS] → Tool
   - **写入层**（`writeMemory`）：每次写入 ChromaDB 时，`extractEntityHits()` 从消息内容中提取命中的 Kuzu 实体名（复用 P0 的 `ENTITY_ALIAS_MAP` + `kuzuEntityNameMap`），以逗号分隔字符串写入 metadata 的 `entityTags` 字段（如 `entityTags: "zhanglu,xiaoshan,抖音"`）。无匹配实体时字段为空字符串。已有记录可通过 `backfill-entity-tags.py` 一次性回填（幂等）。同步写入 `hall_type` 字段（四类分类）：`hall_events`（dev/complex 类意图）/ `hall_discoveries`（「发现/原来/学到」关键词）/ `hall_preferences`（「喜欢/习惯/偏好」关键词）/ `hall_facts`（默认）。hall_type 为未来按记忆类型过滤检索打基础。
   - **检索层**（`queryMemories` / `recall_memory`）：检索时同样从 query 提取实体 ID，调用 `timeWeightedRerankWithEntityBoost()`——与普通 `timeWeightedRerank` 相同的时间/位置权重计算，但额外检查每条记录的 `entityTags` 是否包含 query 命中的任一实体，命中则乘以 1.5x boost。无 entityTags 的旧记录不受影响（boost = 1.0）。
 
-设计选择：采用 **post-filtering reranking + pre-filtering 混合** 策略。v667 前：纯 post-filtering（原因：① ChromaDB v2 metadata 不支持数组类型，`$contains` 子串匹配可能误匹配 ② pre-filtering 缩小候选池可能漏掉语义相关但没 tag 的旧记录 ③ reranking 增量式改进，新旧记录共存不冲突）。v667 新增 **Kuzu entity pre-filter**（queryMemories Step 3a）：entityHits 非空时，先对 `entityTags` 做 `$contains` 匹配缩小候选池，不足时 fallback 全量补充 + post-filtering rerank。两阶段互补：pre-filter 提高精准记录命中率，post-filter 保证旧记录不丢失。
+设计选择：采用 **post-filtering reranking + pre-filtering 混合** 策略。纯 post-filtering 的局限（原因：① ChromaDB v2 metadata 不支持数组类型，`$contains` 子串匹配可能误匹配 ② pre-filtering 缩小候选池可能漏掉语义相关但没 tag 的旧记录 ③ reranking 增量式改进，新旧记录共存不冲突），因此叠加 **Kuzu entity pre-filter**（queryMemories Step 3a）：entityHits 非空时，先对 `entityTags` 做 `$contains` 匹配缩小候选池，不足时 fallback 全量补充 + post-filtering rerank。两阶段互补：pre-filter 提高精准记录命中率，post-filter 保证旧记录不丢失。
 
 - **Closet 两层检索架构（MemPalace 借鉴）**：
 
@@ -1915,7 +1915,7 @@ Raw Data（ChromaDB / 静态文件）
 | Entity / Fact | 内容 | 原始数据来源 | 处理脚本 |
 |---|---|---|---|
 | `pattern` + `has_pattern` | 高层工程判断 / 实现模式 / 技术陷阱 | ChromaDB `decisions`(agentId=lisa) + `code_history` + `agent_interactions` + `docs/10-engineering-notes.md`（系统工程师维护实现陷阱） | `distill-agent-memories.py` |
-| `capability` + `has_capability` | Lisa 拥有的工具集（11 专属 + 6 共享 = 17 个：read / edit / write / bash / grep / find / ls（直接编码工具，v687）/ run_opencode / get_opencode_result / report_implementation_issue / request_evaluation + research_task / read_file / list_files / notify_engineer / create_sub_agent / evict_sub_agent）| `TOOLS.md` | `init-capabilities.py` |
+| `capability` + `has_capability` | Lisa 拥有的工具集（11 专属 + 6 共享 = 17 个：read / edit / write / bash / grep / find / ls（直接编码工具）/ run_opencode / get_opencode_result / report_implementation_issue / request_evaluation + research_task / read_file / list_files / notify_engineer / create_sub_agent / evict_sub_agent）| `TOOLS.md` | `init-capabilities.py` |
 
 **OpenClaw 8 文件**
 
@@ -2250,7 +2250,7 @@ conversations 不只是聊天记录，是系统所有信息流转的原始事件
 
 内容字段：`prompt`（前500字，快照）/ `response`（前500字，快照）/ `document`（ChromaDB 全文，embedding 基于此）/ `timestamp`（ISO 时间，时序查询）。向后兼容字段（过渡期）：`userId`（= fromId）/ `source`（group/private）。
 
-**v667 对话分块写入**：长对话（prompt+response >600 字）按话题拆分为 ≤500 字小块，每块独立 ChromaDB 条目。分块专用字段：`convId`（对话唯一 ID，格式 `conv-{ts}-{rand}`）/ `chunkIndex`（分块序号，0=首块）/ `parentConvId`（同对话的分块共享，用于 topK 去重——同一 parent 只保留得分最高的一块）。短对话（≤600 字）不分块，与旧数据兼容。
+**对话分块写入**：长对话（prompt+response >600 字）按话题拆分为 ≤500 字小块，每块独立 ChromaDB 条目。分块专用字段：`convId`（对话唯一 ID，格式 `conv-{ts}-{rand}`）/ `chunkIndex`（分块序号，0=首块）/ `parentConvId`（同对话的分块共享，用于 topK 去重——同一 parent 只保留得分最高的一块）。短对话（≤600 字）不分块，与旧数据兼容。
 
 语义字段（`thread_id`、`topic`、`sentiment` 等）不在 conversations，是从事件流经 extraction pipeline 提炼后写入 Kuzu 的，写入时只记可观测客观事实，语义解读交给提炼层。
 
@@ -2536,11 +2536,12 @@ Andy 在 HEARTBEAT 巡检时评估（两层预检，见下）
 | 层级 | 检查内容 | 执行方式 | 通过条件 |
 |------|---------|---------|---------|
 | **第一层**（Lucas 触发前）| 本地 Skill 是否已覆盖需求 | `trigger_development_pipeline` 代码门：扫描本地 skills 目录做 bigram 匹配，命中则返回建议直接使用，不进入流程 | 本地无匹配 Skill |
-| **第二层**（Andy 设计前）| Clawhub + 开源生态是否有现成方案 | Andy `research_task` 第一个查询必须是生态检索：`openclaw clawhub <关键词>` + `<场景> npm/pip package` | 确认无合适免费方案（付费方案列出供业主决策）|
+| **第二层**（Lucas 触发后，Andy 启动前）| Clawhub 生态是否有高相关方案 | `trigger_development_pipeline` 自动调用 `clawhub search <需求关键词>`：高相关（评分 ≥ 2.5）→ 软拦截返回安装建议；低相关（1.8~2.5）→ 注入 Andy brief 供参考 | 无高相关 Clawhub 方案 |
+| **第三层**（Andy 设计中）| 开源生态是否有现成包 | Andy `research_task` 第一个查询：`<场景> npm/pip package`；付费方案列出供业主决策 | 确认无合适免费方案 |
 
-两层都没有现成方案，才进入「Andy 设计 spec → Lisa 实现」的开发流程。**造轮子是最后手段，复用生态是默认路径。**
+三层都没有现成方案，才进入「Andy 设计 spec → Lisa 实现」的开发流程。**造轮子是最后手段，复用生态是默认路径。**
 
-用户可在需求中注明「忽略Skill检查」绕过第一层（适用于已确认需要全新开发时）。
+用户可在需求中注明「忽略Clawhub检查」或「忽略重复检查」绕过第二层（适用于已确认需要全新开发时）。
 
 #### L4 内化：Skill 不是被替代的，是被内化的
 
