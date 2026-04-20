@@ -78,7 +78,10 @@ const MONITOR_AGENT_ID     = process.env.MONITOR_AGENT_ID     ?? "main";
 // 家庭成员 userId 白名单（逗号分隔，实例通过 FAMILY_USER_IDS 环境变量设置）
 const FAMILY_USER_IDS_SET  = new Set(
   (process.env.FAMILY_USER_IDS ?? "ZengXiaoLong,XiaMoQiuFengLiang,ZiFeiYu").split(",").map(s => s.trim()).filter(Boolean)
-);
+)
+// normalizeUserId 会把 userId 转小写，FAMILY_USER_IDS_SET 保留原始大小写供 getUserType(fromId) 使用
+// L3 等需要与 normalized userId 比较的场景用此小写版本
+const FAMILY_USER_IDS_LOWER = new Set([...FAMILY_USER_IDS_SET].map(id => id.toLowerCase()));
 // 基础 Agent 集合：不受子 Agent Tier 约束，skills 目录初始化包含此集合
 const BASE_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID, "main"]);
 // 最近一次 frontend agent 会话的 userId（供工具在无 session 上下文时使用，单用户场景安全）
@@ -6430,6 +6433,39 @@ const crewclawRoutingPlugin = {
         // 意图推断：写入 sessionIntent 供 llm_input 使用
         const inferred = isDevOrComplexIntent(event.prompt) ? "dev_or_complex" : "chat";
         sessionIntent.set(ctx.sessionKey ?? "", inferred);
+
+        // ── L3 成员纠正信号采集（fire-and-forget）──────────────────────────
+        // 当家庭成员消息包含纠正语言时，写 decisions(type=l3_model_correction)
+        // 供 Lucas HEARTBEAT 定期回顾：某成员某主题纠正 ≥2 次 → 刷新画像
+        if (!isVisitorSession && FAMILY_USER_IDS_LOWER.has(userId)) {
+          const _cleanMsg = sessionPrompt.get(ctx.sessionKey ?? "") ?? "";
+          const L3_CORRECTION_PATTERNS = [
+            "你记错了", "你弄错了", "你搞错了", "你说错了", "你理解错了",
+            "不是这样的", "不是这个意思", "纠正一下", "更正一下",
+            "你搞反了", "你误会了", "你理解有误",
+          ];
+          const _hitPattern = L3_CORRECTION_PATTERNS.find(p => _cleanMsg.includes(p));
+          if (_hitPattern) {
+            void (async () => {
+              try {
+                const _docId = `l3_correction_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                const _doc = `[L3成员纠正] userId=${userId} 纠正了 Lucas 的认知\n触发词: ${_hitPattern}\n消息摘要: ${_cleanMsg.slice(0, 200)}`;
+                const _meta: Record<string, string> = {
+                  type:            "l3_model_correction",
+                  agent:           "lucas",
+                  userId,
+                  trigger_pattern: _hitPattern,
+                  message_snippet: _cleanMsg.slice(0, 300),
+                  timestamp:       new Date().toISOString(),
+                };
+                const _emb = await embedText(_doc);
+                await chromaAdd("decisions", _docId, _doc, _meta, _emb);
+              } catch {
+                // 静默失败，不影响主流程
+              }
+            })();
+          }
+        }
       }
 
       // ── 通用知识注入（context-handler 接管三角色）────────────────────────
