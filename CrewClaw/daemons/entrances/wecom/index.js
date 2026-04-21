@@ -2346,12 +2346,12 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l0',
-    description: '评估 L0（基础设施——稳不稳）：PM2 进程状态、软硬件性能指标（磁盘空间/内存/Gateway延迟/ChromaDB延迟）、Kuzu 知识图谱、ChromaDB 对话总量、家人档案新鲜度、定时任务执行健康。',
+    description: '评估 L0（Agent记忆与认知质量·写入侧）：四维度蒸馏管道健康（语义/时间/实体/因果 × 三角色 embedding 有效率）、蒸馏产出（Andy design_learning / Lisa impl_learning）、家人档案注入完整性（Kuzu→inject.md）、Kuzu 知识图谱数据量；基础设施前提条件（进程存活/磁盘/内存/Gateway延迟/ChromaDB延迟/数据新鲜度）作为写入侧的运行保障。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_l1',
-    description: '评估 L1（行为质量——好不好）：两大维度——①记忆质量（上下文组装完整性 + recall 准确率）②输出质量（幻觉 + 人格化程度）。含 Lucas 质量扫描、Andy/Lisa 活跃度、档案注入完整性、模式积累。',
+    description: '评估 L1（Agent人格完整度·召回侧）：记忆语义召回质量（avg cosine distance，越低越好）、Skill 自动沉淀积累（native + archive 数量）、行为模式结晶（Kuzu has_pattern）、Lucas 输出合规率（问题率）、Andy/Lisa 交互活跃度、Main HEARTBEAT 状态、子 Agent 活跃度。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
