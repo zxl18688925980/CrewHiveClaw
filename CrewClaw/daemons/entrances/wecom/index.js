@@ -3342,6 +3342,58 @@ os._exit(0)
       }
     }
 
+    // 9. 家人档案注入文件完整性（L0 写入侧：Kuzu→inject.md 蒸馏产物）
+    try {
+      const familyDir = path.join(process.env.HOME, '.openclaw', 'workspace-lucas', 'family');
+      if (!fs.existsSync(familyDir)) {
+        results.push('⚠️ 家人档案目录不存在（before_prompt_build 注入将失败）');
+        if (score === '✅') score = '⚠️';
+      } else {
+        const injects = fs.readdirSync(familyDir).filter(f => f.endsWith('.inject.md'));
+        results.push(`${injects.length > 0 ? '✅' : '⚠️'} 家人档案注入文件：${injects.length} 个（${injects.map(f => f.replace('.inject.md', '')).join(', ') || '无'}）`);
+        if (injects.length === 0 && score === '✅') score = '⚠️';
+      }
+    } catch (e) {
+      results.push(`⚠️ 档案注入文件检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 10. Andy/Lisa 蒸馏产出（L0 蒸馏管道：design_learning / impl_learning）
+    try {
+      const colResp = await fetch(`${CHROMA_API_BASE}/decisions`);
+      if (colResp.ok) {
+        const { id: colId } = await colResp.json();
+        // Andy design_learning
+        const andyResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            where: { '$and': [{ agent: { '$eq': 'andy' } }, { type: { '$eq': 'design_learning' } }] },
+            include: ['metadatas'], limit: 50,
+          }),
+        });
+        const andyData = andyResp.ok ? await andyResp.json() : { ids: [] };
+        const andyDistillCount = (andyData.ids || []).length;
+        // Lisa impl_learning
+        const lisaResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            where: { '$and': [{ agent: { '$eq': 'lisa' } }, { type: { '$eq': 'impl_learning' } }] },
+            include: ['metadatas'], limit: 50,
+          }),
+        });
+        const lisaData = lisaResp.ok ? await lisaResp.json() : { ids: [] };
+        const lisaDistillCount = (lisaData.ids || []).length;
+        const hasLearnings = andyDistillCount > 0 || lisaDistillCount > 0;
+        results.push(`${hasLearnings ? '✅' : '⚠️'} Andy/Lisa 蒸馏产出：design_learning ${andyDistillCount} 条，impl_learning ${lisaDistillCount} 条${!hasLearnings ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
+        if (!hasLearnings && score === '✅') score = '⚠️';
+      }
+    } catch (e) {
+      results.push(`⚠️ Andy/Lisa 蒸馏产出检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
     // 数值评分：从 results 文本提取原始值，对照 rubric 计算 0-5 分
     const _rub0 = loadRubric();
     const _L0I = _rub0?.layers?.L0?.items;
@@ -3352,13 +3404,14 @@ os._exit(0)
         if (r.includes('Kuzu 知识图谱')) { const m = r.match(/(\d+) 条 Fact/); if (m) trackScore(_l0s, _L0I, 'kuzu_data', +m[1]); }
         if (r.includes('ChromaDB conversations')) trackScore(_l0s, _L0I, 'chromadb_conversations', r.trim().startsWith('✅') ? 'reachable' : 'unreachable');
         if (r.includes('家人档案最后更新')) { const m = r.match(/([\d.]+) 小时前/); if (m) trackScore(_l0s, _L0I, 'data_freshness', +m[1]); }
-        else if (r.includes('家人档案')) trackScore(_l0s, _L0I, 'data_freshness', 9999);
-        if (r.includes('ChromaDB decisions') && !r.includes('延迟')) trackScore(_l0s, _L0I, 'chromadb_decisions', r.trim().startsWith('✅') ? 'reachable' : 'unreachable');
+        else if (r.includes('家人档案新鲜度') || (r.includes('家人档案') && !r.includes('注入文件'))) trackScore(_l0s, _L0I, 'data_freshness', 9999);
+        if (r.includes('ChromaDB decisions') && !r.includes('延迟') && !r.includes('蒸馏')) trackScore(_l0s, _L0I, 'chromadb_decisions', r.trim().startsWith('✅') ? 'reachable' : 'unreachable');
         if (r.includes('磁盘空间')) { const m = r.match(/已用 (\d+)%/); if (m) trackScore(_l0s, _L0I, 'disk_space', +m[1]); }
         if (r.includes('Gateway 延迟')) { const m = r.match(/(\d+)ms/); if (m) trackScore(_l0s, _L0I, 'gateway_latency', +m[1]); }
         if (r.includes('ChromaDB 延迟')) { const m = r.match(/(\d+)ms/); if (m) trackScore(_l0s, _L0I, 'chromadb_latency', +m[1]); }
         if (r.includes('内存') && r.includes('活跃')) { const m = r.match(/活跃 (\d+)%/); if (m) trackScore(_l0s, _L0I, 'memory_usage', +m[1]); }
-        if (r.includes('Kuzu 协作边（L3）')) { const m = r.match(/(\d+) 条（/); if (m) trackScore(_l0s, _L0I, 'collab_edges_readiness', +m[1]); }
+        if (r.includes('家人档案注入文件')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l0s, _L0I, 'family_inject', +m[1]); }
+        if (r.includes('Andy/Lisa 蒸馏产出')) { const ac = (+((r.match(/design_learning (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/impl_learning (\d+)/)?.[1] || '0')) > 0); trackScore(_l0s, _L0I, 'distillation_output', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
       }
       // 记忆写入健康：取三角色 embedding 有效率最低值
       let _minEmbRate = null;
@@ -3452,71 +3505,7 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // 3. 家人档案注入文件完整性
-    try {
-      const familyDir = path.join(process.env.HOME, '.openclaw', 'workspace-lucas', 'family');
-      if (!fs.existsSync(familyDir)) {
-        results.push('⚠️ 家人档案目录不存在（before_prompt_build 注入将失败）');
-        if (score === '✅') score = '⚠️';
-      } else {
-        const injects = fs.readdirSync(familyDir).filter(f => f.endsWith('.inject.md'));
-        results.push(`${injects.length > 0 ? '✅' : '⚠️'} 家人档案注入文件：${injects.length} 个（${injects.map(f => f.replace('.inject.md', '')).join(', ') || '无'}）`);
-        if (injects.length === 0 && score === '✅') score = '⚠️';
-      }
-    } catch (e) {
-      results.push(`⚠️ 档案注入文件检查失败：${e.message.slice(0, 60)}`);
-      if (score === '✅') score = '⚠️';
-    }
-
-    // 4. Andy/Lisa 蒸馏产出检查（decisions 集合 design_learning / impl_learning）
-    try {
-      const colResp = await fetch(`${CHROMA_API_BASE}/decisions`);
-      if (colResp.ok) {
-        const { id: colId } = await colResp.json();
-        // Andy design_learning
-        const andyResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            where: { '$and': [{ agent: { '$eq': 'andy' } }, { type: { '$eq': 'design_learning' } }] },
-            include: ['metadatas'], limit: 50,
-          }),
-        });
-        const andyData = andyResp.ok ? await andyResp.json() : { ids: [] };
-        const andyCount = (andyData.ids || []).length;
-        // Lisa impl_learning
-        const lisaResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            where: { '$and': [{ agent: { '$eq': 'lisa' } }, { type: { '$eq': 'impl_learning' } }] },
-            include: ['metadatas'], limit: 50,
-          }),
-        });
-        const lisaData = lisaResp.ok ? await lisaResp.json() : { ids: [] };
-        const lisaCount = (lisaData.ids || []).length;
-        // learning_objective（andy+lisa）
-        const objResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            where: { type: { '$eq': 'learning_objective' } },
-            include: ['metadatas'], limit: 50,
-          }),
-        });
-        const objData = objResp.ok ? await objResp.json() : { ids: [] };
-        const objCount = (objData.ids || []).length;
-        const hasLearnings = andyCount > 0 || lisaCount > 0;
-        results.push(`${hasLearnings ? '✅' : '⚠️'} Andy/Lisa 每日自我进化产出：design_learning ${andyCount} 条，impl_learning ${lisaCount} 条${!hasLearnings ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
-        results.push(`${objCount > 0 ? '✅' : '⚠️'} Andy 每日学习目标：${objCount} 条${objCount === 0 ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
-        if (!hasLearnings && score === '✅') score = '⚠️';
-      }
-    } catch (e) {
-      results.push(`⚠️ Andy/Lisa 每日自我进化产出检查失败：${e.message.slice(0, 60)}`);
-      if (score === '✅') score = '⚠️';
-    }
-
-    // 5. Kuzu has_pattern 积累量（Andy/Lisa 行为模式蒸馏节点数）
+    // 3. Kuzu has_pattern 积累量（Andy/Lisa 行为模式蒸馏节点数）
     const l1KuzuPath = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
     try {
       const kuzuCheck = path.join(HOMEAI_ROOT, 'temp', `_l1_pattern_check_${Date.now()}.py`);
@@ -3605,6 +3594,44 @@ os._exit(0)
       }
     } catch (e) {
       results.push(`⚠️ 子 Agent 检查失败：${e.message.slice(0, 60)}`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 6. Skill 自动沉淀（L1 人格完整度：native + archive skills 积累状态）
+    try {
+      const nativeBase = path.join(process.env.HOME, '.openclaw');
+      let nativeTotal = 0;
+      const nativePerAgent = {};
+      for (const agent of ['lucas', 'andy', 'lisa']) {
+        const skillsDir = path.join(nativeBase, `workspace-${agent}`, 'skills');
+        const cnt = fs.existsSync(skillsDir)
+          ? fs.readdirSync(skillsDir).filter(f => fs.statSync(path.join(skillsDir, f)).isDirectory()).length
+          : 0;
+        nativePerAgent[agent] = cnt;
+        nativeTotal += cnt;
+      }
+      const archiveBase = path.join(HOMEAI_ROOT, 'Data', 'learning', 'auto-skills');
+      let archiveTotal = 0;
+      if (fs.existsSync(archiveBase)) {
+        for (const agent of ['lucas', 'andy', 'lisa']) {
+          const agentArchive = path.join(archiveBase, agent);
+          if (fs.existsSync(agentArchive)) {
+            archiveTotal += fs.readdirSync(agentArchive).filter(f => f.endsWith('.md')).length;
+          }
+        }
+      }
+      const skCandPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'skill-candidates.jsonl');
+      let skPending = 0;
+      if (fs.existsSync(skCandPath)) {
+        const lines = fs.readFileSync(skCandPath, 'utf8').split('\n').filter(Boolean);
+        skPending = lines.filter(l => { try { return JSON.parse(l).status === 'pending'; } catch { return false; } }).length;
+      }
+      const skillOk = nativeTotal >= 5;
+      const agentDetail = Object.entries(nativePerAgent).map(([a, c]) => `${a}:${c}`).join('/');
+      results.push(`${skillOk ? '✅' : '⚠️'} Skill 自动沉淀：native ${nativeTotal} 个（${agentDetail}），archive ${archiveTotal} 个，待处理 ${skPending} 条`);
+      if (!skillOk && score === '✅') score = '⚠️';
+    } catch (e) {
+      results.push(`⚠️ Skill 沉淀检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
 
@@ -3703,11 +3730,10 @@ os._exit(0)
     if (_L1I) {
       for (const r of results) {
         if (r.includes('Lucas 质量')) { const m = r.match(/问题率 (\d+)%/); if (m) trackScore(_l1s, _L1I, 'lucas_output_quality', +m[1]); }
-        if (r.includes('Andy/Lisa 活跃') || r.includes('Andy/Lisa：')) { const ac = (r.match(/Andy (\d+)/)?.[1] || 0) > 0; const lc = (r.match(/Lisa (\d+)/)?.[1] || 0) > 0; trackScore(_l1s, _L1I, 'agent_interactions', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
-        if (r.includes('家人档案注入文件')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l1s, _L1I, 'family_inject', +m[1]); }
-        if (r.includes('每日自我进化产出')) { const ac = (r.match(/design_learning (\d+)/)?.[1] || 0) > 0; const lc = (r.match(/impl_learning (\d+)/)?.[1] || 0) > 0; trackScore(_l1s, _L1I, 'distillation_output', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
-        if (r.includes('Kuzu 模式积累')) { const ac = (r.match(/Andy (\d+)/)?.[1] || 0) > 0; const lc = (r.match(/Lisa (\d+)/)?.[1] || 0) > 0; trackScore(_l1s, _L1I, 'pattern_accumulation', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Andy/Lisa 活跃') || r.includes('Andy/Lisa：')) { const ac = (+((r.match(/Andy (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/Lisa (\d+)/)?.[1] || '0')) > 0); trackScore(_l1s, _L1I, 'agent_interactions', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Kuzu 模式积累')) { const ac = (+((r.match(/Andy (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/Lisa (\d+)/)?.[1] || '0')) > 0); trackScore(_l1s, _L1I, 'pattern_accumulation', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
         if (r.includes('Main') && r.includes('HEARTBEAT')) trackScore(_l1s, _L1I, 'main_heartbeat', r.trim().startsWith('✅') ? 'ok' : 'missing');
+        if (r.includes('Skill 自动沉淀')) { const m = r.match(/native (\d+) 个/); if (m) trackScore(_l1s, _L1I, 'skill_accumulation', +m[1]); }
         if (r.includes('子 Agent') || r.includes('andy-evaluator') || r.includes('lisa-evaluator')) { /* scored separately below */ }
         if (r.includes('召回质量') && r.includes('avg_dist=')) { /* aggregated below */ }
       }
@@ -3735,9 +3761,9 @@ os._exit(0)
     }
 
     return `**L1 评估 ${score}**\n` +
-      `【记忆质量】\n` + results.filter(r => r.includes('档案') || r.includes('模式积累')).map(r => `  ${r}`).join('\n') + '\n' +
+      `【模式沉淀】\n` + results.filter(r => r.includes('模式积累') || r.includes('Skill 自动沉淀')).map(r => `  ${r}`).join('\n') + '\n' +
       `【召回质量】\n` + results.filter(r => r.includes('召回质量')).map(r => `  ${r}`).join('\n') + '\n' +
-      `【输出质量】\n` + results.filter(r => !r.includes('档案') && !r.includes('模式积累') && !r.includes('召回质量')).map(r => `  ${r}`).join('\n');
+      `【表达质量】\n` + results.filter(r => !r.includes('模式积累') && !r.includes('Skill 自动沉淀') && !r.includes('召回质量')).map(r => `  ${r}`).join('\n');
   }
 
   if (toolName === 'inspect_agent_context') {
