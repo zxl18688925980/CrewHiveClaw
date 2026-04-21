@@ -1017,6 +1017,7 @@ type DecisionRecord = {
   outcome_at: string | null;
   outcome_note: string | null;
   userId?: string;   // 谁发起的，用于按人查未完成承诺
+  type?: string;     // 记录类型，如 "task_state_change" 用于协作链状态变更
 };
 
 // ── 嵌入：nomic-embed-text via Ollama ────────────────────────────────
@@ -1784,6 +1785,7 @@ async function addDecisionMemory(record: DecisionRecord): Promise<void> {
       outcome_at: record.outcome_at ?? "",
       outcome_note: record.outcome_note ?? "",
       userId: record.userId ?? "",
+      type: record.type ?? "",                // 记录类型：task_state_change 等
     }, embedding);
   } catch (_e) {
     // 写入失败静默处理
@@ -9513,6 +9515,50 @@ last_used: null
                 };
               }
 
+              // ── Spec 质量校验（AC-2/3/4）：前置阻断低质 spec ──────────────
+              // AC-2: solution 字段必须包含具体技术要求
+              {
+                const sol = specData.solution as string | undefined;
+                if (!sol || sol.trim().length < 20) {
+                  return {
+                    content: [{
+                      type: "text",
+                      text: "❌ solution 字段缺少具体技术要求。请描述用什么技术手段解决问题（如：在哪个文件的哪个函数中添加什么逻辑、调用什么 API、使用什么数据结构）。当前 solution 过于简略，Lisa 无法据此实现。",
+                    }],
+                    details: { blocked: true, reason: "solution_too_vague" },
+                  };
+                }
+              }
+              // AC-3: 每个 acceptance_criteria 条目必须有 given/then 结构
+              {
+                type AcEntry = { given?: string; then?: string; id?: string };
+                const acEntries = criteria as AcEntry[];
+                const invalidAcs = acEntries.filter(ac => !ac.given || !ac.then);
+                if (invalidAcs.length > 0) {
+                  const badIds = invalidAcs.map(ac => ac.id ?? "未命名").join(", ");
+                  return {
+                    content: [{
+                      type: "text",
+                      text: `❌ AC 缺少 given/then 结构。以下 AC 条目缺少 given 或 then 字段：${badIds}。每条 AC 必须包含：given（前置条件）+ then（预期结果），Lisa 凭此编写可执行的验证存根。`,
+                    }],
+                    details: { blocked: true, reason: "ac_missing_given_then", invalidAcIds: badIds },
+                  };
+                }
+              }
+              // AC-4: problem 字段必须描述具体用户场景
+              {
+                const prob = specData.problem as string | undefined;
+                if (!prob || prob.trim().length < 15) {
+                  return {
+                    content: [{
+                      type: "text",
+                      text: "❌ problem 字段需描述具体用户场景。请说明：谁在什么场景下遇到了什么问题？当前描述过于简略，无法判断需求边界。",
+                    }],
+                    details: { blocked: true, reason: "problem_no_user_scenario" },
+                  };
+                }
+              }
+
               // ③ code_evidence 验证（Read-before-Edit 原则）
               // Spec 修改现有文件时，Andy 必须提供读过该代码的证据：
               //   { file: "相对路径", symbol: "真实存在的函数/变量/路由名" }
@@ -9841,10 +9887,25 @@ last_used: null
           const taskEntries = readTaskRegistry();
           const taskEntry = taskEntries.find(e => e.id === reqIdForPhase);
           if (taskEntry) {
+            const prevPhase = taskEntry.currentPhase;
             taskEntry.currentPhase = "lisa_implementing";
             taskEntry.designNote = designNote;
             if (estimatedHours !== undefined) taskEntry.estimatedHours = estimatedHours;
             writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(taskEntries, null, 2), "utf8");
+            // AC-1：状态变更记录写入 ChromaDB decisions 集合
+            if (prevPhase !== "lisa_implementing") {
+              void addDecisionMemory({
+                decision_id: `${reqIdForPhase}-state-${prevPhase ?? "none"}-to-lisa_implementing`,
+                agent: "system",
+                timestamp: nowCST(),
+                context: `任务 ${reqIdForPhase} 状态变更`,
+                decision: `${prevPhase ?? "none"} → lisa_implementing`,
+                outcome: null,
+                outcome_at: null,
+                outcome_note: null,
+                type: "task_state_change",
+              } satisfies DecisionRecord);
+            }
           }
         }
 
@@ -9921,8 +9982,23 @@ last_used: null
                 const phaseEntries = readTaskRegistry();
                 const phaseEntry = phaseEntries.find(e => e.id === reqId);
                 if (phaseEntry) {
+                  const prevPhase2 = phaseEntry.currentPhase;
                   phaseEntry.currentPhase = "andy_verifying";
                   try { writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(phaseEntries, null, 2), "utf8"); } catch (_e) {}
+                  // AC-1：状态变更记录写入 ChromaDB decisions 集合
+                  if (prevPhase2 !== "andy_verifying") {
+                    void addDecisionMemory({
+                      decision_id: `${reqId}-state-${prevPhase2 ?? "none"}-to-andy_verifying`,
+                      agent: "system",
+                      timestamp: nowCST(),
+                      context: `任务 ${reqId} 状态变更`,
+                      decision: `${prevPhase2 ?? "none"} → andy_verifying`,
+                      outcome: null,
+                      outcome_at: null,
+                      outcome_note: null,
+                      type: "task_state_change",
+                    } satisfies DecisionRecord);
+                  }
                 }
               }
               void notifyEngineer(`【${reqId}】Lisa 实现完成，进入 Andy 验收阶段`, "pipeline", IMPLEMENTOR_AGENT_ID);
@@ -11360,6 +11436,33 @@ last_used: null
         }
         const p = params as { spec_summary: string; implementation_report: string; requirement_id?: string; thread_id?: string };
         const threadId = p.thread_id ?? (p.requirement_id ? `andy-to-lisa:${p.requirement_id}_collab` : undefined);
+
+        // AC-5/6：验证步骤强制检查
+        // Lisa 交付无验证步骤 → 直接 FAIL；有验证步骤 → 正常进入 evaluator
+        const VERIFICATION_KEYWORDS = ["验证", "verification", "测试", "自验", "自验证", "✅", "curl", "node --check", "py_compile", "bash 验证"];
+        const hasVerification = VERIFICATION_KEYWORDS.some(kw => p.implementation_report.toLowerCase().includes(kw.toLowerCase()));
+        if (!hasVerification) {
+          void notifyEngineer(
+            `【验收前置拦截】${p.requirement_id ? `[${p.requirement_id}]` : ""} Lisa 交付报告缺少验证步骤，要求补充`,
+            "pipeline", IMPLEMENTOR_AGENT_ID,
+          );
+          return {
+            content: [{
+              type: "text",
+              text: [
+                "❌ FAIL：交付报告缺少验证步骤（verification）。",
+                "",
+                "实现报告中未找到任何验证相关的描述。请在 implementation_report 中补充 verification 字段，说明：",
+                "1. 每条 AC 对应的验证方法（curl 命令 / 测试函数 / 手动验证步骤）",
+                "2. 验证执行结果（✅ 通过 / ❌ 失败 + 原因）",
+                "3. 验证策略选择理由",
+                "",
+                "无自验证结论的交付不被接受。补充后重新调用 request_evaluation。",
+              ].join("\n"),
+            }],
+            details: { passed: false, reason: "missing_verification", requirementId: p.requirement_id },
+          };
+        }
 
         const evalPrompt = [
           `【验收请求】`,
