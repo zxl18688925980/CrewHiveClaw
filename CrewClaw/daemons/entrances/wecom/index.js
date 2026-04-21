@@ -634,8 +634,22 @@ const {
   shadowHistoryKey,
   appendChatHistory,
   buildHistoryMessages,
+  buildGroupContextMessages,
+  getMostRecentGroupKey,
   loadChatHistory,
 } = require('../chat-history');
+
+/**
+ * 构建历史消息，私聊时自动前置最近群聊记录，恢复 Lucas 跨渠道在场感。
+ * 群聊对话保持原样，不注入私聊内容（单向注入，避免循环）。
+ */
+function buildHistoryWithCrossChannel(isGroup, histKey) {
+  const privateMsgs = buildHistoryMessages(histKey);
+  if (isGroup) return privateMsgs;
+  const groupKey = getMostRecentGroupKey('wecom');
+  const groupMsgs = groupKey ? buildGroupContextMessages(groupKey, 4) : [];
+  return [...groupMsgs, ...privateMsgs];
+}
 
 // wecom 渠道包装：透传 isGroup/chatId/fromUser，固定 channel='wecom'
 function chatHistoryKey(isGroup, chatId, fromUser) {
@@ -5812,9 +5826,9 @@ function startBotLongConnection() {
       : `【${channel}·${fromUser}】`;
     const memberName = member ? `${member.role}${member.name}` : fromUser;
 
-    // 近期对话历史：把同一个 chat 的最近 N 轮作为 messages array 传给 Lucas
+    // 近期对话历史：私聊时自动前置最近群聊消息（跨渠道在场感），群聊保持原样
     const histKey = chatHistoryKey(isGroup, chatId, fromUser);
-    const historyMessages = buildHistoryMessages(histKey);
+    const historyMessages = buildHistoryWithCrossChannel(isGroup, histKey);
 
     // 微信公众号链接：自动抓取正文注入给 Lucas
     let lucasText = text;
@@ -5950,7 +5964,7 @@ function startBotLongConnection() {
           groupAckSent = true;
           try {
             await sendWithTimeout(() => wsClient.sendMessage(chatId, {
-              msgtype: 'text', text: { content: '收到～在想想……' }
+              msgtype: 'markdown', markdown: { content: '收到～在想想……' }
             }));
             logger.info('群消息 ack 已发送（30s 无回复）', { fromUser, chatId });
           } catch (ackErr) {
@@ -6120,8 +6134,8 @@ function startBotLongConnection() {
     if (isGroup && isDemoGroup(chatId)) {
       try {
         await wsClient.sendMessage(chatId, {
-          msgtype: 'text',
-          text: { content: '演示版暂时只支持文字消息，请直接输入文字提问～' },
+          msgtype: 'markdown',
+          markdown: { content: '演示版暂时只支持文字消息，请直接输入文字提问～' },
         });
       } catch {}
       return;
@@ -6247,7 +6261,7 @@ function startBotLongConnection() {
     if (imageItems.length === 0) {
       // 直接透传给 Lucas 作为文本
       const histKey = chatHistoryKey(isGroup, chatId, fromUser);
-      const historyMessages = buildHistoryMessages(histKey);
+      const historyMessages = buildHistoryWithCrossChannel(isGroup, histKey);
       const msgId = frame.body?.msgid || crypto.randomUUID();
       const wecomUserId = isGroup ? `group:${fromUser}:${msgId}` : fromUser;
       const replyText = await callGatewayAgent('lucas', `${memberTag}${rawText}`, wecomUserId, 180000, historyMessages) || '收到～';
@@ -6288,7 +6302,7 @@ function startBotLongConnection() {
 
     // 组装发给 Lucas 的消息
     const histKey = chatHistoryKey(isGroup, chatId, fromUser);
-    const historyMessages = buildHistoryMessages(histKey);
+    const historyMessages = buildHistoryWithCrossChannel(isGroup, histKey);
     const msgId = frame.body?.msgid || crypto.randomUUID();
     const wecomUserId = isGroup ? `group:${fromUser}:${msgId}` : fromUser;
 
@@ -6330,8 +6344,8 @@ function startBotLongConnection() {
     if (isGroup && isDemoGroup(chatId)) {
       try {
         await wsClient.sendMessage(chatId, {
-          msgtype: 'text',
-          text: { content: '演示版暂时只支持文字消息，请直接输入文字提问～' },
+          msgtype: 'markdown',
+          markdown: { content: '演示版暂时只支持文字消息，请直接输入文字提问～' },
         });
       } catch {}
       return;
@@ -6341,7 +6355,7 @@ function startBotLongConnection() {
     const channel    = isGroup ? '群聊' : '私聊';
     const memberTag  = member ? `【${channel}·${member.role}${member.name}】` : `【${channel}·${fromUser}】`;
     const histKey    = chatHistoryKey(isGroup, chatId, fromUser);
-    const historyMessages = buildHistoryMessages(histKey);
+    const historyMessages = buildHistoryWithCrossChannel(isGroup, histKey);
 
     logger.info('Bot 收到语音消息', { fromUser, voiceText: voiceText.substring(0, 60) });
 

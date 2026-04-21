@@ -41,11 +41,12 @@
 // ── Session 参数（before_prompt_build 时可用的上下文）─────────────────────
 
 export interface SessionParams {
-  prompt:     string;   // 当前用户消息（语义检索用）
-  userId:     string;   // 发消息的用户 ID
-  agentId:    string;   // 当前 agent（lucas / andy / lisa）
-  isGroup:    boolean;  // 是否群聊
-  sessionKey: string;
+  prompt:      string;   // 当前用户消息（语义检索用）
+  userId:      string;   // 发消息的用户 ID（小写，用于 ChromaDB）
+  kuzuUserId:  string;   // Kuzu Entity ID（保留原始大小写，如 ZengXiaoLong）
+  agentId:     string;   // 当前 agent（lucas / andy / lisa）
+  isGroup:     boolean;  // 是否群聊
+  sessionKey:  string;
 }
 
 export type InjectMode = "prepend" | "append-system";
@@ -239,11 +240,11 @@ export const contextSources: Record<string, ContextSource[]> = {
     // Kuzu：家人实时状态（路径已完整：distill-memories.py → Kuzu → render-knowledge.py → inject.md）
     {
       source: "kuzu", id: "person-realtime",
-      cypher: `MATCH (p:Entity {id: $userId})-[f:Fact]->(o:Entity)
+      cypher: `MATCH (p:Entity {id: $kuzuUserId})-[f:Fact]->(o:Entity)
                WHERE f.valid_until IS NULL
                RETURN f.relation, o.name, f.context
                ORDER BY f.confidence DESC LIMIT $topK`,
-      params: ["userId"],
+      params: ["kuzuUserId"],
       topK: 10, label: "家人当前状态", inject: "append-system",
       ready: true,
       tier: 1,
@@ -252,11 +253,11 @@ export const contextSources: Record<string, ContextSource[]> = {
     // Kuzu：近期待跟进事项（has_pending_event，按 valid_until 升序，最近到期的排前面）
     {
       source: "kuzu", id: "pending-events",
-      cypher: `MATCH (p:Entity {id: $userId})-[f:Fact {relation: 'has_pending_event'}]->(e:Entity)
+      cypher: `MATCH (p:Entity {id: $kuzuUserId})-[f:Fact {relation: 'has_pending_event'}]->(e:Entity)
                WHERE f.valid_until >= date()
                RETURN e.name, f.context, f.valid_until
                ORDER BY f.valid_until ASC LIMIT $topK`,
-      params: ["userId"],
+      params: ["kuzuUserId"],
       topK: 5, label: "待跟进事项", inject: "append-system",
       ready: true,
       tier: 3,
@@ -267,11 +268,11 @@ export const contextSources: Record<string, ContextSource[]> = {
     // 连续性作用：让 Lucas 知道「我们上次在推进什么事」，理解「那件事」等隐式指代
     {
       source: "kuzu", id: "active-threads",
-      cypher: `MATCH (p:Entity {id: $userId})-[f:Fact {relation: 'active_thread'}]->(t:Entity)
+      cypher: `MATCH (p:Entity {id: $kuzuUserId})-[f:Fact {relation: 'active_thread'}]->(t:Entity)
                WHERE f.valid_until >= date()
                RETURN t.name, f.context
                ORDER BY f.valid_from DESC LIMIT $topK`,
-      params: ["userId"],
+      params: ["kuzuUserId"],
       topK: 5, label: "当前活跃话题", inject: "append-system",
       ready: true,
       tier: 2,
@@ -280,14 +281,14 @@ export const contextSources: Record<string, ContextSource[]> = {
     // Kuzu：关系网络近况（P2-A path B）— 遍历家庭关系边，找相关家人的当前状态/近期关注/重要事件
     {
       source: "kuzu", id: "relationship-network",
-      cypher: `MATCH (speaker:Entity {id: $userId})-[rel:Fact]->(other:Entity)
+      cypher: `MATCH (speaker:Entity {id: $kuzuUserId})-[rel:Fact]->(other:Entity)
                WHERE other.type = 'person' AND rel.valid_until IS NULL
                MATCH (other)-[f:Fact]->(info:Entity)
                WHERE f.valid_until IS NULL
                  AND f.relation IN ['current_status', 'recent_concern', 'cares_most_about', 'key_event']
                RETURN other.name, f.relation, info.name, f.context
                LIMIT $topK`,
-      params: ["userId"],
+      params: ["kuzuUserId"],
       topK: 12, label: "家人近况", inject: "append-system",
       ready: true,
       tier: 1,
@@ -300,13 +301,13 @@ export const contextSources: Record<string, ContextSource[]> = {
     // 未来加 space/device 等新类型时，天然不会进入此查询，无需修改
     {
       source: "kuzu", id: "topic-resonance",
-      cypher: `MATCH (speaker:Entity {id: $userId})-[f1:Fact]->(t:Entity {type: 'topic'})
+      cypher: `MATCH (speaker:Entity {id: $kuzuUserId})-[f1:Fact]->(t:Entity {type: 'topic'})
                WHERE f1.valid_until IS NULL
                MATCH (other:Entity {type: 'person'})-[f2:Fact]->(t)
-               WHERE other.id <> $userId AND f2.valid_until IS NULL
+               WHERE other.id <> $kuzuUserId AND f2.valid_until IS NULL
                RETURN DISTINCT other.name, t.name, f2.relation, f2.context
                LIMIT $topK`,
-      params: ["userId"],
+      params: ["kuzuUserId"],
       topK: 8, label: "话题共鸣", inject: "append-system",
       ready: true,
       tier: 3,
@@ -317,11 +318,11 @@ export const contextSources: Record<string, ContextSource[]> = {
     // 确保即使 queryMemories 未命中，因果关系仍然可用
     {
       source: "kuzu", id: "causal-facts",
-      cypher: `MATCH (p:Entity {id: $userId})-[f:Fact {relation: 'causal_relation'}]->(t:Entity)
+      cypher: `MATCH (p:Entity {id: $kuzuUserId})-[f:Fact {relation: 'causal_relation'}]->(t:Entity)
                WHERE f.valid_until IS NULL
                RETURN t.name, f.context, f.confidence
                ORDER BY f.confidence DESC LIMIT $topK`,
-      params: ["userId"],
+      params: ["kuzuUserId"],
       topK: 8, label: "因果关系", inject: "append-system",
       ready: true,
       tier: 3,

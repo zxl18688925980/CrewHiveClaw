@@ -409,6 +409,22 @@ function normalizeUserId(raw: string): string {
   ).toLowerCase();
 }
 
+// Kuzu entity ID 映射：ChromaDB/session 小写 userId → Kuzu PascalCase entity ID
+// 注意：Kuzu 存储时用原始大驼峰（ZengXiaoLong），而 normalizeUserId 统一小写化 → 查询全部失中
+// 凡是 Kuzu person 查询（person-realtime / pending-events / active-threads /
+// relationship-network / topic-resonance / causal-facts / queryCausalFacts）
+// 必须通过此映射转换后再用，否则永远返回空。
+const KUZU_USER_ID_MAP: Record<string, string> = {
+  "zengxiaolong":       "ZengXiaoLong",
+  "xiamoqiufengliang":  "XiaMoQiuFengLiang",
+  "zifeiyu":            "ZiFeiYu",
+  "zengyueyutong":      "ZengYueYuTong",
+  "lucas":              "lucas",
+};
+function toKuzuEntityId(userId: string): string {
+  return KUZU_USER_ID_MAP[userId.toLowerCase()] ?? userId;
+}
+
 function parseSessionUser(sessionKey: string | undefined): { userId: string; isGroup: boolean } {
   // 取第四段起（去掉 "agent:agentId:openai-user:"），保留 group: 前缀
   const rawUser = sessionKey?.replace(/^[^:]+:[^:]+:[^:]+:/, "") ?? "default";
@@ -1018,6 +1034,10 @@ type DecisionRecord = {
   outcome_note: string | null;
   userId?: string;   // 谁发起的，用于按人查未完成承诺
   type?: string;     // 记录类型，如 "task_state_change" 用于协作链状态变更
+  // 状态机字段（type=task_state_change 时必填）
+  taskId?: string;   // 需求 ID（如 req_xxx）
+  fromState?: string; // 变更前状态
+  toState?: string;   // 变更后状态
 };
 
 // ── 嵌入：nomic-embed-text via Ollama ────────────────────────────────
@@ -1289,14 +1309,15 @@ function getTopicRelatedPersonIds(userId: string): string[] {
 // 供 queryMemories（自动注入）和 recall_memory（主动检索）共用
 function queryCausalFacts(userId: string): { value: string; context: string }[] {
   try {
-    const cypher = `MATCH (p:Entity {id: $userId})-[f:Fact {relation: 'causal_relation'}]->(t:Entity)
+    const kuzuId = toKuzuEntityId(userId);
+    const cypher = `MATCH (p:Entity {id: $kuzuId})-[f:Fact {relation: 'causal_relation'}]->(t:Entity)
                     WHERE f.valid_until IS NULL
                     RETURN t.name, f.context LIMIT 12`;  // v645: 因果维度预算 8→12
     const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
     const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
     const result = spawnSync(
       KUZU_PYTHON3,
-      [scriptPath, cypher, JSON.stringify({ userId })],
+      [scriptPath, cypher, JSON.stringify({ kuzuId })],
       { encoding: "utf8", timeout: 3000 },
     );
     if (result.status !== 0 || !result.stdout?.trim()) return [];
@@ -1317,15 +1338,16 @@ function detectCausalQuery(query: string): boolean {
 
 function queryCausalFactsMultiHop(userId: string): { chain: string; context: string }[] {
   try {
+    const kuzuId = toKuzuEntityId(userId);
     // 2 跳：A--causal-->B--causal-->C，返回完整推理链
-    const cypher = `MATCH (p:Entity {id: $userId})-[f1:Fact {relation: 'causal_relation'}]->(m:Entity)-[f2:Fact {relation: 'causal_relation'}]->(t:Entity)
+    const cypher = `MATCH (p:Entity {id: $kuzuId})-[f1:Fact {relation: 'causal_relation'}]->(m:Entity)-[f2:Fact {relation: 'causal_relation'}]->(t:Entity)
                     WHERE f1.valid_until IS NULL AND f2.valid_until IS NULL
                     RETURN m.name, f1.context, t.name, f2.context LIMIT 6`;
     const KUZU_PYTHON3 = "/opt/homebrew/opt/python@3.11/bin/python3.11";
     const scriptPath   = join(SCRIPTS_DIR, "kuzu-query.py");
     const result = spawnSync(
       KUZU_PYTHON3,
-      [scriptPath, cypher, JSON.stringify({ userId })],
+      [scriptPath, cypher, JSON.stringify({ kuzuId })],
       { encoding: "utf8", timeout: 4000 },
     );
     if (result.status !== 0 || !result.stdout?.trim()) return [];
@@ -1786,6 +1808,9 @@ async function addDecisionMemory(record: DecisionRecord): Promise<void> {
       outcome_note: record.outcome_note ?? "",
       userId: record.userId ?? "",
       type: record.type ?? "",                // 记录类型：task_state_change 等
+      taskId: record.taskId ?? "",            // 状态机：需求 ID
+      fromState: record.fromState ?? "",      // 状态机：变更前状态
+      toState: record.toState ?? "",          // 状态机：变更后状态
     }, embedding);
   } catch (_e) {
     // 写入失败静默处理
@@ -3402,6 +3427,9 @@ async function runAndyPipeline(params: {
     outcome_at: null,
     outcome_note: null,
     type: "task_state_change",
+    taskId: requirementId,
+    fromState: "queued",
+    toState: "planning",
   } satisfies DecisionRecord);
 
   // 通报系统工程师：协作链启动
@@ -4556,6 +4584,32 @@ function markTaskStatus(taskId: string, status: TaskRegistryEntry["status"]): vo
 
 function isTaskCancelled(taskId: string): boolean {
   return readTaskRegistry().some(e => e.id === taskId && e.status === "cancelled");
+}
+
+// 查询任务最近一次状态变更时间（从 ChromaDB decisions 集合）
+async function getLatestStateChange(taskId: string): Promise<{ timestamp: string; fromState: string; toState: string } | null> {
+  try {
+    const records = await chromaGet("decisions", {
+      $and: [
+        { type: { $eq: "task_state_change" } },
+        { taskId: { $eq: taskId } },
+      ],
+    });
+    if (records.length === 0) return null;
+    // 按时间戳倒序，取最新一条
+    const sorted = records
+      .filter(r => r.metadata.timestamp)
+      .sort((a, b) => String(b.metadata.timestamp).localeCompare(String(a.metadata.timestamp)));
+    const latest = sorted[0];
+    if (!latest) return null;
+    return {
+      timestamp: String(latest.metadata.timestamp ?? ""),
+      fromState: String(latest.metadata.fromState ?? ""),
+      toState: String(latest.metadata.toState ?? ""),
+    };
+  } catch (_e) {
+    return null;
+  }
 }
 
 // Lucas 人格检查：禁止在 Lucas 回复中出现 Andy/Lisa 内部技术词汇
@@ -6622,13 +6676,17 @@ const crewclawRoutingPlugin = {
       // context-sources.ts 注册表定义「每个 agent 查哪些来源」，
       // context-handler.ts 并发执行所有查询并分组（prepend / appendSystem）。
       // 新增检索源只改 context-sources.ts，不改这里。
+      const _sessionUserId = agentId === FRONTEND_AGENT_ID ? userId : agentId;
       const sessionParams: SessionParams = {
-        prompt:     event.prompt,
+        prompt:      event.prompt,
         // visitor session：userId 格式为 "visitor:db334c"，直接传给 queryMemories 做精确 where 过滤
-        userId:     agentId === FRONTEND_AGENT_ID ? userId : agentId,
+        userId:      _sessionUserId,
+        // Kuzu entity ID（保留原始大小写 ZengXiaoLong 等），用于所有 Kuzu person-level 查询
+        // normalizeUserId 统一小写化导致 Kuzu 查询全部失中，必须单独映射
+        kuzuUserId:  toKuzuEntityId(_sessionUserId),
         agentId,
-        isGroup:    agentId === FRONTEND_AGENT_ID ? isGroup : false,
-        sessionKey: ctx.sessionKey ?? "",
+        isGroup:     agentId === FRONTEND_AGENT_ID ? isGroup : false,
+        sessionKey:  ctx.sessionKey ?? "",
       };
       const ctxResult = await buildDynamicContext(sessionParams, buildContextResolvers());
 
@@ -10099,6 +10157,9 @@ last_used: null
                 outcome_at: null,
                 outcome_note: null,
                 type: "task_state_change",
+                taskId: reqIdForPhase,
+                fromState: prevPhase ?? "none",
+                toState: "implementing",
               } satisfies DecisionRecord);
             }
           }
@@ -10192,6 +10253,9 @@ last_used: null
                       outcome_at: null,
                       outcome_note: null,
                       type: "task_state_change",
+                      taskId: reqId,
+                      fromState: prevPhase2 ?? "none",
+                      toState: "verifying",
                     } satisfies DecisionRecord);
                   }
                 }
@@ -12655,7 +12719,7 @@ last_used: null
       description: [
         "Lucas 专属工具：查看当前排队或进行中的开发任务列表。",
         "当家人问「Andy 在做什么」「上个任务做完了吗」「有什么任务在跑」时调用。",
-        "返回任务 ID、需求描述、提交时间和状态（queued/running/completed/cancelled）。",
+        "返回任务 ID、需求描述、提交时间、状态（queued/running/completed/cancelled）和最近状态变更时间。",
       ].join("\n"),
       parameters: Type.Object({}),
       execute: async (_toolCallId, _params): Promise<AgentToolResult<Record<string, unknown>>> => {
@@ -12669,6 +12733,13 @@ last_used: null
         if (all.length === 0) {
           return { content: [{ type: "text", text: "当前没有进行中的开发任务。" }], details: { tasks: [] } };
         }
+        // AC-2：从 ChromaDB 查询每个活跃任务的最近状态变更时间
+        const stateChangeMap = new Map<string, { timestamp: string; fromState: string; toState: string }>();
+        await Promise.all(active.map(async e => {
+          const change = await getLatestStateChange(e.id);
+          if (change) stateChangeMap.set(e.id, change);
+        })).catch(() => {});
+
         const nowMs = Date.now();
         const lines = all.map(e => {
           const icon = e.status === "running" ? "🔄" : e.status === "queued" ? "⏳" : e.status === "completed" ? "✅" : "🚫";
@@ -12687,11 +12758,17 @@ last_used: null
             ? Math.round((nowMs - new Date(e.submittedAt).getTime()) / 60_000)
             : 0;
           const elapsedLabel = e.status === "running" && elapsedMin > 0 ? ` (已运行${elapsedMin}分钟)` : "";
-          return `${icon} [${e.id}] (${time}) ${desc}${phaseLabel}${elapsedLabel}${ackLabel}${blockLabel}${estLabel}${actualLabel}`;
+          // 最近状态变更时间（AC-2）
+          const stateChange = stateChangeMap.get(e.id);
+          const stateChangeLabel = stateChange ? ` [上次变更:${stateChange.timestamp.slice(0, 16).replace("T", " ")} ${stateChange.fromState}→${stateChange.toState}]` : "";
+          return `${icon} [${e.id}] (${time}) ${desc}${phaseLabel}${elapsedLabel}${stateChangeLabel}${ackLabel}${blockLabel}${estLabel}${actualLabel}`;
         });
         return {
           content: [{ type: "text", text: lines.join("\n") }],
-          details: { tasks: all },
+          details: { tasks: all.map(e => ({
+            ...e,
+            latestStateChange: stateChangeMap.get(e.id) ?? null,
+          })) },
         };
       },
     }));
