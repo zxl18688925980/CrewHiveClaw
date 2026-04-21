@@ -44,6 +44,12 @@
         "param": "num_layers=8",
         "discovery": "32B 4-bit 模型下 16 层额外消耗约 4GB，触发 OOM",
         "fix": "8 层在当前数据量下效果足够"
+      },
+      {
+        "date": "2026-04-21",
+        "param": "GGUF 转换",
+        "discovery": "qwen3_5_moe 架构不支持 GGUF 导出：① mlx_lm --export-gguf 明确报 not supported；② llama.cpp build 8500 的 convert_hf_to_gguf.py 需要 MODEL_ARCH.MISTRAL4，但 gguf 0.18.0（PyPI 最新）尚未收录",
+        "fix": "Ollama homeai-assistant 保持 qwen3.6 base；微调推理走 mlx_lm.generate --adapter-path；待 llama.cpp gguf 包追上版本后重试"
       }
     ]
   },
@@ -53,7 +59,7 @@
     "inactive_models": {
       "qwen2.5-coder:32b": "Setup 微调完成后不需要常驻，不调用则不占内存"
     },
-    "adapter_note": "MLX U32 量化格式不兼容 Ollama 导入，LoRA 推理走 mlx_lm.generate --adapter-path"
+    "adapter_note": "qwen3_5_moe 架构不支持 GGUF 转换（mlx_lm + llama.cpp 均受阻），LoRA 推理走 mlx_lm.generate --adapter-path"
   },
 
   "network": {

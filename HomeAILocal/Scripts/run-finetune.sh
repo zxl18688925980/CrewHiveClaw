@@ -74,7 +74,7 @@ sleep "$WAIT_SECS"
 log "当前空闲内存: $(vm_stat | awk '/Pages free/{print $3*16/1024"MB"}')"
 
 # 5. 确定起点 adapter（优先用最新 incremental，fallback 到 setup）
-LATEST_ADAPTER=$(ls -d "$ADAPTERS_BASE"/incremental-* 2>/dev/null | sort | tail -1)
+LATEST_ADAPTER=$(ls -d "$ADAPTERS_BASE"/incremental-* 2>/dev/null | sort | tail -1 || true)
 if [ -n "$LATEST_ADAPTER" ] && [ -f "$LATEST_ADAPTER/adapter_config.json" ]; then
   BASE_ADAPTER="$LATEST_ADAPTER"
   log "继续上次增量 adapter: $BASE_ADAPTER"
@@ -161,7 +161,7 @@ ln -sfn "$NEW_ADAPTER_DIR" "$ADAPTERS_BASE/latest"
 log "latest 软链已更新 -> $NEW_ADAPTER_DIR"
 
 # 10. 清空 pending-samples（已训练）
-cp "$PENDING_FILE" "$HOMEAI_DIR/data/finetune/pending-samples-backup-$RUN_DATE.jsonl"
+cp "$PENDING_FILE" "$DATA_ROOT/Data/finetune/pending-samples-backup-$RUN_DATE.jsonl"
 > "$PENDING_FILE"
 log "pending-samples 已清空（备份: pending-samples-backup-$RUN_DATE.jsonl）"
 
