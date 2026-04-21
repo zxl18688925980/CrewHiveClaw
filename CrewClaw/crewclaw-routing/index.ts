@@ -4082,6 +4082,21 @@ async function launchOpenCodeBackground(
         const brief = briefMatch?.[1]?.trim()
           ?? andyVerdict?.split("\n").filter(Boolean).slice(0, 2).join(" ")
           ?? "功能已实现完成。";
+        // ── code_history 写入（Lisa 交付记忆，内循环信号）────────────────────
+        void writeCodeHistory({
+          requirementId: _taskRequirementId || sessionId,
+          filePaths: (() => {
+            try {
+              const { execSync: _es } = require("child_process") as typeof import("child_process");
+              const _out = (_es as (c: string, o: object) => Buffer)(
+                "git diff --name-only HEAD", { cwd: projectRoot, timeout: 8_000 },
+              ).toString().trim();
+              return _out ? _out.split("\n").filter(Boolean) : [];
+            } catch (_e) { return [] as string[]; }
+          })(),
+          description: `${taskSummary}\nAndy验收：${(andyVerdict ?? "").slice(0, 300)}`,
+        });
+
         // 同步写入 deliveryBrief，供【待告知家人任务】注入使用
         if (_taskRequirementId) {
           try {
