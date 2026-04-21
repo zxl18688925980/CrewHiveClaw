@@ -3386,10 +3386,23 @@ async function runAndyPipeline(params: {
     submittedBy: params.userId,
     submittedAt: nowCST(),
     status: "running",
-    currentPhase: "andy_designing",
+    currentPhase: "planning",
     ...(params.lucasContext ? { lucasContext: params.lucasContext } : {}),
     ...(params.visitorCode ? { visitorCode: params.visitorCode } : {}),
   });
+
+  // 状态变更记录：queued → planning（新任务直接从 planning 开始）
+  void addDecisionMemory({
+    decision_id: `${requirementId}-state-queued-to-planning`,
+    agent: "system",
+    timestamp: nowCST(),
+    context: `任务 ${requirementId} 状态变更`,
+    decision: "queued → planning",
+    outcome: null,
+    outcome_at: null,
+    outcome_note: null,
+    type: "task_state_change",
+  } satisfies DecisionRecord);
 
   // 通报系统工程师：协作链启动
   void notifyEngineer(`协作链启动 [${requirementId}]\n发起人：${params.userId}\n\n━━ 需求原文 ━━\n${params.requirement}`, "pipeline", FRONTEND_AGENT_ID);
@@ -3479,7 +3492,7 @@ async function runAndyPipeline(params: {
       // ── Exploration 阶段通知：Andy 开始分析前告知 Lucas（类 ClaudeCode Discovery 可见性）──
       void notifyEngineer(`【${requirementId}】Andy 开始探索需求：${params.requirement.slice(0, 80)}`, "pipeline", DESIGNER_AGENT_ID);
       // 流式状态同步：告知 Lucas 需求已收到
-      pushStageToLucas(requirementId, "andy_designing", "andy_designing", params.userId);
+      pushStageToLucas(requirementId, "planning", "planning", params.userId);
       if (params.userId && params.userId !== "unknown") {
         void callGatewayAgent(
           FRONTEND_AGENT_ID,
@@ -4393,9 +4406,11 @@ function pushStageToLucas(reqId: string, stage: string, internalStage: string, u
   stagePushTracker.set(reqId, pushed);
   // 推给 Lucas，由 Lucas 决定是否、何时、用什么语气告知用户
   const stageLabels: Record<string, string> = {
-    "andy_designing": "Andy 正在分析需求和代码",
-    "lisa_implementing": "方案设计完成，Lisa 正在写代码实现",
-    "andy_verifying": "代码写好了，Andy 正在验收质量",
+    "queued": "需求已排队，等待空闲时段启动",
+    "planning": "Andy 正在分析需求和代码",
+    "implementing": "方案设计完成，Lisa 正在写代码实现",
+    "verifying": "代码写好了，正在验收质量",
+    "delivered": "任务已完成交付",
   };
   void callGatewayAgent(
     FRONTEND_AGENT_ID,
@@ -4431,7 +4446,7 @@ interface TaskRegistryEntry {
   cancelledAt?: string;
   completedAt?: string;
   lucasContext?: string;  // Lucas 补充的需求背景（情绪/时间敏感度/可接受替代方案）
-  currentPhase?: string;  // 协作链当前阶段：andy_designing | lisa_implementing | completed
+  currentPhase?: string;  // 协作链显式状态机：queued → planning → implementing → verifying → delivered
   designNote?: string;    // Andy 的设计简报（非技术语言，Lucas 可直接告知家人）
   deliveryBrief?: string; // Andy 验收完成时的交付简报（家人语言，供 Lucas 告知家人用）
   lucasAcked?: boolean;   // Lucas 是否已主动告知家人完成情况（false=待告知，true=已告知）
@@ -5263,6 +5278,15 @@ let lastReflectionAt         = 0;
 const REFLECTION_MIN_REQUESTS = 50;
 const REFLECTION_INTERVAL_MS  = 24 * 60 * 60 * 1000;
 
+// ── L1→L0 反馈回路节流变量 ─────────────────────────────────────────────────
+// 每 50 次请求或 6h，采样四维度写入健康 → 写 l0-recall-feedback.jsonl
+// Andy before_prompt_build 读取最新条目注入上下文，驱动 L0 改进
+const L0_FEEDBACK_FILE          = join(PROJECT_ROOT, "data/learning/l0-recall-feedback.jsonl");
+const L0_FEEDBACK_MIN_REQUESTS  = 50;
+const L0_FEEDBACK_INTERVAL_MS   = 6 * 60 * 60 * 1000;  // 6h（比诊断更频繁）
+let l0FeedbackCounter           = 0;
+let l0FeedbackLastAt            = 0;
+
 async function runReflectionEngine(): Promise<void> {
   lastReflectionAt      = Date.now();
   reflectionRequestCounter = 0;
@@ -6041,6 +6065,110 @@ const crewclawRoutingPlugin = {
       }
     }
 
+    // ── L1→L0 反馈回路：采样四维度写入健康，识别 L0 盲点 ──────────────────────
+    // 触发：agent_end 节流（L0_FEEDBACK_MIN_REQUESTS / L0_FEEDBACK_INTERVAL_MS）
+    // 输出：data/learning/l0-recall-feedback.jsonl（保留最近 30 条）
+    // 消费：Andy before_prompt_build 注入最新条目，驱动 L0 改进写入策略
+    async function checkAndWriteRecallFeedback(): Promise<void> {
+      l0FeedbackLastAt = Date.now();
+      l0FeedbackCounter = 0;
+      try {
+        type SampledDoc = { timestamp?: string; entityTags?: string; agentId?: string; causal_relation?: string };
+
+        // 采样三个集合各 20 条，评估四维度写入健康
+        const collectionsToSample = [
+          { name: "conversations",      dimLabel: "对话记忆" },
+          { name: "decisions",          dimLabel: "决策记忆" },
+          { name: "code_history",       dimLabel: "代码历史" },
+        ];
+
+        const dimensionStats: Record<string, { total: number; semantic: number; temporal: number; entity: number; causal: number }> = {};
+
+        for (const { name: collName, dimLabel } of collectionsToSample) {
+          try {
+            const { ChromaClient } = await import("chromadb");
+            const chroma = new ChromaClient({ path: CHROMA_URL });
+            const col = await chroma.getCollection({ name: collName });
+            const result = await col.get({ limit: 20, include: ["embeddings", "metadatas"] as ("embeddings" | "metadatas")[] });
+            const docs = result.metadatas ?? [];
+            const embeddings = result.embeddings ?? [];
+            const total = docs.length;
+            if (total === 0) continue;
+
+            // 语义维度：embedding 非空且非全零
+            const semanticOk = embeddings.filter((emb: unknown) => {
+              if (!Array.isArray(emb) || emb.length === 0) return false;
+              return (emb as number[]).some(v => v !== 0);
+            }).length;
+
+            // 时间维度：metadata.timestamp 字段有值
+            const temporalOk = (docs as SampledDoc[]).filter(m => m && typeof (m as SampledDoc).timestamp === "string" && (m as SampledDoc).timestamp!.length > 0).length;
+
+            // 实体维度：metadata.entityTags 或 agentId 字段有值
+            const entityOk = (docs as SampledDoc[]).filter(m => m && (
+              (typeof (m as SampledDoc).entityTags === "string" && (m as SampledDoc).entityTags!.length > 0) ||
+              (typeof (m as SampledDoc).agentId === "string" && (m as SampledDoc).agentId!.length > 0)
+            )).length;
+
+            // 因果维度：metadata.causal_relation 字段有值
+            const causalOk = (docs as SampledDoc[]).filter(m => m && typeof (m as SampledDoc).causal_relation === "string" && (m as SampledDoc).causal_relation!.length > 0).length;
+
+            dimensionStats[collName] = { total, semantic: semanticOk, temporal: temporalOk, entity: entityOk, causal: causalOk };
+            logger.info(`[l0-feedback] ${dimLabel}(${collName}): total=${total} semantic=${semanticOk} temporal=${temporalOk} entity=${entityOk} causal=${causalOk}`);
+          } catch (_e) { /* 单集合失败不影响其他 */ }
+        }
+
+        if (Object.keys(dimensionStats).length === 0) return;
+
+        // 汇总：计算各维度平均填充率，识别最弱维度
+        const dims = ["semantic", "temporal", "entity", "causal"] as const;
+        const dimRates: Record<string, number> = {};
+        for (const dim of dims) {
+          let sumRate = 0; let count = 0;
+          for (const stats of Object.values(dimensionStats)) {
+            if (stats.total > 0) { sumRate += stats[dim] / stats.total; count++; }
+          }
+          dimRates[dim] = count > 0 ? sumRate / count : 1;
+        }
+
+        const weakestDim = dims.reduce((a, b) => dimRates[a] < dimRates[b] ? a : b);
+        const weakestRate = dimRates[weakestDim];
+
+        // 只有最弱维度填充率 < 0.7 才写入（避免噪声触发）
+        if (weakestRate >= 0.7) {
+          logger.info(`[l0-feedback] all dims healthy (weakest=${weakestDim} rate=${weakestRate.toFixed(2)}), skip`);
+          return;
+        }
+
+        const dimNameMap: Record<string, string> = { semantic: "语义(embedding)", temporal: "时间(timestamp)", entity: "实体(entityTags/agentId)", causal: "因果(causal_relation)" };
+        const signals: string[] = [];
+        for (const dim of dims) {
+          if (dimRates[dim] < 0.7) {
+            signals.push(`${dimNameMap[dim]} 填充率 ${(dimRates[dim] * 100).toFixed(0)}%（低于 70% 阈值）`);
+          }
+        }
+
+        const entry = {
+          timestamp: nowCST(),
+          weakest_dim: weakestDim,
+          weakest_rate: Math.round(weakestRate * 100) / 100,
+          dim_rates: { semantic: Math.round(dimRates.semantic * 100) / 100, temporal: Math.round(dimRates.temporal * 100) / 100, entity: Math.round(dimRates.entity * 100) / 100, causal: Math.round(dimRates.causal * 100) / 100 },
+          signals,
+          collections_sampled: Object.keys(dimensionStats),
+        };
+
+        // 追加写入，保留最近 30 条
+        const existingLines = existsSync(L0_FEEDBACK_FILE)
+          ? readFileSync(L0_FEEDBACK_FILE, "utf8").split("\n").filter(l => l.trim())
+          : [];
+        const updated = [...existingLines, JSON.stringify(entry)].slice(-30);
+        writeFileSync(L0_FEEDBACK_FILE, updated.join("\n") + "\n", "utf8");
+        logger.info(`[l0-feedback] wrote feedback: weakest=${weakestDim}(${(weakestRate * 100).toFixed(0)}%) signals=${signals.length}`);
+      } catch (_e) {
+        logger.warn(`[l0-feedback] checkAndWriteRecallFeedback failed: ${String(_e)}`);
+      }
+    }
+
     function buildContextResolvers(): ContextResolvers {
       return {
         chromadb: {
@@ -6553,6 +6681,37 @@ const crewclawRoutingPlugin = {
         if (crossHint) appendSystem.push(crossHint);
       }
 
+      // ── L1→L0 反馈注入（Andy 专属）──────────────────────────────────────────
+      // 读取最新一条 l0-recall-feedback.jsonl，若 24h 内且有盲点信号，注入 Andy 上下文
+      // 目的：让 Andy 在 HEARTBEAT 中识别 L0 写入薄弱维度并在下次 spec 中约束补充
+      if (agentId === DESIGNER_AGENT_ID) {
+        try {
+          if (existsSync(L0_FEEDBACK_FILE)) {
+            const lines = readFileSync(L0_FEEDBACK_FILE, "utf8").split("\n").filter(l => l.trim());
+            if (lines.length > 0) {
+              const latest = JSON.parse(lines[lines.length - 1]) as {
+                timestamp: string; weakest_dim: string; weakest_rate: number; signals: string[]; dim_rates: Record<string, number>;
+              };
+              const ageMs = Date.now() - new Date(latest.timestamp).getTime();
+              // 仅注入 24h 内且有实际盲点信号的条目
+              if (ageMs < 24 * 60 * 60 * 1000 && latest.signals && latest.signals.length > 0) {
+                const dimRateLines = Object.entries(latest.dim_rates).map(([d, r]) =>
+                  `  ${d}: ${(r * 100).toFixed(0)}%`).join("\n");
+                const signalLines = latest.signals.map(s => `  - ${s}`).join("\n");
+                appendSystem.push(
+                  `【L0 记忆写入质量反馈（${latest.timestamp.slice(0, 16)}）】\n` +
+                  `最弱维度：${latest.weakest_dim}（${(latest.weakest_rate * 100).toFixed(0)}%）\n` +
+                  `各维度填充率：\n${dimRateLines}\n` +
+                  `盲点信号：\n${signalLines}\n` +
+                  `↗ 建议：在 HEARTBEAT 中关注以上维度的写入约束，推动 L0 蒸馏配置改进`,
+                );
+                logger.info(`[l0-feedback-inject] injected into Andy: weakest=${latest.weakest_dim} signals=${latest.signals.length}`);
+              }
+            }
+          }
+        } catch (_e) { /* 静默，不影响主流程 */ }
+      }
+
       // ── L3 成员影子能力视图（shadow agent 专属）────────────────────────────
       // 影子接收请求时，注入家庭可用能力清单，帮助影子为成员推荐合适能力
       if (agentId.startsWith("shadow-")) {
@@ -6644,7 +6803,7 @@ const crewclawRoutingPlugin = {
 
         // ── 活跃任务状态自动注入（L2：不依赖 Lucas 主动调工具查进度）────────
         // 系统自动注入真实任务数据，Lucas 只需翻译成人话
-        const _phaseMap: Record<string, string> = { andy_designing: "设计中", lisa_implementing: "实现中", andy_verifying: "验收中" };
+        const _phaseMap: Record<string, string> = { queued: "排队中", planning: "设计中", implementing: "实现中", verifying: "验收中", delivered: "已交付" };
         const _activeTasks = readTaskRegistry().filter(e => e.status === "running" || e.status === "queued");
         const _recentDone = readTaskRegistry().filter(e => e.status === "completed").slice(-2);
         if (_activeTasks.length > 0 || _recentDone.length > 0) {
@@ -7020,9 +7179,11 @@ const crewclawRoutingPlugin = {
             });
           if (runningTasks.length > 0) {
             const phaseLabels: Record<string, string> = {
-              andy_designing: "Andy 设计中",
-              lisa_implementing: "Lisa 实现中",
-              andy_verifying: "Andy 验收中",
+              queued: "排队中",
+              planning: "Andy 设计中",
+              implementing: "Lisa 实现中",
+              verifying: "验收中",
+              delivered: "已交付",
               completed: "已完成",
             };
             const taskLines = runningTasks.map(t => {
@@ -8155,6 +8316,19 @@ last_used: null
         }
       }
 
+      // ── L1→L0 反馈回路触发（节流：50 次请求或 6h）────────────────────────────
+      // 采样 ChromaDB 四维度写入健康，识别 L0 盲点，写 l0-recall-feedback.jsonl
+      // Andy before_prompt_build 读取后注入上下文，驱动 L0 改进蒸馏策略
+      if (!isTestSession) {
+        l0FeedbackCounter++;
+        const shouldRunL0Feedback =
+          l0FeedbackCounter >= L0_FEEDBACK_MIN_REQUESTS ||
+          (Date.now() - l0FeedbackLastAt) >= L0_FEEDBACK_INTERVAL_MS;
+        if (shouldRunL0Feedback) {
+          void checkAndWriteRecallFeedback().catch(() => {});
+        }
+      }
+
       if (!isTestSession) {
         const modelInfo = sessionModel.get(ctx.sessionKey ?? "");
         // channel / fromType 按 Agent 和来源推断
@@ -8722,6 +8896,7 @@ last_used: null
             submittedBy: requestorId,
             submittedAt: nowCST(),
             status: "queued",
+            currentPhase: "queued",
             ...(lucasContext ? { lucasContext } : {}),
             ...(visitorCode ? { visitorCode } : {}),
           });
@@ -9908,18 +10083,18 @@ last_used: null
           const taskEntry = taskEntries.find(e => e.id === reqIdForPhase);
           if (taskEntry) {
             const prevPhase = taskEntry.currentPhase;
-            taskEntry.currentPhase = "lisa_implementing";
+            taskEntry.currentPhase = "implementing";
             taskEntry.designNote = designNote;
             if (estimatedHours !== undefined) taskEntry.estimatedHours = estimatedHours;
             writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(taskEntries, null, 2), "utf8");
             // AC-1：状态变更记录写入 ChromaDB decisions 集合
-            if (prevPhase !== "lisa_implementing") {
+            if (prevPhase !== "implementing") {
               void addDecisionMemory({
-                decision_id: `${reqIdForPhase}-state-${prevPhase ?? "none"}-to-lisa_implementing`,
+                decision_id: `${reqIdForPhase}-state-${prevPhase ?? "none"}-to-implementing`,
                 agent: "system",
                 timestamp: nowCST(),
                 context: `任务 ${reqIdForPhase} 状态变更`,
-                decision: `${prevPhase ?? "none"} → lisa_implementing`,
+                decision: `${prevPhase ?? "none"} → implementing`,
                 outcome: null,
                 outcome_at: null,
                 outcome_note: null,
@@ -9931,7 +10106,7 @@ last_used: null
 
         if (requestorId && requestorId !== "unknown") {
           // 流式状态同步：告知 Lucas 方案设计完成，Lisa 开始实现
-          pushStageToLucas(reqIdForPhase, "lisa_implementing", "lisa_implementing", requestorId, estimatedHours ? `预计 ${estimatedHours} 小时` : undefined);
+          pushStageToLucas(reqIdForPhase, "implementing", "implementing", requestorId, estimatedHours ? `预计 ${estimatedHours} 小时` : undefined);
           // 告知 Lucas 设计完成（Lucas 决定是否、何时、如何告知用户进展）
           void callGatewayAgent(
             FRONTEND_AGENT_ID,
@@ -9997,22 +10172,22 @@ last_used: null
             // 不再需要幻觉绕过检测。run_opencode 保留为复杂任务备用。
             success = !!lisaResponse;
             if (lisaResponse) {
-              // ── 阶段推进：lisa_implementing → andy_verifying ──────────────────
+              // ── 阶段推进：implementing → verifying ──────────────────
               {
                 const phaseEntries = readTaskRegistry();
                 const phaseEntry = phaseEntries.find(e => e.id === reqId);
                 if (phaseEntry) {
                   const prevPhase2 = phaseEntry.currentPhase;
-                  phaseEntry.currentPhase = "andy_verifying";
+                  phaseEntry.currentPhase = "verifying";
                   try { writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(phaseEntries, null, 2), "utf8"); } catch (_e) {}
-                  // AC-1：状态变更记录写入 ChromaDB decisions 集合
-                  if (prevPhase2 !== "andy_verifying") {
+                  // 状态变更记录写入 ChromaDB decisions 集合
+                  if (prevPhase2 !== "verifying") {
                     void addDecisionMemory({
-                      decision_id: `${reqId}-state-${prevPhase2 ?? "none"}-to-andy_verifying`,
+                      decision_id: `${reqId}-state-${prevPhase2 ?? "none"}-to-verifying`,
                       agent: "system",
                       timestamp: nowCST(),
                       context: `任务 ${reqId} 状态变更`,
-                      decision: `${prevPhase2 ?? "none"} → andy_verifying`,
+                      decision: `${prevPhase2 ?? "none"} → verifying`,
                       outcome: null,
                       outcome_at: null,
                       outcome_note: null,
@@ -10026,7 +10201,7 @@ last_used: null
               {
                 const phaseEntries2 = readTaskRegistry();
                 const phaseEntry2 = phaseEntries2.find(e => e.id === reqId);
-                pushStageToLucas(reqId, "andy_verifying", "andy_verifying", phaseEntry2?.submittedBy ?? "");
+                pushStageToLucas(reqId, "verifying", "verifying", phaseEntry2?.submittedBy ?? "");
               }
               // ─────────────────────────────────────────────────────────────────
 
