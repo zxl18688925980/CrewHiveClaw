@@ -93,6 +93,14 @@
           "_type": "prerequisite",
           "direction": "lower_better",
           "thresholds": [[60, 5], [75, 4], [85, 3], [90, 2], [101, 1]]
+        },
+        "temporal_degradation": {
+          "name": "时间分层退化检测（历史期 vs 近期 embedding 有效率差值 pp，越小越好）",
+          "weight": 1.0,
+          "_type": "core",
+          "_doc": "近30天 embedding 有效率 - 90天前 embedding 有效率。正值=历史期更差，说明早期写入质量低。负值=无退化。教师工具：真实数据直接对比，不合成。",
+          "direction": "lower_better",
+          "thresholds": [[0, 5], [10, 4], [20, 3], [30, 2], [101, 1]]
         }
       }
     },
@@ -146,6 +154,22 @@
           "weight": 0.3,
           "direction": "higher_better",
           "thresholds": [[3, 5], [1, 3], [0, 1]]
+        },
+        "teacher_hit_rate": {
+          "name": "教师召回测试（90天前真实消息 Hit Rate@3 %）",
+          "weight": 1.2,
+          "_type": "core",
+          "_doc": "外循环教师测试：从 conversations 取90天前真实用户消息，embed后查 top-3，看原始记录是否被召回。测不出=仪表盘；测出来=真实能力。",
+          "direction": "higher_better",
+          "thresholds": [[100, 5], [67, 4], [33, 3], [1, 2], [0, 1]]
+        },
+        "unresolved_requirements": {
+          "name": "未落地需求数（outcome='' 且 >30天，越少越好）",
+          "weight": 0.8,
+          "_type": "core",
+          "_doc": "外循环教师测试：承诺追踪。requirements 集合 outcome='' 且写入 >30天，代表系统承诺但未落地的需求。0=完美，越多=遗忘越严重。",
+          "direction": "lower_better",
+          "thresholds": [[0, 5], [3, 4], [5, 3], [10, 2], [999, 1]]
         }
       }
     },

@@ -3394,6 +3394,59 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // T. 外循环教师测试：时间分层退化检测（conversations 近30天 vs 90天前 embedding 有效率对比）
+    // 真实数据直接比较，不合成——检测 L0 写入质量是否随时间退化
+    let _temporalDegradationDiff = null;
+    try {
+      const tdColR = await fetch(`${CHROMA_API_BASE}/conversations`);
+      if (tdColR.ok) {
+        const { id: tdColId } = await tdColR.json();
+        const tdGetR = await fetch(`${CHROMA_API_BASE}/${tdColId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 400, include: ['embeddings', 'metadatas'] }),
+        });
+        if (tdGetR.ok) {
+          const tdData  = await tdGetR.json();
+          const tdMetas = tdData.metadatas  || [];
+          const tdEmbs  = tdData.embeddings || [];
+          const nowMs   = Date.now();
+          const _30d    = 30 * 24 * 3600 * 1000;
+          const _90d    = 90 * 24 * 3600 * 1000;
+          const nearIdx = [], oldIdx = [];
+          tdMetas.forEach((m, i) => {
+            if (!m || !m.timestamp) return;
+            const ts = new Date(m.timestamp).getTime();
+            if (isNaN(ts)) return;
+            const age = nowMs - ts;
+            if (age < _30d) nearIdx.push(i);
+            else if (age > _90d) oldIdx.push(i);
+          });
+          const calcRate = (idxArr) => {
+            const sample = idxArr.slice(0, 50);
+            if (sample.length === 0) return null;
+            const valid = sample.filter(i => { const e = tdEmbs[i]; return e && e.length > 0 && e.some(v => v !== 0); }).length;
+            return Math.round(valid / sample.length * 100);
+          };
+          const nearRate = calcRate(nearIdx);
+          const oldRate  = calcRate(oldIdx);
+          if (nearRate !== null && oldRate !== null) {
+            _temporalDegradationDiff = nearRate - oldRate; // 正值=历史期更差
+            const degradeOk = _temporalDegradationDiff < 20;
+            const sign = _temporalDegradationDiff > 0 ? `历史期低 ${_temporalDegradationDiff}pp` : `历史期不低于近期`;
+            results.push(
+              `${degradeOk ? '✅' : '⚠️'} 时间分层退化检测（教师工具）：近30天 ${nearRate}%，90天前 ${oldRate}%（${sign}${_temporalDegradationDiff >= 20 ? '，存在退化趋势' : ''}）`
+            );
+            if (!degradeOk && score === '✅') score = '⚠️';
+          } else {
+            results.push(`⚪ 时间分层退化检测：数据不足（近30天 ${nearIdx.length} 条，90天前 ${oldIdx.length} 条）`);
+          }
+        }
+      }
+    } catch (e) {
+      results.push(`⚪ 时间分层退化检测失败：${e.message.slice(0, 60)}`);
+    }
+
     // 数值评分：从 results 文本提取原始值，对照 rubric 计算 0-5 分
     const _rub0 = loadRubric();
     const _L0I = _rub0?.layers?.L0?.items;
@@ -3422,6 +3475,7 @@ os._exit(0)
         }
       }
       if (_minEmbRate !== null) trackScore(_l0s, _L0I, 'memory_write_health', _minEmbRate);
+      if (_temporalDegradationDiff !== null) trackScore(_l0s, _L0I, 'temporal_degradation', _temporalDegradationDiff);
       if (_l0s.length > 0) {
         const _wa = calcWeightedAvg(_l0s);
         _evalScores.L0 = { items: _l0s, weighted: _wa };
@@ -3723,6 +3777,107 @@ os._exit(0)
       }
     }
 
+    // T1. 外循环教师测试：时间跨度召回（90天前真实用户消息 Hit Rate@3）
+    // 从 conversations 取真实历史消息，embed 后查 top-3，检验历史记忆是否可召回
+    let _teacherHitCount = 0, _teacherTestCount = 0;
+    try {
+      const tcColR = await fetch(`${CHROMA_API_BASE}/conversations`);
+      if (tcColR.ok) {
+        const { id: tcColId } = await tcColR.json();
+        const tcGetR = await fetch(`${CHROMA_API_BASE}/${tcColId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 300, include: ['documents', 'metadatas', 'ids'] }),
+        });
+        if (tcGetR.ok) {
+          const tcData  = await tcGetR.json();
+          const tcDocs  = tcData.documents  || [];
+          const tcMetas = tcData.metadatas  || [];
+          const tcIds   = tcData.ids        || [];
+          const _90dAgo = Date.now() - 90 * 24 * 3600 * 1000;
+          const oldHumanIdx = [];
+          tcMetas.forEach((m, i) => {
+            if (!m || !m.timestamp) return;
+            const ts = new Date(m.timestamp).getTime();
+            if (isNaN(ts) || ts > _90dAgo) return;
+            if (m.fromType !== 'human') return;
+            if (!tcDocs[i] || tcDocs[i].length < 10) return;
+            oldHumanIdx.push(i);
+          });
+          if (oldHumanIdx.length === 0) {
+            results.push(`⚪ 外循环教师召回测试：90天前消息不足，系统数据较新，跳过`);
+          } else {
+            const sample = oldHumanIdx.sort(() => Math.random() - 0.5).slice(0, 3);
+            _teacherTestCount = sample.length;
+            for (const idx of sample) {
+              try {
+                const embR3 = await fetch('http://localhost:11434/api/embed', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ model: 'nomic-embed-text', input: tcDocs[idx].slice(0, 500) }),
+                  signal: AbortSignal.timeout(15000),
+                });
+                if (!embR3.ok) continue;
+                const embJ3  = await embR3.json();
+                const qVec3  = embJ3.embeddings?.[0];
+                if (!qVec3 || qVec3.length === 0) continue;
+                const qR3 = await fetch(`${CHROMA_API_BASE}/${tcColId}/query`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ query_embeddings: [qVec3], n_results: 3, include: ['ids'] }),
+                  signal: AbortSignal.timeout(15000),
+                });
+                if (!qR3.ok) continue;
+                const qD3 = await qR3.json();
+                if ((qD3.ids?.[0] || []).includes(tcIds[idx])) _teacherHitCount++;
+              } catch (_) { /* 单条失败不影响其他 */ }
+            }
+            const hitPct = Math.round(_teacherHitCount / _teacherTestCount * 100);
+            const hitOk  = _teacherHitCount >= Math.ceil(_teacherTestCount / 2);
+            results.push(
+              `${hitOk ? '✅' : '⚠️'} 外循环教师召回测试（90天前真实消息 ${_teacherTestCount} 条）：` +
+              `Hit@3 ${_teacherHitCount}/${_teacherTestCount}（${hitPct}%）${hitOk ? '' : '——历史记忆召回能力需关注'}`
+            );
+            if (!hitOk && score === '✅') score = '⚠️';
+          }
+        }
+      }
+    } catch (e) {
+      results.push(`⚪ 外循环教师召回测试失败：${e.message.slice(0, 60)}`);
+    }
+
+    // T2. 外循环教师测试：未落地需求承诺追踪（requirements outcome='' 且 >30天）
+    let _unresolvedReqCount = 0;
+    try {
+      const reqColR = await fetch(`${CHROMA_API_BASE}/requirements`);
+      if (reqColR.ok) {
+        const { id: reqColId } = await reqColR.json();
+        const reqGetR = await fetch(`${CHROMA_API_BASE}/${reqColId}/get`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 200, include: ['metadatas'] }),
+        });
+        if (reqGetR.ok) {
+          const reqData  = await reqGetR.json();
+          const reqMetas = reqData.metadatas || [];
+          const _30dAgo  = Date.now() - 30 * 24 * 3600 * 1000;
+          _unresolvedReqCount = reqMetas.filter(m => {
+            if (!m) return false;
+            if (m.outcome && m.outcome !== '') return false;
+            if (!m.timestamp) return true; // 无时间戳保守计入
+            const ts = new Date(m.timestamp).getTime();
+            return !isNaN(ts) && ts < _30dAgo;
+          }).length;
+          const reqOk = _unresolvedReqCount <= 3;
+          results.push(
+            `${reqOk ? '✅' : '⚠️'} 未落地需求追踪（教师工具）：${_unresolvedReqCount} 条需求 outcome='' 且 >30天${!reqOk ? '——承诺遗忘风险需关注' : ''}`
+          );
+          if (!reqOk && score === '✅') score = '⚠️';
+        }
+      } else {
+        results.push(`⚪ 未落地需求追踪：requirements 集合不可达`);
+      }
+    } catch (e) {
+      results.push(`⚪ 未落地需求追踪：${e.message.slice(0, 60)}`);
+    }
+
     // 数值评分
     const _rub1 = loadRubric();
     const _L1I = _rub1?.layers?.L1?.items;
@@ -3753,6 +3908,9 @@ os._exit(0)
         }
       }
       if (_recDistCnt > 0) trackScore(_l1s, _L1I, 'memory_recall_quality', _recDistSum / _recDistCnt);
+      // 外循环教师测试指标
+      if (_teacherTestCount > 0) trackScore(_l1s, _L1I, 'teacher_hit_rate', Math.round(_teacherHitCount / _teacherTestCount * 100));
+      trackScore(_l1s, _L1I, 'unresolved_requirements', _unresolvedReqCount);
       if (_l1s.length > 0) {
         const _wa = calcWeightedAvg(_l1s);
         _evalScores.L1 = { items: _l1s, weighted: _wa };
