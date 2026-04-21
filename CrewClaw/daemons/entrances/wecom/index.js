@@ -3271,6 +3271,77 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // 8. 四维度记忆写入健康（三角色：语义/时间/实体/因果）
+    const _memCollections = [
+      { name: 'conversations', label: 'Lucas', entityField: 'entityTags', hasCausal: true  },
+      { name: 'decisions',     label: 'Andy',  entityField: 'agent',      hasCausal: false },
+      { name: 'code_history',  label: 'Lisa',  entityField: 'file',       hasCausal: false },
+    ];
+    for (const mc of _memCollections) {
+      try {
+        const mcColResp = await fetch(`${CHROMA_API_BASE}/${mc.name}`);
+        if (!mcColResp.ok) {
+          results.push(`⚠️ ${mc.label} 记忆集合(${mc.name})不可达：${mcColResp.status}`);
+          if (score === '✅') score = '⚠️';
+          continue;
+        }
+        const { id: mcId } = await mcColResp.json();
+        const mcGetResp = await fetch(`${CHROMA_API_BASE}/${mcId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 20, include: ['embeddings', 'metadatas'] }),
+        });
+        if (!mcGetResp.ok) {
+          results.push(`⚠️ ${mc.label} 记忆写入健康：读取失败 ${mcGetResp.status}`);
+          if (score === '✅') score = '⚠️';
+          continue;
+        }
+        const mcData  = await mcGetResp.json();
+        const mcMetas = mcData.metadatas || [];
+        const mcEmbs  = mcData.embeddings || [];
+        const mcTotal = mcMetas.length;
+        if (mcTotal === 0) {
+          results.push(`⚪ ${mc.label} 记忆写入健康：集合暂无记录`);
+          continue;
+        }
+        // 语义维度：embedding 向量有效率（非 null / 非全零）
+        const validEmb = mcEmbs.filter(e => e && e.length > 0 && e.some(v => v !== 0)).length;
+        const embRate  = Math.round(validEmb / mcTotal * 100);
+        // 时间维度：timestamp 字段完整率 + 最近写入时间
+        const withTs      = mcMetas.filter(m => m.timestamp).length;
+        const tsRate      = Math.round(withTs / mcTotal * 100);
+        const tsValues    = mcMetas.filter(m => m.timestamp).map(m => new Date(m.timestamp).getTime()).filter(t => !isNaN(t));
+        const latestTsMs  = tsValues.length > 0 ? Math.max(...tsValues) : 0;
+        const writeHrsAgo = latestTsMs > 0 ? ((Date.now() - latestTsMs) / 3600000).toFixed(1) : null;
+        // 实体维度：entityField 填充率
+        const withEnt = mcMetas.filter(m => m[mc.entityField] && String(m[mc.entityField]).trim().length > 0).length;
+        const entRate = Math.round(withEnt / mcTotal * 100);
+        // 因果维度：causal 相关记录（仅 Lucas）
+        let causalNote = '';
+        if (mc.hasCausal) {
+          const causalCnt = mcMetas.filter(m =>
+            (m.type     && String(m.type).toLowerCase().includes('causal')) ||
+            (m.relation && String(m.relation).toLowerCase().includes('causal'))
+          ).length;
+          causalNote = ` 因果⚪${causalCnt}条`;
+        }
+        // 综合判断
+        const embStatus = embRate >= 80 ? '✅' : (embRate >= 50 ? '⚠️' : '❌');
+        const tsStatus  = tsRate  >= 90 ? '✅' : '⚠️';
+        const entStatus = entRate >= 50 ? '✅' : '⚪';
+        const dimOk     = embRate >= 80 && tsRate >= 90;
+        const timeNote  = writeHrsAgo !== null ? ` · 最近写入：${writeHrsAgo}小时前` : '';
+        results.push(
+          `${dimOk ? '✅' : '⚠️'} ${mc.label} 记忆写入健康（最近${mcTotal}条）：` +
+          `语义${embStatus}${embRate}% 时间${tsStatus}${tsRate}% 实体${entStatus}${entRate}%${causalNote}${timeNote}`
+        );
+        if (!dimOk && score === '✅') score = '⚠️';
+      } catch (e) {
+        results.push(`⚠️ ${mc.label} 记忆写入健康检查失败：${e.message.slice(0, 60)}`);
+        if (score === '✅') score = '⚠️';
+      }
+    }
+
     // 数值评分：从 results 文本提取原始值，对照 rubric 计算 0-5 分
     const _rub0 = loadRubric();
     const _L0I = _rub0?.layers?.L0?.items;
@@ -3289,6 +3360,15 @@ os._exit(0)
         if (r.includes('内存') && r.includes('活跃')) { const m = r.match(/活跃 (\d+)%/); if (m) trackScore(_l0s, _L0I, 'memory_usage', +m[1]); }
         if (r.includes('Kuzu 协作边（L3）')) { const m = r.match(/(\d+) 条（/); if (m) trackScore(_l0s, _L0I, 'collab_edges_readiness', +m[1]); }
       }
+      // 记忆写入健康：取三角色 embedding 有效率最低值
+      let _minEmbRate = null;
+      for (const r of results) {
+        if (r.includes('记忆写入健康')) {
+          const m = r.match(/语义[✅⚠️❌](\d+)%/);
+          if (m) { const rate = +m[1]; if (_minEmbRate === null || rate < _minEmbRate) _minEmbRate = rate; }
+        }
+      }
+      if (_minEmbRate !== null) trackScore(_l0s, _L0I, 'memory_write_health', _minEmbRate);
       if (_l0s.length > 0) {
         const _wa = calcWeightedAvg(_l0s);
         _evalScores.L0 = { items: _l0s, weighted: _wa };
@@ -3528,6 +3608,94 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // X. 三角色记忆召回质量（四维度 canary 查询：语义/时间/实体/因果）
+    const _recallTests = [
+      { collection: 'conversations', label: 'Lucas', query: '家庭日常对话',     entityField: 'entityTags', hasCausal: true  },
+      { collection: 'decisions',     label: 'Andy',  query: '系统设计方案架构', entityField: 'agent',      hasCausal: false },
+      { collection: 'code_history',  label: 'Lisa',  query: '代码实现交付',     entityField: 'file',       hasCausal: false },
+    ];
+    for (const rt of _recallTests) {
+      try {
+        // 获取 canary query 的 embedding
+        const embR = await fetch('http://localhost:11434/api/embed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'nomic-embed-text', input: rt.query }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!embR.ok) {
+          results.push(`⚠️ ${rt.label} 召回质量：Ollama embedding 不可达 ${embR.status}`);
+          if (score === '✅') score = '⚠️';
+          continue;
+        }
+        const embJson  = await embR.json();
+        const queryVec = embJson.embeddings?.[0];
+        if (!queryVec || queryVec.length === 0) {
+          results.push(`⚠️ ${rt.label} 召回质量：embedding 返回为空`);
+          if (score === '✅') score = '⚠️';
+          continue;
+        }
+        // 获取集合 ID
+        const rcColR = await fetch(`${CHROMA_API_BASE}/${rt.collection}`);
+        if (!rcColR.ok) {
+          results.push(`⚠️ ${rt.label} 召回质量：集合 ${rt.collection} 不可达`);
+          if (score === '✅') score = '⚠️';
+          continue;
+        }
+        const { id: rcId } = await rcColR.json();
+        // 语义 top-3 查询
+        const qR = await fetch(`${CHROMA_API_BASE}/${rcId}/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query_embeddings: [queryVec], n_results: 3, include: ['distances', 'metadatas'] }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!qR.ok) {
+          results.push(`⚠️ ${rt.label} 召回质量：查询失败 ${qR.status}`);
+          if (score === '✅') score = '⚠️';
+          continue;
+        }
+        const qData     = await qR.json();
+        const distances = qData.distances?.[0] || [];
+        const qMetas    = qData.metadatas?.[0]  || [];
+        if (distances.length === 0) {
+          results.push(`⚪ ${rt.label} 召回质量：集合为空，跳过`);
+          continue;
+        }
+        // 语义维度：avg cosine distance（越低越好）
+        const avgDist   = distances.reduce((a, b) => a + b, 0) / distances.length;
+        const semStatus = avgDist < 0.4 ? '✅' : (avgDist < 0.65 ? '⚠️' : '❌');
+        // 时间维度：结果中最近记录距今多久
+        const qTs      = qMetas.filter(m => m.timestamp).map(m => new Date(m.timestamp).getTime()).filter(t => !isNaN(t));
+        const qLatest  = qTs.length > 0 ? Math.max(...qTs) : 0;
+        const qHrsAgo  = qLatest > 0 ? ((Date.now() - qLatest) / 3600000).toFixed(1) : null;
+        const tsStatus2 = qHrsAgo !== null ? (parseFloat(qHrsAgo) < 48 ? '✅' : '⚠️') : '⚪';
+        const timeNote2 = qHrsAgo !== null ? ` 时间${tsStatus2}最近结果${qHrsAgo}h前` : '';
+        // 实体维度：结果中 entityField 填充率
+        const qWithEnt  = qMetas.filter(m => m[rt.entityField] && String(m[rt.entityField]).trim().length > 0).length;
+        const qEntRate  = qMetas.length > 0 ? Math.round(qWithEnt / qMetas.length * 100) : 0;
+        const entStatus2 = qEntRate >= 60 ? '✅' : '⚪';
+        // 因果维度：结果中含因果记录（仅 Lucas）
+        let causalNote2 = '';
+        if (rt.hasCausal) {
+          const qCausal = qMetas.filter(m =>
+            (m.type     && String(m.type).toLowerCase().includes('causal')) ||
+            (m.relation && String(m.relation).toLowerCase().includes('causal'))
+          ).length;
+          causalNote2 = ` 因果⚪${qCausal}条`;
+        }
+        const recallOk = avgDist < 0.65;
+        results.push(
+          `${recallOk ? '✅' : '⚠️'} ${rt.label} 召回质量（"${rt.query}"，top-${distances.length}）：` +
+          `语义${semStatus}avg_dist=${avgDist.toFixed(3)}${timeNote2} 实体${entStatus2}${qEntRate}%${causalNote2}`
+        );
+        if (!recallOk && score === '✅') score = '⚠️';
+      } catch (e) {
+        results.push(`⚠️ ${rt.label} 召回质量检查失败：${e.message.slice(0, 60)}`);
+        if (score === '✅') score = '⚠️';
+      }
+    }
+
     // 数值评分
     const _rub1 = loadRubric();
     const _L1I = _rub1?.layers?.L1?.items;
@@ -3541,6 +3709,7 @@ os._exit(0)
         if (r.includes('Kuzu 模式积累')) { const ac = (r.match(/Andy (\d+)/)?.[1] || 0) > 0; const lc = (r.match(/Lisa (\d+)/)?.[1] || 0) > 0; trackScore(_l1s, _L1I, 'pattern_accumulation', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
         if (r.includes('Main') && r.includes('HEARTBEAT')) trackScore(_l1s, _L1I, 'main_heartbeat', r.trim().startsWith('✅') ? 'ok' : 'missing');
         if (r.includes('子 Agent') || r.includes('andy-evaluator') || r.includes('lisa-evaluator')) { /* scored separately below */ }
+        if (r.includes('召回质量') && r.includes('avg_dist=')) { /* aggregated below */ }
       }
       // 子 Agent 活跃度（汇总 evaluator + shadow 计数）
       let subCount = 0;
@@ -3550,6 +3719,14 @@ os._exit(0)
         if (r.includes('访客影子语料') && !r.includes('0 个')) subCount++;
       }
       trackScore(_l1s, _L1I, 'sub_agent_activity', subCount);
+      // 记忆召回质量：取三角色 avg_dist 均值
+      let _recDistSum = 0, _recDistCnt = 0;
+      for (const r of results) {
+        if (r.includes('召回质量') && r.includes('avg_dist=')) {
+          const m = r.match(/avg_dist=([\d.]+)/); if (m) { _recDistSum += parseFloat(m[1]); _recDistCnt++; }
+        }
+      }
+      if (_recDistCnt > 0) trackScore(_l1s, _L1I, 'memory_recall_quality', _recDistSum / _recDistCnt);
       if (_l1s.length > 0) {
         const _wa = calcWeightedAvg(_l1s);
         _evalScores.L1 = { items: _l1s, weighted: _wa };
@@ -3559,7 +3736,8 @@ os._exit(0)
 
     return `**L1 评估 ${score}**\n` +
       `【记忆质量】\n` + results.filter(r => r.includes('档案') || r.includes('模式积累')).map(r => `  ${r}`).join('\n') + '\n' +
-      `【输出质量】\n` + results.filter(r => !r.includes('档案') && !r.includes('模式积累')).map(r => `  ${r}`).join('\n');
+      `【召回质量】\n` + results.filter(r => r.includes('召回质量')).map(r => `  ${r}`).join('\n') + '\n' +
+      `【输出质量】\n` + results.filter(r => !r.includes('档案') && !r.includes('模式积累') && !r.includes('召回质量')).map(r => `  ${r}`).join('\n');
   }
 
   if (toolName === 'inspect_agent_context') {
