@@ -6024,7 +6024,11 @@ const crewclawRoutingPlugin = {
           const descMatch = fmMatch[1].match(/description:\s*(.+)/);
           const description = descMatch?.[1]?.trim() ?? "";
           if (!description) continue;
-          const descWords = description.toLowerCase().split(/[\s，。！？、；：""'']+/).filter(w => w.length > 1);
+          // 同时扫 ## 触发条件 段落，增加中文匹配面
+          const triggerMatch = content.match(/## 触发条件\n([\s\S]*?)(?=\n##|\n---|$)/);
+          const triggerText = triggerMatch?.[1]?.trim() ?? "";
+          const matchText = `${description} ${triggerText}`;
+          const descWords = matchText.toLowerCase().split(/[\s，。！？、；：""''【】（）()\r\n]+/).filter(w => w.length > 1);
           const score = descWords.filter(w => promptWords.has(w)).length;
           if (score > 0) hits.push({ description, score });
         }
@@ -7400,9 +7404,10 @@ const crewclawRoutingPlugin = {
         // 新建 Skill 草稿
         mkdirSync(skillDir, { recursive: true });
         const toolDescriptions = actionTools.map(t => `- ${t}: 根据上下文自动推断`).join("\n");
+        const taskHint = triggerContext.slice(0, 60).replace(/\n/g, " ").trim();
         const content = `---
 name: ${skillName}
-description: 基于多次操作自动生成。${actionTools.join(" → ")} 组合工作流。
+description: ${taskHint}（工具链：${actionTools.join("→")}）
 status: draft
 created_from: auto-detect
 trigger_count: 1
