@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-记忆 probe 集生成器
+记忆 probe 集生成器（真实数据直接提取版）
 
-从 ChromaDB 三个集合采样记录，用本地 LLM 生成自然语言查询，构建 ground truth 评测集。
+从 ChromaDB 三个集合抽取真实历史数据构建 ground truth 评测集，不使用 LLM 生成合成 query。
 生成的 probe 存入 ~/HomeAI/Data/learning/memory-probes.jsonl，供 eval-memory-probes.py 评测。
+
+数据提取策略：
+  conversations  → 取 90 天前的真实人类消息（fromType=human），消息文本即 query
+  decisions      → 取决策记录，文档摘要即 query
+  requirements   → 取 outcome='' 且 >30 天的未落地需求，需求文本即 query
 
 用法：
   # 三个集合各采 10 条（默认）
@@ -25,29 +30,29 @@ import os
 import random
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import requests
 
 CHROMA_BASE = 'http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections'
-OLLAMA_CHAT = 'http://localhost:11434/api/chat'
 PROBE_FILE  = os.path.expanduser('~/HomeAI/Data/learning/memory-probes.jsonl')
+
+# 时间阈值
+CONVERSATIONS_DAYS = 90   # conversations 取 N 天前的消息
+REQUIREMENTS_DAYS  = 30   # requirements 取 N 天前未落地的需求
 
 COLLECTIONS = {
     'conversations': {
         'label':       'Lucas 对话记忆',
         'entity_field': 'entityTags',
-        'gen_hint':    '这是家庭成员和AI的对话记录，请生成一个家庭成员可能问的自然语言问题',
     },
     'decisions': {
         'label':       'Andy 决策记忆',
         'entity_field': 'agent',
-        'gen_hint':    '这是技术设计决策或系统架构记录，请生成一个工程师可能问的自然语言问题',
     },
-    'code_history': {
-        'label':       'Lisa 实现历史',
-        'entity_field': 'file',
-        'gen_hint':    '这是代码实现或功能交付记录，请生成一个开发者可能问的自然语言问题',
+    'requirements': {
+        'label':       '未落地需求',
+        'entity_field': 'owner',
     },
 }
 
@@ -59,17 +64,28 @@ def get_collection_id(name: str) -> str:
     return r.json()['id']
 
 
-def fetch_records(col_id: str, limit: int = 200) -> list:
-    r = requests.post(f'{CHROMA_BASE}/{col_id}/get',
-                      json={'limit': limit, 'include': ['documents', 'metadatas']},
-                      timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f'读取记录失败: {r.status_code}')
-    data = r.json()
-    ids   = data.get('ids', [])
-    docs  = data.get('documents', [])
-    metas = data.get('metadatas', [])
-    return [{'id': ids[i], 'doc': docs[i], 'meta': metas[i]} for i in range(len(ids))]
+def fetch_records(col_id: str, limit: int = 500) -> list:
+    """分批拉取，处理 ChromaDB limit 限制"""
+    all_records = []
+    offset = 0
+    batch = min(limit, 200)
+    while True:
+        r = requests.post(f'{CHROMA_BASE}/{col_id}/get',
+                          json={'limit': batch, 'offset': offset, 'include': ['documents', 'metadatas']},
+                          timeout=20)
+        if r.status_code != 200:
+            raise RuntimeError(f'读取记录失败: {r.status_code}')
+        data  = r.json()
+        ids   = data.get('ids', [])
+        docs  = data.get('documents', [])
+        metas = data.get('metadatas', [])
+        if not ids:
+            break
+        all_records.extend({'id': ids[i], 'doc': docs[i], 'meta': metas[i]} for i in range(len(ids)))
+        if len(ids) < batch or len(all_records) >= limit:
+            break
+        offset += batch
+    return all_records
 
 
 def record_exists(col_id: str, record_id: str) -> bool:
@@ -81,32 +97,96 @@ def record_exists(col_id: str, record_id: str) -> bool:
     return len(r.json().get('ids', [])) > 0
 
 
-def generate_query(doc_preview: str, hint: str) -> str:
-    """调用本地 Ollama（qwen3.6）生成探测查询问题"""
-    # /no_think 禁用 Qwen3 思考模式，避免 token 全被 thinking 耗尽
-    prompt = (
-        f'/no_think\n'
-        f'{hint}，这个问题检索记忆库时应能找到以下内容。\n'
-        '要求：①问题要自然，像真实用户会问的 ②不直接引用原文，用自己的话重述 '
-        '③长度 10~30 字 ④只输出问题本身，不加任何解释\n\n'
-        f'记忆内容：\n{doc_preview[:400]}\n\n问题：'
-    )
+def parse_ts(ts_raw) -> float:
+    """解析时间戳为毫秒（支持 ISO 字符串和整数毫秒两种格式）"""
+    if not ts_raw:
+        return 0.0
+    if isinstance(ts_raw, (int, float)):
+        return float(ts_raw)
     try:
-        # 用 homeai-assistant（GGUF，无 thinking 模式）避免 qwen3.6 推理 token 吞噬 content
-        r = requests.post(OLLAMA_CHAT, json={
-            'model':  'homeai-assistant:latest',
-            'stream': False,
-            'messages': [{'role': 'user', 'content': prompt}],
-            'options': {'temperature': 0.3, 'num_predict': 80},
-        }, timeout=60)
-        r.raise_for_status()
-        content = r.json().get('message', {}).get('content', '').strip()
-        # 取第一行（模型可能输出多行解释）
-        first_line = content.split('\n')[0].strip()
-        return first_line.strip('"\'「」').strip()
-    except Exception as e:
-        print(f'  [warn] LLM 生成失败，跳过：{e}', file=sys.stderr)
-        return ''
+        dt = datetime.fromisoformat(str(ts_raw).replace('Z', '+00:00'))
+        return dt.timestamp() * 1000
+    except Exception:
+        return 0.0
+
+
+def extract_conversations_probes(records: list, n: int, existing_ids: set) -> list:
+    """conversations：取 90 天前真实人类消息"""
+    cutoff_ms = (datetime.now(timezone.utc) - timedelta(days=CONVERSATIONS_DAYS)).timestamp() * 1000
+    candidates = []
+    for rec in records:
+        if rec['id'] in existing_ids:
+            continue
+        meta = rec.get('meta') or {}
+        if meta.get('fromType') != 'human':
+            continue
+        ts = parse_ts(meta.get('timestamp'))
+        if ts == 0.0 or ts >= cutoff_ms:
+            continue
+        doc = (rec.get('doc') or '').strip()
+        if len(doc) < 10:
+            continue
+        candidates.append(rec)
+    return random.sample(candidates, min(n, len(candidates)))
+
+
+def extract_decisions_probes(records: list, n: int, existing_ids: set) -> list:
+    """decisions：取决策文档（无特殊时间过滤）"""
+    candidates = [
+        rec for rec in records
+        if rec['id'] not in existing_ids and len((rec.get('doc') or '').strip()) >= 20
+    ]
+    return random.sample(candidates, min(n, len(candidates)))
+
+
+def extract_requirements_probes(records: list, n: int, existing_ids: set) -> list:
+    """requirements：取 outcome='' 且 >30 天的未落地需求"""
+    cutoff_ms = (datetime.now(timezone.utc) - timedelta(days=REQUIREMENTS_DAYS)).timestamp() * 1000
+    candidates = []
+    for rec in records:
+        if rec['id'] in existing_ids:
+            continue
+        meta = rec.get('meta') or {}
+        outcome = meta.get('outcome', '')
+        if outcome and outcome.strip():
+            continue  # 已有结果，跳过
+        ts = parse_ts(meta.get('timestamp'))
+        # 无时间戳保守纳入（可能是旧数据）；有时间戳则要求超过 30 天
+        if ts != 0.0 and ts >= cutoff_ms:
+            continue
+        doc = (rec.get('doc') or '').strip()
+        if len(doc) < 10:
+            continue
+        candidates.append(rec)
+    return random.sample(candidates, min(n, len(candidates)))
+
+
+EXTRACT_FN = {
+    'conversations': extract_conversations_probes,
+    'decisions':     extract_decisions_probes,
+    'requirements':  extract_requirements_probes,
+}
+
+
+def build_probe(rec: dict, col_name: str) -> dict:
+    """从真实记录直接构建 probe，query = 文档前 120 字"""
+    doc = (rec.get('doc') or '').strip()
+    query = doc[:120].strip()
+    cfg   = COLLECTIONS[col_name]
+    probe = {
+        'id':              f'probe_{datetime.now().strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:6]}',
+        'collection':      col_name,
+        'query':           query,
+        'ground_truth_id': rec['id'],
+        'doc_preview':     doc[:200],
+        'created_at':      datetime.now().isoformat(),
+        'created_by':      'real_data',
+        'tags':            [],
+    }
+    entity_val = (rec.get('meta') or {}).get(cfg['entity_field'], '')
+    if entity_val:
+        probe['tags'].append(f'entity:{str(entity_val)[:30]}')
+    return probe
 
 
 def load_existing_probes() -> list:
@@ -141,9 +221,14 @@ def cmd_review():
         by_col.setdefault(col, []).append(p)
     print(f'probe 集合计：{len(probes)} 条')
     for col, ps in by_col.items():
-        print(f'  {col}：{len(ps)} 条')
+        src_counts = {}
+        for p in ps:
+            src = p.get('created_by', '未知')
+            src_counts[src] = src_counts.get(src, 0) + 1
+        src_str = '  '.join(f'{k}:{v}' for k, v in src_counts.items())
+        print(f'  {col}：{len(ps)} 条（{src_str}）')
         for p in ps[:3]:
-            print(f'    [{p["id"][-8:]}] {p["query"]}')
+            print(f'    [{p["id"][-8:]}] {p["query"][:60]}')
         if len(ps) > 3:
             print(f'    ...（共 {len(ps)} 条）')
 
@@ -167,7 +252,6 @@ def cmd_prune():
         except Exception as e:
             print(f'  [warn] 检查 {p["id"]} 失败：{e}，保留')
             kept.append(p)
-    # 覆写文件
     with open(PROBE_FILE, 'w', encoding='utf-8') as f:
         for p in kept:
             f.write(json.dumps(p, ensure_ascii=False) + '\n')
@@ -175,7 +259,7 @@ def cmd_prune():
 
 
 def cmd_generate(target_collections: list, n: int):
-    existing = load_existing_probes()
+    existing     = load_existing_probes()
     existing_ids = {p['ground_truth_id'] for p in existing}
 
     total_added = 0
@@ -189,41 +273,26 @@ def cmd_generate(target_collections: list, n: int):
             print(f'  [error] {e}')
             continue
 
-        # 排除已有 probe 的记录，随机采样
-        candidates = [r for r in records if r['id'] not in existing_ids]
-        if not candidates:
-            print(f'  所有记录已有 probe，跳过')
+        extract_fn = EXTRACT_FN.get(col_name)
+        if not extract_fn:
+            print(f'  [skip] 未配置提取策略')
             continue
-        sample = random.sample(candidates, min(n, len(candidates)))
-        print(f'  从 {len(records)} 条中采样 {len(sample)} 条生成 probe...')
+
+        sample = extract_fn(records, n, existing_ids)
+        if not sample:
+            print(f'  无符合条件的记录（共 {len(records)} 条），跳过')
+            continue
+        print(f'  从 {len(records)} 条中筛选出 {len(sample)} 条生成 probe...')
 
         added = 0
         for rec in sample:
-            doc_preview = (rec['doc'] or '')[:400].strip()
-            if not doc_preview:
+            probe = build_probe(rec, col_name)
+            if not probe['query']:
                 continue
-            query = generate_query(doc_preview, cfg['gen_hint'])
-            if not query:
-                continue
-            probe = {
-                'id':              f'probe_{datetime.now().strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:6]}',
-                'collection':      col_name,
-                'query':           query,
-                'ground_truth_id': rec['id'],
-                'doc_preview':     doc_preview[:200],
-                'created_at':      datetime.now().isoformat(),
-                'created_by':      'auto_llm',
-                'tags':            [],
-            }
-            # 提取实体 tag
-            entity_val = (rec.get('meta') or {}).get(cfg['entity_field'], '')
-            if entity_val:
-                probe['tags'].append(f'entity:{str(entity_val)[:30]}')
-
             save_probe(probe)
             existing_ids.add(rec['id'])
             added += 1
-            print(f'  [{added}/{len(sample)}] {query[:60]}')
+            print(f'  [{added}/{len(sample)}] {probe["query"][:60]}')
 
         total_added += added
         print(f'  已生成 {added} 条 probe')
@@ -233,7 +302,7 @@ def cmd_generate(target_collections: list, n: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='记忆 probe 集生成器')
+    parser = argparse.ArgumentParser(description='记忆 probe 集生成器（真实数据直接提取）')
     parser.add_argument('--all',        action='store_true', help='三个集合各采样 n 条')
     parser.add_argument('--collection', type=str, choices=list(COLLECTIONS.keys()), help='指定集合')
     parser.add_argument('--n',          type=int, default=10, help='每个集合采样条数（默认10）')
