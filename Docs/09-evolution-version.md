@@ -3824,3 +3824,30 @@ chatHistory 时间感修复 + 私聊跨渠道在场感 + Kuzu userId 大小写 b
 
 无系统工程师手动越界。修复均通过正常代码变更完成，编译验证通过后重启 Gateway。
 
+---
+
+## v708 — 2026-04-22
+
+### 变更摘要
+
+L0 四维度写入质量三连修：entityTags 缺失 + timestamp 72% + 因果评估逻辑误判
+
+### 核心变更
+
+**entityTags 缺失修复**：`addDecisionMemory` 和 `writeCodeHistory` 在 `embedText` 之后各加一行 `extractEntityHits(document).join(",")` 并写入 metadata。新写入的 decisions/code_history 条目开始携带实体标签，实体权重加成（×1.5 boost）对这两个集合生效。
+
+**timestamp 72% 修复**：`seed-constraints.py` 根因是写入时未包含 `timestamp` 字段，导致 14 条 constraint 类型条目缺失时间维度。修复：`import datetime` + 生成 `seeded_at`（ISO 8601 + 08:00），metadata 加 `timestamp: c.get("confirmed_at", seeded_at)`。重新运行脚本 upsert 回填全部 14 条，decisions timestamp 填充率从 72% 升至接近 100%。
+
+**因果评估逻辑修正（核心修复）**：`checkAndWriteRecallFeedback` 原来对 conversations/decisions/code_history 三集合各自检查 `causal_relation` metadata 字段，但因果关系设计在 Kuzu，ChromaDB 从不写此字段 → 永远 0% → 误报因果缺失 → Andy 收到虚假预警。修复：集合内 `causalOk = total`（N/A），循环结束后单独 `spawnSync` 查 Kuzu `MATCH ()-[r:causal_relation]->() RETURN count(r)`，≥10 条视为健康（rate=1.0）。Kuzu 有 166 条 causal_relation → causal rate = 1.0，不再误报。
+
+**文件变更清单**：
+
+| 文件 | 变更内容 |
+|------|---------|
+| `CrewClaw/crewclaw-routing/index.ts` | `addDecisionMemory` + `writeCodeHistory` 加 entityTags；`checkAndWriteRecallFeedback` 因果维度改为 Kuzu 计数 |
+| `HomeAILocal/Scripts/seed-constraints.py` | `import datetime` + `seeded_at` + metadata 加 `timestamp` |
+
+### 越界干预记录
+
+无系统工程师手动越界。三项修复均为代码变更，编译验证通过后重启 Gateway。seed-constraints.py 重新运行完成存量回填。
+

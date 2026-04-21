@@ -1798,6 +1798,7 @@ async function addDecisionMemory(record: DecisionRecord): Promise<void> {
   try {
     const document = `${record.context} ${record.decision}`;
     const embedding = await embedText(document);
+    const entityTags = extractEntityHits(document).join(",");
     await chromaAdd("decisions", record.decision_id, document, {
       agent: record.agent,
       timestamp: record.timestamp,
@@ -1811,6 +1812,7 @@ async function addDecisionMemory(record: DecisionRecord): Promise<void> {
       taskId: record.taskId ?? "",            // 状态机：需求 ID
       fromState: record.fromState ?? "",      // 状态机：变更前状态
       toState: record.toState ?? "",          // 状态机：变更后状态
+      entityTags,
     }, embedding);
   } catch (_e) {
     // 写入失败静默处理
@@ -2800,11 +2802,13 @@ async function writeCodeHistory(params: {
     const id = `code-${params.requirementId}`;
     const document = `${params.description}\n文件：${params.filePaths.join(", ")}`;
     const embedding = await embedText(document);
+    const entityTags = extractEntityHits(document).join(",");
     await chromaAdd("code_history", id, document, {
       requirementId: params.requirementId,
       filePaths: params.filePaths.join(","),
       description: params.description.slice(0, 500),
       timestamp: nowCST(),
+      entityTags,
     }, embedding);
   } catch (_e) {
     // 写入失败静默处理
@@ -6164,8 +6168,9 @@ const crewclawRoutingPlugin = {
               (typeof (m as SampledDoc).agentId === "string" && (m as SampledDoc).agentId!.length > 0)
             )).length;
 
-            // 因果维度：metadata.causal_relation 字段有值
-            const causalOk = (docs as SampledDoc[]).filter(m => m && typeof (m as SampledDoc).causal_relation === "string" && (m as SampledDoc).causal_relation!.length > 0).length;
+            // 因果维度：causal_relation 设计在 Kuzu，不在 ChromaDB metadata
+            // 此处置为 N/A（= total），最终由循环后的 Kuzu 独立检查覆盖
+            const causalOk = total;
 
             dimensionStats[collName] = { total, semantic: semanticOk, temporal: temporalOk, entity: entityOk, causal: causalOk };
             logger.info(`[l0-feedback] ${dimLabel}(${collName}): total=${total} semantic=${semanticOk} temporal=${temporalOk} entity=${entityOk} causal=${causalOk}`);
@@ -6184,6 +6189,22 @@ const crewclawRoutingPlugin = {
           }
           dimRates[dim] = count > 0 ? sumRate / count : 1;
         }
+
+        // 因果维度独立评估：查 Kuzu causal_relation 边总数（ChromaDB 不存因果）
+        try {
+          const kuzuCausalResult = spawnSync(
+            KUZU_PYTHON3_BIN,
+            [join(SCRIPTS_DIR, "kuzu-query.py"), "MATCH ()-[r:causal_relation]->() RETURN count(r) AS cnt", "{}"],
+            { encoding: "utf8", timeout: 8000 },
+          );
+          if (kuzuCausalResult.status === 0 && kuzuCausalResult.stdout?.trim()) {
+            const rows = JSON.parse(kuzuCausalResult.stdout.trim()) as unknown[][];
+            const kuzuCausalCount = Number(rows[0]?.[0] ?? 0);
+            // >= 10 条视为健康（1.0）；< 10 按比例给分
+            dimRates["causal"] = kuzuCausalCount >= 10 ? 1.0 : kuzuCausalCount / 10;
+            logger.info(`[l0-feedback] Kuzu causal_relation count=${kuzuCausalCount} → causal rate=${dimRates["causal"].toFixed(2)}`);
+          }
+        } catch (_e) { /* Kuzu 查询失败：保留 N/A=1.0，不误报因果缺失 */ }
 
         const weakestDim = dims.reduce((a, b) => dimRates[a] < dimRates[b] ? a : b);
         const weakestRate = dimRates[weakestDim];

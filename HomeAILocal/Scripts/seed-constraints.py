@@ -16,7 +16,7 @@ seed-constraints.py — 把已验证的平台/环境约束写入 ChromaDB decisi
   - 已有 id 的条目重新运行会覆盖（upsert），幂等安全
 """
 
-import os, sys, argparse, requests
+import os, sys, argparse, requests, datetime
 from pathlib import Path
 
 CHROMA_URL  = os.environ.get("CHROMA_URL", "http://localhost:8001")
@@ -266,6 +266,9 @@ def main():
         print("ERROR: decisions 集合不存在，请先确认 ChromaDB 运行正常", file=sys.stderr)
         sys.exit(1)
 
+    # 生成写入时间戳（ISO 8601，北京时间，与 TypeScript nowCST() 格式一致）
+    seeded_at = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S.000+08:00")
+
     ok = 0
     for c in CONSTRAINTS:
         document = f"【约束】{c['title']}\n\n{c['detail']}"
@@ -274,6 +277,7 @@ def main():
             "platform":  c["platform"],
             "type":      "constraint",
             "title":     c["title"],
+            "timestamp": c.get("confirmed_at", seeded_at),  # 优先用条目自带的确认日期
         }
         try:
             embedding = embed_text(document)
