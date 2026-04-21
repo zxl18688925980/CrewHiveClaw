@@ -6887,7 +6887,7 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
     return res.status(500).json({ success: false, error: 'WECOM_OWNER_ID not configured' });
   }
   const icon = type === 'intervention' ? '🔧' : type === 'pipeline' ? '📋' : 'ℹ️';
-  const agentLabel = { lucas: 'Lucas', andy: 'Andy', lisa: 'Lisa', main: 'Main', pipeline: '流水线' }[fromAgent] ?? fromAgent;
+  const agentLabel = { lucas: 'Lucas', andy: 'Andy', lisa: 'Lisa', main: 'Main', pipeline: '流水线', watchdog: 'Watchdog' }[fromAgent] ?? fromAgent;
   const text = `${icon} [${agentLabel} → 系统工程师]\n${message}`;
   try {
     await sendLongWeComMessage(WECOM_OWNER_ID, text);

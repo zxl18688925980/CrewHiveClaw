@@ -1478,7 +1478,7 @@ function getLastUserMsgTs(prefix) {
 
 /** 通过 wecom-entrance /api/wecom/notify-engineer 发告警给业主（企业应用通道，不走 bot/Lucas）。 */
 function sendEngineerAlert(message, type = 'intervention') {
-  const body = JSON.stringify({ message, type });
+  const body = JSON.stringify({ message, type, fromAgent: 'watchdog' });
   const req = http.request({
     hostname: 'localhost', port: 3003,
     path: '/api/wecom/notify-engineer',

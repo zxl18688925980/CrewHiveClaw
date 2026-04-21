@@ -476,12 +476,15 @@ export const contextSources: Record<string, ContextSource[]> = {
     },
 
     // 工作规则：交付标准 + 自验证策略 + 家庭 Web 规范（OpenClaw 原生只注入全局模板，这里补注 Lisa 专属规则）
+    // tier:1 optional：实现类任务自动触发，非代码背景问答不加载（AGENTS.md 15KB，减少每次强制注入）
     {
       source: "file", id: "agents-rules",
       queryMode: "static-file",
       filePath: "~/.openclaw/workspace-lisa/AGENTS.md",
       label: "工作规则", inject: "append-system",
-      tier: 0,
+      tier: 1,
+      optional: true,
+      keywords: ["实现", "代码", "spec", "交付", "开发", "修复", "bug", "集成", "验证", "编码", "脚本", "接口", "文件", "函数", "路径", "run_opencode"],
     },
 
     // 代码库上下文：关键文件路径 + 编码模式 + 交付约定（常驻 system prompt）
