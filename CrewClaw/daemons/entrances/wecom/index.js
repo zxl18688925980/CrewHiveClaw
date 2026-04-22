@@ -2267,6 +2267,16 @@ PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
 - scan_pipeline_health：全面扫描系统健康（PM2 + Gateway + 最近 1h 日志错误），返回结构化报告
 - scan_lucas_quality：扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空回复等质量问题
 
+流水线任务看板（SE 专属，直接操作 task-registry.json，无需手动读文件）：
+- query_pipeline_tasks：查全量流水线任务（含用户提交 + 系统自动生成）。status_filter 可选 all / pending-review / queued / running / active（默认）
+- approve_pipeline_task：批准 pending-review 任务进队列执行（仅 requires_approval=true 的任务会进 pending-review，如认知文件修改）
+- cancel_pipeline_task：叫停任意任务（不受 submittedBy 限制），可叫停 pending-review / queued / running 状态的任何任务
+- log_improvement_task：记录改进建议到 task-registry.json（非紧急，供下次工作周期处理）
+
+任务数据来源说明：
+- 开发流水线任务：~/HomeAI/Data/learning/task-registry.json（用 query_pipeline_tasks 查，不要手动 exec_script 读文件）
+- 旧格式任务目录（~/HomeAI/Data/tasks/、pipeline/）：已废弃，不要读这里
+
 
 收到文章/视频链接的默认行为：只做简要分析并回复，不自动存文件。
 仅当业主明确说「存外部参考」「纳入参考」「记录下来」等指令时，根据内容类型选择目录：
