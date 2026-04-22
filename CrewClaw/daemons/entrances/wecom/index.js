@@ -6042,25 +6042,31 @@ function startBotLongConnection() {
     // wecomUserId 编码：crewclaw-routing 插件从 requesterSenderId 解析此格式
     // 群消息用 group:fromUser:msgId（per-message 独立 session），避免一条消息卡住后续所有群消息排队
     const msgId = frame.body?.msgid || crypto.randomUUID();
-    const wecomUserId = isGroup ? `group:${fromUser}:${msgId}` : fromUser;
+    const wecomUserId = isGroup ? `group:${chatId}:${fromUser}:${msgId}` : fromUser;
 
     // sendMessage 有时挂起（WebSocket 等待 ACK 但永不到来），加超时保护
     const sendWithTimeout = (fn, ms = 15000) =>
       Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error(`sendMessage timeout ${ms}ms`)), ms))]);
 
-    // 群消息：30s 内没有回复就先发"收到了"，让家人知道消息收到在处理
-    // 避免复杂请求（trigger_development_pipeline / exec 工具）导致家人等待 3 分钟无反应
+    // 群消息 ACK：只在明确的长操作（开发需求/bug 上报/重启）时才发，普通对话不发
+    // 长操作通常需要 trigger_development_pipeline / report_bug / restart_service，耗时 1-3 分钟
+    const GROUP_ACK_PATTERNS = [
+      /开发|做个|做一个|帮我做|新功能|实现一下|需要.{0,15}功能|上线|加个|整个/,
+      /报.{0,3}bug|有.{0,3}bug|坏了|修一下|修复|出问题了/,
+      /重启|restart/,
+    ];
+    const mightBeLongOp = isGroup && GROUP_ACK_PATTERNS.some(p => p.test(text));
     let groupAckSent = false;
     let groupAckTimer = null;
-    if (isGroup) {
+    if (mightBeLongOp) {
       groupAckTimer = setTimeout(async () => {
         if (!groupAckSent) {
           groupAckSent = true;
           try {
             await sendWithTimeout(() => wsClient.sendMessage(chatId, {
-              msgtype: 'markdown', markdown: { content: '收到～在想想……' }
+              msgtype: 'markdown', markdown: { content: '收到～' }
             }));
-            logger.info('群消息 ack 已发送（30s 无回复）', { fromUser, chatId });
+            logger.info('群消息 ack 已发送（长操作，30s 无回复）', { fromUser, chatId });
           } catch (ackErr) {
             logger.warn('群消息 ack 发送失败', { error: ackErr.message });
           }
@@ -6377,7 +6383,7 @@ function startBotLongConnection() {
       const histKey = chatHistoryKey(isGroup, chatId, fromUser);
       const historyMessages = buildHistoryWithCrossChannel(isGroup, histKey);
       const msgId = frame.body?.msgid || crypto.randomUUID();
-      const wecomUserId = isGroup ? `group:${fromUser}:${msgId}` : fromUser;
+      const wecomUserId = isGroup ? `group:${chatId}:${fromUser}:${msgId}` : fromUser;
       const replyText = await callGatewayAgent('lucas', `${memberTag}${rawText}`, wecomUserId, 180000, historyMessages) || '收到～';
       appendChatHistory(histKey, `${memberTag}${rawText}`, replyText);
       const streamId = crypto.randomUUID();
@@ -6418,7 +6424,7 @@ function startBotLongConnection() {
     const histKey = chatHistoryKey(isGroup, chatId, fromUser);
     const historyMessages = buildHistoryWithCrossChannel(isGroup, histKey);
     const msgId = frame.body?.msgid || crypto.randomUUID();
-    const wecomUserId = isGroup ? `group:${fromUser}:${msgId}` : fromUser;
+    const wecomUserId = isGroup ? `group:${chatId}:${fromUser}:${msgId}` : fromUser;
 
     const imgSection = imageDescs.map((d, i) =>
       `【图片${imageDescs.length > 1 ? i + 1 : ''}内容（AI视觉识别）】\n${d}`
@@ -6474,7 +6480,7 @@ function startBotLongConnection() {
     logger.info('Bot 收到语音消息', { fromUser, voiceText: voiceText.substring(0, 60) });
 
     const msgId       = frame.body?.msgid || crypto.randomUUID();
-    const wecomUserId = isGroup ? `group:${fromUser}:${msgId}` : fromUser;
+    const wecomUserId = isGroup ? `group:${chatId}:${fromUser}:${msgId}` : fromUser;
     const messageToLucas = `${memberTag}（语音）${voiceText}`;
 
     const sendWithTimeout = (fn, ms = 15000) =>

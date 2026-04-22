@@ -461,10 +461,11 @@ function parseSessionUser(sessionKey: string | undefined): { userId: string; isG
   // 取第四段起（去掉 "agent:agentId:openai-user:"），保留 group: 前缀
   const rawUser = sessionKey?.replace(/^[^:]+:[^:]+:[^:]+:/, "") ?? "default";
   if (rawUser.startsWith("group:")) {
-    // group:fromUser:requestId → 取第一段作为 userId
     const afterGroup = rawUser.slice("group:".length);
-    const colonIdx = afterGroup.indexOf(":");
-    const userId = colonIdx >= 0 ? afterGroup.slice(0, colonIdx) : afterGroup;
+    const parts = afterGroup.split(":");
+    // 新格式（≥3段）: chatId:fromUser:msgId → userId=parts[1]（fromUser）
+    // 旧格式（2段）: fromUser:msgId → userId=parts[0]
+    const userId = parts.length >= 3 ? parts[1] : parts[0];
     return { userId: normalizeUserId(userId), isGroup: true };
   }
   // 访客会话格式：visitor:{token}:{requestId} → 保留 visitor:{token}
@@ -3239,7 +3240,10 @@ async function decomposeToSubSpecs(
 
 function parseReplyTo(userId: string): { fromUser: string; chatId?: string; isGroup: boolean } {
   if (userId.startsWith("group:")) {
-    return { fromUser: "", chatId: userId.replace("group:", ""), isGroup: true };
+    const parts = userId.slice("group:".length).split(":");
+    // 新格式（≥3段）: chatId:fromUser:msgId → chatId=parts[0], fromUser=parts[1]
+    // 旧格式（2段）: fromUser:msgId → chatId=parts[0]（兼容旧 sessionKey）
+    return { fromUser: parts.length >= 2 ? parts[1] : "", chatId: parts[0], isGroup: true };
   }
   return { fromUser: userId, isGroup: false };
 }
@@ -3269,8 +3273,13 @@ function isNonHumanUser(userId: string): boolean {
 }
 
 async function pushToChannel(response: string, userId: string, success: boolean): Promise<void> {
-  // 非法 userId 不推送（system/UUID/group 等），浪费企微 API 调用
-  if (isNonHumanUser(userId)) return;
+  if (isNonHumanUser(userId)) {
+    // 系统任务失败时通知 SE（HEARTBEAT / evaluate_system 等无人类接收方）
+    if (!success) {
+      void notifyEngineer(`【系统任务异常】${response.slice(0, 200)}`, "info", "system");
+    }
+    return;
+  }
   try {
     await fetch(CHANNEL_PUSH_URL, {
       method: "POST",
