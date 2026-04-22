@@ -13806,7 +13806,7 @@ last_used: null
       label: "Skill 管理（L1 自主管理）",
       name: "skill_manage",
       description: [
-        "L1 Skill 自主管理工具：创建、修改、删除 Skill。",
+        "L0 Skill 能力沉淀工具：创建、修改、删除 Skill。",
         "触发场景（参考 Hermes SKILLS_GUIDANCE）：",
         "- 完成复杂任务（调了 5+ 工具）→ 保存做法为 Skill",
         "- 克服了棘手问题/错误 → 保存解法",
@@ -13836,12 +13836,16 @@ last_used: null
         replace_all: Type.Optional(Type.Boolean({ description: "patch 时是否替换所有匹配（默认只替换第一个）" })),
         file_path: Type.Optional(Type.String({ description: "辅助文件相对路径（write_file/remove_file 时必填），如 'templates/prompt.txt'" })),
         file_content: Type.Optional(Type.String({ description: "辅助文件内容（write_file 时必填）" })),
+        layer: Type.Optional(Type.Unsafe<string>({
+          enum: ["native", "archive"],
+          description: "写入层（仅 create 有效）：native=写入 native skills（立即注入 system prompt，默认）；archive=写入归档层（status=draft，经实际使用验证后由生命周期机制晋升，不立即膨胀 system prompt）。自动结晶/自我沉淀场景使用 archive。",
+        })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const p = params as {
           action: string; skill_name: string; description?: string; category?: string;
           content?: string; oldText?: string; newText?: string; replace_all?: boolean;
-          file_path?: string; file_content?: string;
+          file_path?: string; file_content?: string; layer?: string;
         };
         const agentId = toolCtx.agentId ?? "";
         // 仅三角色可用
@@ -13942,23 +13946,42 @@ last_used: null
               return { content: [{ type: "text", text: `❌ content 超过 100K 字符限制（当前 ${p.content.length}）。请精简内容。` }], details: { error: "content_too_large" } };
             }
             const now = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" });
-            const fmLines = [
-              "---",
-              `name: ${p.skill_name}`,
-              `description: ${p.description.trim()}`,
-              `status: active`,
-              `created_from: agent_manual`,
-              `created_at: ${now}`,
-              `agent: ${agentId}`,
-            ];
-            if (p.category) fmLines.push(`category: ${p.category}`);
+            const today = now.slice(0, 10);
+            const isArchive = p.layer === "archive";
+            // archive 层：写归档目录（draft 状态，生命周期机制管理晋升/淘汰，不立即膨胀 system prompt）
+            const targetPath = isArchive
+              ? join(PROJECT_ROOT, `data/learning/auto-skills/${agentId}`, p.skill_name, "SKILL.md")
+              : skillPath;
+            const fmLines: string[] = ["---", `name: ${p.skill_name}`, `description: ${p.description.trim()}`];
+            if (isArchive) {
+              fmLines.push(
+                `status: draft`,
+                `created_from: self-crystallized`,
+                `agent: ${agentId}`,
+                `first_seen: ${today}`,
+                `last_seen: ${today}`,
+                `trigger_count: 1`,
+                `usage_count: 0`,
+                `success_count: 0`,
+                `last_used: null`,
+              );
+            } else {
+              fmLines.push(
+                `status: active`,
+                `created_from: agent_manual`,
+                `created_at: ${now}`,
+                `agent: ${agentId}`,
+              );
+              if (p.category) fmLines.push(`category: ${p.category}`);
+            }
             fmLines.push("---", "", p.content.trim(), "");
             const fullContent = fmLines.join("\n");
-            atomicWrite(skillPath, fullContent);
-            const displayPath = skillPath.startsWith(HOME) ? `~/${skillPath.slice(HOME.length + 1)}` : skillPath;
+            atomicWrite(targetPath, fullContent);
+            const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
+            const layerLabel = isArchive ? "（归档层·draft）" : `${p.category ? `（分类：${p.category}）` : ""}`;
             return {
-              content: [{ type: "text", text: `✅ Skill 已创建：${p.skill_name}${p.category ? `（分类：${p.category}）` : ""}\n路径：${displayPath}\n描述：${p.description.trim()}` }],
-              details: { action: "create", name: p.skill_name, path: skillPath, category: p.category },
+              content: [{ type: "text", text: `✅ Skill 已创建：${p.skill_name}${layerLabel}\n路径：${displayPath}\n描述：${p.description.trim()}${isArchive ? "\n\n⚡ 已写入归档层。经过 3+ 次实际使用验证后，生命周期机制自动晋升到 native。" : ""}` }],
+              details: { action: "create", name: p.skill_name, path: targetPath, layer: isArchive ? "archive" : "native", category: p.category },
             };
           }
 
