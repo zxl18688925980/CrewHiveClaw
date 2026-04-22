@@ -8207,6 +8207,84 @@ app.listen(PORT, () => {
     }
   }, 5 * 60 * 1000);
   logger.info('Andy HEARTBEAT 夜间规划循环已注册', { window: '23:00-23:30 CST' });
+
+  // ── Layer 2：启动扫描——检测进程重启导致的孤儿任务 ───────────────────────
+  // 进程崩溃时 catch 块不执行，running 任务永远卡住；启动时扫描并清零
+  ;(function startupOrphanScan() {
+    try {
+      const entries = readTaskRegistry();
+      const now = Date.now();
+      const STALE_MS = 5 * 60 * 1000; // running > 5 分钟 = 进程重启前就在跑的孤儿
+      const orphans = entries.filter(e =>
+        e.status === 'running' &&
+        (now - new Date(e.startedAt || e.submittedAt).getTime()) > STALE_MS
+      );
+      if (orphans.length === 0) {
+        logger.info('启动扫描：无孤儿任务');
+        return;
+      }
+      // 标记为 interrupted
+      const updated = entries.map(e => {
+        if (!orphans.find(o => o.id === e.id)) return e;
+        return { ...e, status: 'interrupted', interruptedAt: new Date().toISOString(), interruptReason: 'process-restart' };
+      });
+      writeTaskRegistry(updated);
+      logger.warn('启动扫描：检测到孤儿任务，已标记 interrupted', { count: orphans.length, ids: orphans.map(o => o.id) });
+      // 通知系统工程师
+      for (const task of orphans) {
+        const msg = `【任务中断恢复】进程重启导致任务中断\n任务ID: ${task.id}\n标题: ${task.title || task.requirement?.slice(0, 50) || '(无标题)'}\nrunning→interrupted\n提交时间: ${task.submittedAt}`;
+        fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'intervention', fromAgent: task.submittedBy || 'system', message: msg }),
+        }).catch(err => logger.error('notify-engineer 失败（启动扫描）', { error: err.message }));
+      }
+      // 延迟 2 分钟等 Gateway 稳定后通知 Lucas，由他决定是否重触发
+      setTimeout(async () => {
+        try {
+          const summary = orphans.map(t => `- ${t.id}（${t.title || t.requirement?.slice(0, 40) || '无标题'}）`).join('\n');
+          const lucasMsg = `系统刚刚重启，检测到 ${orphans.length} 个任务在重启前被中断，已标记 interrupted：\n${summary}\n\n你来判断是否需要重新触发这些任务。`;
+          await callGatewayAgent('lucas', lucasMsg, 'system:startup', 60000);
+          logger.info('已通知 Lucas 处理孤儿任务', { count: orphans.length });
+        } catch (err) {
+          logger.error('通知 Lucas 孤儿任务失败', { error: err.message });
+        }
+      }, 2 * 60 * 1000);
+    } catch (err) {
+      logger.error('启动扫描失败', { error: err.message });
+    }
+  })();
+
+  // ── Layer 3：周期性卡住检查（每 30 分钟，超过 2 小时未完成通知 SE）──────
+  setInterval(() => {
+    try {
+      const entries = readTaskRegistry();
+      const now = Date.now();
+      const STUCK_MS = 2 * 60 * 60 * 1000;       // running > 2h = 疑似卡住
+      const NOTIFY_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 每个任务最多每 2h 通知一次
+      let dirty = false;
+      for (const entry of entries) {
+        if (entry.status !== 'running') continue;
+        const runningFor = now - new Date(entry.startedAt || entry.submittedAt).getTime();
+        if (runningFor <= STUCK_MS) continue;
+        const lastNotified = entry.stuckNotifiedAt ? new Date(entry.stuckNotifiedAt).getTime() : 0;
+        if (now - lastNotified < NOTIFY_COOLDOWN_MS) continue;
+        const hours = (runningFor / 3600000).toFixed(1);
+        const msg = `【任务疑似卡住】已 running ${hours}h 未完成\n任务ID: ${entry.id}\n标题: ${entry.title || entry.requirement?.slice(0, 50) || '(无标题)'}\n提交时间: ${entry.submittedAt}`;
+        fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'intervention', fromAgent: entry.submittedBy || 'system', message: msg }),
+        }).catch(err => logger.error('notify-engineer 失败（卡住检查）', { error: err.message }));
+        entry.stuckNotifiedAt = new Date().toISOString();
+        dirty = true;
+      }
+      if (dirty) writeTaskRegistry(entries);
+    } catch (err) {
+      logger.error('卡住检查失败', { error: err.message });
+    }
+  }, 30 * 60 * 1000);
+  logger.info('任务卡住检查已注册', { intervalMinutes: 30, stuckThresholdHours: 2 });
 });
 
 module.exports = app;

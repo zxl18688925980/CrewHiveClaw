@@ -4518,7 +4518,7 @@ interface TaskRegistryEntry {
   requirement: string;
   submittedBy: string;
   submittedAt: string;
-  status: "queued" | "running" | "cancelled" | "completed";
+  status: "queued" | "running" | "cancelled" | "completed" | "failed" | "interrupted";
   cancelledAt?: string;
   completedAt?: string;
   lucasContext?: string;  // Lucas 补充的需求背景（情绪/时间敏感度/可接受替代方案）
@@ -4531,6 +4531,9 @@ interface TaskRegistryEntry {
   actualHours?: number;     // completed 时自动计算的实际耗时（小时），供 Andy 学习改进预估
   blockedAt?: string;       // 任务阻塞时间戳，Lisa report_implementation_issue 或 Andy 请求修订时设置
   blockedReason?: string;   // 阻塞原因摘要（50 字以内），供 Lucas 注入块显示
+  interruptedAt?: string;   // 进程重启导致任务中断时间戳
+  interruptReason?: string; // 中断原因（process-restart / stuck-timeout 等）
+  stuckNotifiedAt?: string; // 最近一次卡住通知时间戳（防止频繁告警）
 }
 
 function readTaskRegistry(): TaskRegistryEntry[] {
