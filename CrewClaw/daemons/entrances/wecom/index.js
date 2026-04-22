@@ -37,33 +37,26 @@ const { WSClient }   = require('@wecom/aibot-node-sdk');
 const { chromium }   = require('playwright');
 const { TaskManager } = require('./task-manager');
 require('dotenv').config();
+// task-registry 模块（logger 就绪后在下方 initTaskRegistry() 中初始化）
+const _taskRegistryFactory = require('./lib/task-registry');
+let _tr;  // 由 initTaskRegistry() 填充
 
 // ── 时区统一：所有时间戳使用 CST（UTC+8）──
 const nowCST   = () => new Date(Date.now() + 8 * 3600000).toISOString().replace('Z', '+08:00');
 const todayCST = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 
+// task-registry 函数占位符（由 initTaskRegistry() 在 logger 就绪后填充）
+let readTaskRegistry, writeTaskRegistry, inferTaskAgent;
+let readTaskRegistryRaw, markTaskLucasAcked;
+let readL4Tasks, readL4Control, writeL4Control;
+
 // ─── 全局路径常量（必须在任何函数定义之前）────────────────────────────────────
 const HOMEAI_ROOT     = path.join(__dirname, '../../../../..');
 const WHISPER_MODEL   = path.join(HOMEAI_ROOT, 'Models/whisper/ggml-base.bin');
 const COOKIES_FILE    = path.join(HOMEAI_ROOT, 'config/douyin-cookies.txt');
-const L4_TASKS_FILE   = path.join(HOMEAI_ROOT, 'Data', 'learning', 'l4-tasks.json');
-const L4_CONTROL_FILE = path.join(HOMEAI_ROOT, 'Data', 'learning', 'l4-control.json');
+// L4_TASKS_FILE / L4_CONTROL_FILE → lib/task-registry.js
 
-// ─── L4 任务看板辅助函数 ──────────────────────────────────────────────────────
-function readL4Tasks() {
-  try { if (fs.existsSync(L4_TASKS_FILE)) return JSON.parse(fs.readFileSync(L4_TASKS_FILE, 'utf8')); } catch (_e) {}
-  return [];
-}
-function readL4Control() {
-  try { if (fs.existsSync(L4_CONTROL_FILE)) return JSON.parse(fs.readFileSync(L4_CONTROL_FILE, 'utf8')); } catch (_e) {}
-  return { global_pause: false, stop_tasks: [], pause_reason: null };
-}
-function writeL4Control(data) {
-  try {
-    fs.mkdirSync(path.dirname(L4_CONTROL_FILE), { recursive: true });
-    fs.writeFileSync(L4_CONTROL_FILE, JSON.stringify({ ...data, updated_at: new Date().toISOString() }, null, 2), 'utf8');
-  } catch (_e) {}
-}
+// readL4Tasks / readL4Control / writeL4Control → lib/task-registry.js
 
 // SE 远程 L4 控制命令正则
 const L4_QUERY_RE  = /^查\s*l4$/i;
@@ -592,6 +585,15 @@ const WECOM_BOT_ID           = process.env.WECOM_BOT_ID           || '';
 const WECOM_BOT_SECRET       = process.env.WECOM_BOT_SECRET       || '';
 
 // OpenClaw Gateway：所有 agent 请求经此路由，crewclaw-routing 插件处理三层路由
+// 初始化 task-registry 模块（logger 就绪后）
+// _tr 暴露所有 task-registry 函数，同时解构为顶层变量保持向后兼容
+function initTaskRegistry() {
+  _tr = _taskRegistryFactory(logger);
+  ({ readTaskRegistry, writeTaskRegistry, inferTaskAgent,
+     readTaskRegistryRaw, markTaskLucasAcked,
+     readL4Tasks, readL4Control, writeL4Control } = _tr);
+}
+
 const GATEWAY_URL   = process.env.GATEWAY_URL   || 'http://localhost:18789';
 const GATEWAY_TOKEN = (() => {
   if (process.env.OPENCLAW_GATEWAY_TOKEN) return process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -617,6 +619,8 @@ try {
 
 // 演示群配置（独立于家庭配置，按 chatId 路由到通用 AI 人格）
 let demoGroupConfig = { chatIds: [], systemPrompt: '', maxTokens: 512 };
+initTaskRegistry();
+
 function loadDemoGroupConfig() {
   try {
     const cfg = JSON.parse(fs.readFileSync(
@@ -7336,23 +7340,7 @@ function verifySEToken(req, res) {
   }
   return true;
 }
-function readTaskRegistry() {
-  const p = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
-  try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : []; } catch { return []; }
-}
-function writeTaskRegistry(entries) {
-  const p = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
-  fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8');
-}
-// 根据任务当前阶段推断责任 Agent（用于 notify-engineer fromAgent，不使用 submittedBy 家人 ID）
-function inferTaskAgent(task) {
-  const phase = task.currentPhase || '';
-  if (phase === 'implementing' || phase === 'verifying') return 'lisa';
-  if (phase === 'planning' || phase === 'delivering') return 'andy';
-  // 有设计简报说明 Andy 已介入
-  if (task.designNote || task.deliveryBrief) return 'andy';
-  return 'system';
-}
+// readTaskRegistry / writeTaskRegistry / inferTaskAgent → lib/task-registry.js
 
 // GET /api/main/pipeline-tasks — SE 看全量任务（所有 submittedBy，含系统生成的）
 app.get('/api/main/pipeline-tasks', (req, res) => {
@@ -7616,31 +7604,7 @@ async function markCommitmentNotified(id, outcome = 'proactive_notified') {
   }
 }
 
-// ─── task-registry 读写辅助（主动循环专用）────────────────────────────────────
-function readTaskRegistryRaw() {
-  try {
-    const p = path.join(HOMEAI_ROOT, 'Data/learning/task-registry.json');
-    if (!fs.existsSync(p)) return [];
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch { return []; }
-}
-
-function markTaskLucasAcked(taskId) {
-  try {
-    const p = path.join(HOMEAI_ROOT, 'Data/learning/task-registry.json');
-    if (!fs.existsSync(p)) return;
-    const entries = JSON.parse(fs.readFileSync(p, 'utf8'));
-    const idx = entries.findIndex(e => e.id === taskId);
-    if (idx >= 0) {
-      entries[idx].lucasAcked = true;
-      entries[idx].lucasAckedAt = nowCST();
-      fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8');
-    }
-    logger.info('任务标记 lucasAcked=true', { taskId });
-  } catch (e) {
-    logger.warn('markTaskLucasAcked 失败', { taskId, error: e.message });
-  }
-}
+// readTaskRegistryRaw / markTaskLucasAcked → lib/task-registry.js
 
 async function runLucasProactiveLoop() {
   logger.info('Lucas 主动循环触发');
