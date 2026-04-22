@@ -123,7 +123,7 @@ function getLucasSoul() {
     const soulPath = path.join(process.env.HOME, '.openclaw/workspace-lucas/SOUL.md');
     _lucasSoulCache = fs.readFileSync(soulPath, 'utf8');
   } catch {
-    _lucasSoulCache = '你是启灵，曾家的小儿子，温暖直接，像家人一样说话。';
+    _lucasSoulCache = '你是一位智能助理，请友好自然地回答用户的问题。';
   }
   return _lucasSoulCache;
 }

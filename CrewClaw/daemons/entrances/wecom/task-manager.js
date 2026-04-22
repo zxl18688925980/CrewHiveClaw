@@ -46,7 +46,7 @@ const CONCURRENCY = {
 class TaskManager {
   /**
    * @param {Object} ctx
-   * @param {string}   ctx.homeaiRoot
+   * @param {string}   ctx.instanceRoot
    * @param {Object}   ctx.logger
    * @param {Function} ctx.callGatewayAgent(agentId, message, userId, timeoutMs)
    * @param {Function} ctx.appendChatHistory(key, userText, assistantText)
@@ -60,7 +60,7 @@ class TaskManager {
     this._wsClient  = null;
     this._userQueues = {};   // userId → { running: number, queue: Array<{task, resolve, reject}> }
 
-    this._taskDir = path.join(ctx.homeaiRoot, 'data', 'tasks');
+    this._taskDir = path.join(ctx.instanceRoot, 'data', 'tasks');
     fs.mkdirSync(this._taskDir, { recursive: true });
   }
 
@@ -203,10 +203,10 @@ class TaskManager {
 
     const filename   = rawFilename || inputFilename || `video_${Date.now()}.mp4`;
     const dateStr    = new Date().toISOString().slice(0, 10);
-    const uploadDir  = path.join(this.ctx.homeaiRoot, 'data', 'uploads', dateStr, 'videos');
+    const uploadDir  = path.join(this.ctx.instanceRoot, 'data', 'uploads', dateStr, 'videos');
     fs.mkdirSync(uploadDir, { recursive: true });
     const savePath    = path.join(uploadDir, `${Date.now()}-${filename}`);
-    const relativePath = path.relative(this.ctx.homeaiRoot, savePath);
+    const relativePath = path.relative(this.ctx.instanceRoot, savePath);
     fs.writeFileSync(savePath, buffer);
     this.ctx.logger.info('TaskManager 视频落盘', { taskId: task.taskId, savePath, bytes: buffer.length });
 
@@ -232,10 +232,10 @@ class TaskManager {
 
     const filename   = rawFilename || inputFilename || `image_${Date.now()}.jpg`;
     const dateStr    = new Date().toISOString().slice(0, 10);
-    const uploadDir  = path.join(this.ctx.homeaiRoot, 'data', 'uploads', dateStr, 'images');
+    const uploadDir  = path.join(this.ctx.instanceRoot, 'data', 'uploads', dateStr, 'images');
     fs.mkdirSync(uploadDir, { recursive: true });
     const savePath    = path.join(uploadDir, `${Date.now()}-${filename}`);
-    const relativePath = path.relative(this.ctx.homeaiRoot, savePath);
+    const relativePath = path.relative(this.ctx.instanceRoot, savePath);
     fs.writeFileSync(savePath, buffer);
 
     const imageDesc = await this.ctx.describeImageWithLlava(savePath);
@@ -257,10 +257,10 @@ class TaskManager {
 
     const filename   = rawFilename || inputFilename || `file_${Date.now()}`;
     const dateStr    = new Date().toISOString().slice(0, 10);
-    const uploadDir  = path.join(this.ctx.homeaiRoot, 'data', 'uploads', dateStr, 'documents');
+    const uploadDir  = path.join(this.ctx.instanceRoot, 'data', 'uploads', dateStr, 'documents');
     fs.mkdirSync(uploadDir, { recursive: true });
     const savePath    = path.join(uploadDir, `${Date.now()}-${filename}`);
-    const relativePath = path.relative(this.ctx.homeaiRoot, savePath);
+    const relativePath = path.relative(this.ctx.instanceRoot, savePath);
     fs.writeFileSync(savePath, buffer);
 
     return { filename, savePath, relativePath };
@@ -290,16 +290,16 @@ class TaskManager {
       }
     } else if (task.isPdf) {
       // PDF 作业文件：触发 homework 对话流
-      const homeworkDir = path.join(this.ctx.homeaiRoot, 'Family', 'Homework');
+      const homeworkDir = path.join(this.ctx.instanceRoot, process.env.HOMEWORK_UPLOAD_SUBDIR || 'data/homework');
       try { fs.mkdirSync(homeworkDir, { recursive: true }); } catch {}
       const safeFilename    = `${Date.now()}-${result.filename}`;
       const homeworkAbsPath = path.join(homeworkDir, safeFilename);
       try { fs.copyFileSync(result.savePath, homeworkAbsPath); } catch {}
       const relHomeworkPath = fs.existsSync(homeworkAbsPath)
-        ? path.relative(this.ctx.homeaiRoot, homeworkAbsPath)
+        ? path.relative(this.ctx.instanceRoot, homeworkAbsPath)
         : result.relativePath;
       const HOMEWORK_BASE_URL = process.env.HOMEWORK_BASE_URL ||
-        'https://wecom.homeai-wecom-zxl.top/app/homework/pdf_extractor.html';
+        `http://localhost:${process.env.WECOM_PORT || 3003}/app/homework/pdf_extractor.html`;
       const pdfBaseUrl = `${HOMEWORK_BASE_URL}?pdf=${encodeURIComponent(relHomeworkPath)}`;
       const hwSystemPrompt = [
         `[系统：家人发了作业PDF《${result.filename}》，已保存到：${relHomeworkPath}]`,
@@ -310,7 +310,7 @@ class TaskManager {
         `   格式：${pdfBaseUrl}&questions=3,5,7`,
         `3. 告诉家人：「点开链接，页面会自动识别题目区域，确认后点生成就好」`,
         `4. 家人说「好了」「生成了」「搞定了」等类似话时，用 send_file 工具把以下目录里最新的 PDF 发给Ta：`,
-        `   目录：Family/Homework`,
+        `   目录：${process.env.HOMEWORK_UPLOAD_SUBDIR || 'data/homework'}`,
         ``,
         `注意：不要自己调任何 homework API，让家人在网页上操作。`,
       ].join('\n');

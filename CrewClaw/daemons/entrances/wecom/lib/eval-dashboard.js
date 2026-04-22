@@ -2,22 +2,22 @@
 /**
  * eval-dashboard.js — 系统评估仪表盘
  * 路由: GET /api/eval/history, GET /eval-dashboard
- * module.exports = (logger, { HOMEAI_ROOT }) => express.Router()
+ * module.exports = (logger, { INSTANCE_ROOT }) => express.Router()
  */
 const express = require('express');
 const fs      = require('fs');
 const path    = require('path');
 
-module.exports = function createEvalDashboard(logger, { HOMEAI_ROOT }) {
+module.exports = function createEvalDashboard(logger, { INSTANCE_ROOT }) {
   const router = express.Router();
   const app = router;  // block uses `app.get`, aliased to router
 
 // ─── 评估仪表盘（Web Dashboard）────────────────────────────────────────────────
-// 公网 URL: https://wecom.homeai-wecom-zxl.top/eval-dashboard
-const EVAL_DASHBOARD_URL = 'https://wecom.homeai-wecom-zxl.top/eval-dashboard';
+// 公网 URL 由 WECOM_PUBLIC_BASE_URL 环境变量配置
+const EVAL_DASHBOARD_URL = (process.env.WECOM_PUBLIC_BASE_URL || '') + '/eval-dashboard';
 
 app.get('/api/eval/history', (req, res) => {
-  const historyPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'evaluation-history.jsonl');
+  const historyPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'evaluation-history.jsonl');
   const count = Math.min(parseInt(req.query.count) || 50, 200);
   if (!fs.existsSync(historyPath)) return res.json([]);
   const lines = fs.readFileSync(historyPath, 'utf8').split('\n').filter(l => l.trim());
@@ -32,7 +32,7 @@ app.get('/eval-dashboard', (req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>HomeAI 系统评估仪表盘</title>
+<title>系统评估仪表盘</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -58,7 +58,7 @@ h1{font-size:18px;text-align:center;margin-bottom:8px;color:#fff}
 </style>
 </head>
 <body>
-<h1>HomeAI 系统评估仪表盘</h1>
+<h1>系统评估仪表盘</h1>
 <div class="subtitle" id="lastUpdate">加载中...</div>
 <div class="card"><h2>总体评分</h2><div class="score-grid" id="scoreGrid"></div></div>
 <div class="card"><h2>L0-L4 趋势</h2><div class="chart-wrap"><canvas id="trendChart"></canvas></div></div>

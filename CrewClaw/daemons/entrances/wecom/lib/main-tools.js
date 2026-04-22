@@ -9,7 +9,7 @@
  * 调用方：
  *   const _mainToolsFactory = require('./lib/main-tools');
  *   const mt = _mainToolsFactory(logger, { readAgentModelConfig, callAgentModel,
- *                                           nowCST, sendWeComFile, HOMEAI_ROOT });
+ *                                           nowCST, sendWeComFile, INSTANCE_ROOT });
  */
 
 const fs            = require('fs');
@@ -18,7 +18,7 @@ const { execSync, execFileSync } = require('child_process');
 const axios         = require('axios');
 
 module.exports = function createMainTools(logger, deps) {
-  const { readAgentModelConfig, callAgentModel, nowCST, sendWeComFile, HOMEAI_ROOT,
+  const { readAgentModelConfig, callAgentModel, nowCST, sendWeComFile, INSTANCE_ROOT,
           VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE } = deps;
 
   // 剥离推理模型 <think>...</think> 块（MiniMax/GLM/DeepSeek-R1 等推理模型返回）
@@ -66,7 +66,7 @@ async function callMainModel(systemPrompt, messages, retries = 2) {
 const mainHistory = {};
 
 // Main 历史持久化目录（重启后恢复上下文）
-const MAIN_HISTORY_DIR = path.join(HOMEAI_ROOT, 'data', 'main');
+const MAIN_HISTORY_DIR = path.join(INSTANCE_ROOT, 'data', 'main');
 
 function loadMainHistory(userId) {
   try {
@@ -94,10 +94,10 @@ function persistMainHistory(userId) {
 
 // Obsidian vault 路径（系统工程师信息域）
 const OBSIDIAN_VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH ||
-  path.join(process.env.HOME || '', 'Documents', 'Obsidian Vault', 'HomeAI');
+  path.join(process.env.HOME || '', 'Documents', 'Obsidian Vault', process.env.OBSIDIAN_VAULT_NAME || 'HomeAI');
 
 // Main 对话日志目录（本地）
-const MAIN_LOG_DIR = path.join(HOMEAI_ROOT, 'logs', 'main');
+const MAIN_LOG_DIR = path.join(INSTANCE_ROOT, 'logs', 'main');
 
 /**
  * 记录 Main 对话到本地 jsonl + Obsidian Markdown
@@ -181,16 +181,16 @@ HomeAI 当前架构：
 判断根因前不改代码。改完必须验证。不确定就告诉业主，不自作主张。
 
 文档地图（遇到对应问题时主动去读）：
-- 整体架构 / 当前状态：read_file crewclaw/../CLAUDE.md（即 ${HOMEAI_ROOT}/../CLAUDE.md 或用 run_shell cat ~/HomeAI/CLAUDE.md）
-- 插件逻辑（记忆注入 / 路由）：${HOMEAI_ROOT}/crewclaw/crewclaw-routing/index.ts
-- wecom 入口逻辑：${HOMEAI_ROOT}/crewclaw/daemons/entrances/wecom/index.js
+- 整体架构 / 当前状态：read_file crewclaw/../CLAUDE.md（即 ${INSTANCE_ROOT}/../CLAUDE.md 或用 run_shell cat ~/HomeAI/CLAUDE.md）
+- 插件逻辑（记忆注入 / 路由）：${INSTANCE_ROOT}/crewclaw/crewclaw-routing/index.ts
+- wecom 入口逻辑：${INSTANCE_ROOT}/crewclaw/daemons/entrances/wecom/index.js
 - Gateway 启动 / 环境变量：~/.openclaw/start-gateway.sh
 - Lucas/Andy/Lisa 人格规则：~/.openclaw/workspace-{lucas,andy,lisa}/AGENTS.md
 - Lucas 工具清单：~/.openclaw/workspace-lucas/TOOLS.md
 - 历史决策 / 会话记录：~/Documents/Obsidian Vault/HomeAI/03-系统工程师工作日志/（只读，无搜索工具，告知业主去 CLI 查）
 
-项目根目录：${HOMEAI_ROOT}
-PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
+项目根目录：${INSTANCE_ROOT}
+PM2 日志目录：${INSTANCE_ROOT}/logs/pm2/
 
 你可以使用以下工具帮助业主诊断问题、查看状态、管理服务：
 - get_system_status：PM2 + 服务健康检查
@@ -589,7 +589,7 @@ function loadRubric() {
   if (_rubricCache !== null) return _rubricCache;
   try {
     _rubricCache = JSON.parse(fs.readFileSync(
-      path.join(HOMEAI_ROOT, 'CrewHiveClaw', 'CrewClaw', 'crewclaw-routing', 'config', 'evaluation-rubric.json'), 'utf8'
+      path.join(INSTANCE_ROOT, 'CrewHiveClaw', 'CrewClaw', 'crewclaw-routing', 'config', 'evaluation-rubric.json'), 'utf8'
     ));
   } catch { _rubricCache = null; }
   return _rubricCache;
@@ -663,8 +663,8 @@ async function executeMainTool(toolName, toolInput) {
       const home = process.env.HOME || '';
       const logFiles = {
         gateway:    [path.join(home, '.openclaw/logs/gateway.log'), path.join(home, '.openclaw/logs/gateway.err.log')],
-        wecom:      [path.join(HOMEAI_ROOT, 'logs/pm2/wecom-out.log'), path.join(HOMEAI_ROOT, 'logs/pm2/wecom-error.log')],
-        cloudflared:[path.join(HOMEAI_ROOT, 'logs/pm2/cloudflared-out.log'), path.join(HOMEAI_ROOT, 'logs/pm2/cloudflared-error.log')],
+        wecom:      [path.join(INSTANCE_ROOT, 'logs/pm2/wecom-out.log'), path.join(INSTANCE_ROOT, 'logs/pm2/wecom-error.log')],
+        cloudflared:[path.join(INSTANCE_ROOT, 'logs/pm2/cloudflared-out.log'), path.join(INSTANCE_ROOT, 'logs/pm2/cloudflared-error.log')],
       };
       const [logFile, errFile] = logFiles[toolInput.service] || [];
       let result = '';
@@ -695,9 +695,9 @@ async function executeMainTool(toolName, toolInput) {
 
   if (toolName === 'read_file') {
     try {
-      const absPath = path.join(HOMEAI_ROOT, toolInput.file_path);
+      const absPath = path.join(INSTANCE_ROOT, toolInput.file_path);
       // 安全检查：只允许读 HomeAI 根目录下的文件
-      if (!absPath.startsWith(HOMEAI_ROOT)) {
+      if (!absPath.startsWith(INSTANCE_ROOT)) {
         return '只能读取 HomeAI 项目目录下的文件';
       }
       if (!fs.existsSync(absPath)) {
@@ -730,7 +730,7 @@ async function executeMainTool(toolName, toolInput) {
 
   if (toolName === 'trigger_finetune') {
     try {
-      const schedulerPath = path.join(HOMEAI_ROOT, 'scripts/finetune-scheduler.js');
+      const schedulerPath = path.join(INSTANCE_ROOT, 'scripts/finetune-scheduler.js');
       execSync(`node ${schedulerPath} --force-run > /dev/null 2>&1 &`, { encoding: 'utf8' });
       return '增量微调已在后台启动，完成后日志见 logs/finetune.log';
     } catch (e) {
@@ -803,15 +803,15 @@ async function executeMainTool(toolName, toolInput) {
 
   if (toolName === 'exec_script') {
     const interpreter = toolInput.interpreter === 'python3' ? '/usr/bin/python3' : '/bin/bash';
-    const tmpScript = path.join(HOMEAI_ROOT, 'temp', `main-script-${Date.now()}.${interpreter.includes('python') ? 'py' : 'sh'}`);
+    const tmpScript = path.join(INSTANCE_ROOT, 'temp', `main-script-${Date.now()}.${interpreter.includes('python') ? 'py' : 'sh'}`);
     try {
-      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
       fs.writeFileSync(tmpScript, toolInput.code, { mode: 0o755 });
       const output = execSync(`${interpreter} ${tmpScript}`, {
         encoding: 'utf8',
         timeout: 60000,
-        cwd: HOMEAI_ROOT,
-        env: { ...process.env, HOMEAI_ROOT },
+        cwd: INSTANCE_ROOT,
+        env: { ...process.env, INSTANCE_ROOT },
       });
       fs.unlinkSync(tmpScript);
       return output.trim().slice(0, 2000) || '（脚本执行成功，无输出）';
@@ -843,8 +843,8 @@ async function executeMainTool(toolName, toolInput) {
   }
 
   if (toolName === 'send_file') {
-    const absPath = path.join(HOMEAI_ROOT, toolInput.file_path);
-    if (!absPath.startsWith(HOMEAI_ROOT)) {
+    const absPath = path.join(INSTANCE_ROOT, toolInput.file_path);
+    if (!absPath.startsWith(INSTANCE_ROOT)) {
       return '只能发送 HomeAI 项目目录下的文件';
     }
     if (!fs.existsSync(absPath)) {
@@ -865,7 +865,7 @@ async function executeMainTool(toolName, toolInput) {
   if (toolName === 'run_claude_code') {
     const task           = toolInput.task;
     const withObsidian   = toolInput.include_obsidian !== false;
-    const OBSIDIAN_VAULT = '/Users/xinbinanshan/Documents/Obsidian Vault/HomeAI';
+    const OBSIDIAN_VAULT = OBSIDIAN_VAULT_PATH;
     const CLAUDE_BIN     = '/opt/homebrew/bin/claude';
 
     const args = [
@@ -882,7 +882,7 @@ async function executeMainTool(toolName, toolInput) {
     try {
       const { execFileSync } = require('child_process');
       const output = execFileSync(CLAUDE_BIN, args, {
-        cwd:      HOMEAI_ROOT,
+        cwd:      INSTANCE_ROOT,
         encoding: 'utf8',
         timeout:  120000,
         env:      { ...process.env },
@@ -932,7 +932,7 @@ async function executeMainTool(toolName, toolInput) {
     const home = process.env.HOME || '';
     const logsToScan = [
       path.join(home, '.openclaw/logs/gateway.log'),
-      path.join(HOMEAI_ROOT, 'logs/pm2/wecom-error.log'),
+      path.join(INSTANCE_ROOT, 'logs/pm2/wecom-error.log'),
     ];
     const oneHourAgo = Date.now() - 60 * 60 * 1000;
     for (const logPath of logsToScan) {
@@ -1196,7 +1196,7 @@ async function executeMainTool(toolName, toolInput) {
     }
 
     // 2. Kuzu 知识图谱 Fact 数量（Python 查询，os._exit(0) 防 SIGBUS）
-    const kuzuPath  = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
+    const kuzuPath  = path.join(INSTANCE_ROOT, 'Data', 'kuzu');
     const kuzuScript = `
 import sys, json, os
 sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
@@ -1217,8 +1217,8 @@ sys.stdout.flush()
 os._exit(0)
 `.trim();
     try {
-      const tmpPy = path.join(HOMEAI_ROOT, 'temp', `eval-l0-kuzu-${Date.now()}.py`);
-      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      const tmpPy = path.join(INSTANCE_ROOT, 'temp', `eval-l0-kuzu-${Date.now()}.py`);
+      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
       fs.writeFileSync(tmpPy, kuzuScript);
       const kuzuOut = execSync(`${PYTHON311} ${tmpPy}`, { encoding: 'utf8', timeout: 20000 }).trim();
       try { fs.unlinkSync(tmpPy); } catch (_) {}
@@ -1299,7 +1299,7 @@ os._exit(0)
     // 6. 软硬件性能指标
     try {
       // 6a. 磁盘空间
-      const dfRaw = execSync(`df -h "${HOMEAI_ROOT}"`, { encoding: 'utf8', timeout: 5000 });
+      const dfRaw = execSync(`df -h "${INSTANCE_ROOT}"`, { encoding: 'utf8', timeout: 5000 });
       const dfLine = dfRaw.split('\n').find(l => l.includes('/'));
       if (dfLine) {
         const parts = dfLine.trim().split(/\s+/);
@@ -1401,8 +1401,8 @@ sys.stdout.flush()
 os._exit(0)
 `.trim();
     try {
-      const tmpCollab = path.join(HOMEAI_ROOT, 'temp', `eval-l0-collab-${Date.now()}.py`);
-      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      const tmpCollab = path.join(INSTANCE_ROOT, 'temp', `eval-l0-collab-${Date.now()}.py`);
+      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
       fs.writeFileSync(tmpCollab, collabScript);
       const collabOut = execSync(`${PYTHON311} ${tmpCollab}`, { encoding: 'utf8', timeout: 20000 }).trim();
       try { fs.unlinkSync(tmpCollab); } catch (_) {}
@@ -1712,10 +1712,10 @@ os._exit(0)
     }
 
     // 3. Kuzu has_pattern 积累量（Andy/Lisa 行为模式蒸馏节点数）
-    const l1KuzuPath = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
+    const l1KuzuPath = path.join(INSTANCE_ROOT, 'Data', 'kuzu');
     try {
-      const kuzuCheck = path.join(HOMEAI_ROOT, 'temp', `_l1_pattern_check_${Date.now()}.py`);
-      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      const kuzuCheck = path.join(INSTANCE_ROOT, 'temp', `_l1_pattern_check_${Date.now()}.py`);
+      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
       const script = `import sys, os, json
 try:
     import kuzu
@@ -1777,7 +1777,7 @@ os._exit(0)
     // 7. Lucas 子 Agent（访客影子 / evaluator）活跃度
     try {
       // 访客影子
-      const shadowDir = path.join(HOMEAI_ROOT, 'Data', 'corpus');
+      const shadowDir = path.join(INSTANCE_ROOT, 'Data', 'corpus');
       const shadowFiles = fs.existsSync(shadowDir) ? fs.readdirSync(shadowDir).filter(f => f.startsWith('shadow-')) : [];
       results.push(`${shadowFiles.length > 0 ? '✅' : '⚪'} Lucas 子 Agent：${shadowFiles.length} 个访客影子语料`);
 
@@ -1816,7 +1816,7 @@ os._exit(0)
         nativePerAgent[agent] = cnt;
         nativeTotal += cnt;
       }
-      const archiveBase = path.join(HOMEAI_ROOT, 'Data', 'learning', 'auto-skills');
+      const archiveBase = path.join(INSTANCE_ROOT, 'Data', 'learning', 'auto-skills');
       let archiveTotal = 0;
       if (fs.existsSync(archiveBase)) {
         for (const agent of ['lucas', 'andy', 'lisa']) {
@@ -1826,7 +1826,7 @@ os._exit(0)
           }
         }
       }
-      const skCandPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'skill-candidates.jsonl');
+      const skCandPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'skill-candidates.jsonl');
       let skPending = 0;
       if (fs.existsSync(skCandPath)) {
         const lines = fs.readFileSync(skCandPath, 'utf8').split('\n').filter(Boolean);
@@ -2140,11 +2140,11 @@ os._exit(0)
     // 3. Kuzu has_pattern 积累
     lines.push('**── Kuzu 模式积累（has_pattern）──**');
     try {
-      const tmpScript = path.join(HOMEAI_ROOT, 'scripts', '_inspect_ctx_kuzu.py');
+      const tmpScript = path.join(INSTANCE_ROOT, 'scripts', '_inspect_ctx_kuzu.py');
       const script = `import sys, os, json
 try:
     import kuzu
-    db   = kuzu.Database("${path.join(HOMEAI_ROOT, 'Data', 'kuzu')}")
+    db   = kuzu.Database("${path.join(INSTANCE_ROOT, 'Data', 'kuzu')}")
     conn = kuzu.Connection(db)
     res  = conn.execute(
         "MATCH (a:Entity {id: $aid})-[f:Fact {relation: 'has_pattern'}]->(p:Entity) "
@@ -2185,7 +2185,7 @@ os._exit(0)
   if (toolName === 'evaluate_l2') {
     const results = [];
     let score = '✅';
-    const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+    const learningDir = path.join(INSTANCE_ROOT, 'Data', 'learning');
 
     // ── 维度 A：Engineering Anything（三角色闭环交付力）──
 
@@ -2270,7 +2270,7 @@ os._exit(0)
     let deliverableTypes = new Set();
     try {
       // app（生成的 Web 应用）
-      const appDir = path.join(HOMEAI_ROOT, 'App', 'generated');
+      const appDir = path.join(INSTANCE_ROOT, 'App', 'generated');
       if (fs.existsSync(appDir)) {
         const apps = fs.readdirSync(appDir).filter(f => !f.startsWith('.'));
         if (apps.length > 0) deliverableTypes.add('app');
@@ -2435,7 +2435,7 @@ os._exit(0)
     }
 
     // ── ②关系图谱：Kuzu 协作边（distill-relationship-dynamics.py 产出）──
-    const l3KuzuPath = path.join(HOMEAI_ROOT, 'Data', 'kuzu');
+    const l3KuzuPath = path.join(INSTANCE_ROOT, 'Data', 'kuzu');
     const l3KuzuScript = `
 import sys, json, os
 sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
@@ -2454,8 +2454,8 @@ sys.stdout.flush()
 os._exit(0)
 `.trim();
     try {
-      const tmpL3 = path.join(HOMEAI_ROOT, 'temp', `eval-l3-${Date.now()}.py`);
-      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      const tmpL3 = path.join(INSTANCE_ROOT, 'temp', `eval-l3-${Date.now()}.py`);
+      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
       fs.writeFileSync(tmpL3, l3KuzuScript);
       const l3Out = execSync(`${PYTHON311} ${tmpL3}`, { encoding: 'utf8', timeout: 20000 }).trim();
       try { fs.unlinkSync(tmpL3); } catch (_) {}
@@ -2490,7 +2490,7 @@ os._exit(0)
       d3Results.push(`⚠️ shadow_interactions 检查失败：${e.message.slice(0, 60)}`);
     }
     try {
-      const registryPath = path.join(HOMEAI_ROOT, 'Data', 'visitor-registry.json');
+      const registryPath = path.join(INSTANCE_ROOT, 'Data', 'visitor-registry.json');
       if (!fs.existsSync(registryPath)) {
         d3Results.push('⚪ 访客 Registry：文件不存在（无访客）');
       } else {
@@ -2507,7 +2507,7 @@ os._exit(0)
 
     // ── ④跨成员感知：关系蒸馏运行状态 + 成员增强效果 ──
     try {
-      const logPath = path.join(HOMEAI_ROOT, 'Logs', 'distill-relationship-dynamics.log');
+      const logPath = path.join(INSTANCE_ROOT, 'Logs', 'distill-relationship-dynamics.log');
       if (!fs.existsSync(logPath)) {
         d4Results.push('⚪ 关系蒸馏日志：尚无运行记录（每日凌晨 4am 触发）');
       } else {
@@ -2575,7 +2575,7 @@ os._exit(0)
     const sysLayerResults = [];  // 系统层自我改进指标
     const mdlLayerResults = [];  // 模型层内化指标
     let score = '✅';
-    const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+    const learningDir = path.join(INSTANCE_ROOT, 'Data', 'learning');
 
     // ══ 系统层：自我改进机制 ══
 
@@ -2632,7 +2632,7 @@ os._exit(0)
     // archive：data/learning/auto-skills/*/（插件管理，按需召回，无上限）
     try {
       const ocHome = path.join(process.env.HOME, '.openclaw');
-      const autoSkillsRoot = path.join(HOMEAI_ROOT, 'Data', 'learning', 'auto-skills');
+      const autoSkillsRoot = path.join(INSTANCE_ROOT, 'Data', 'learning', 'auto-skills');
       const agents = ['lucas', 'andy', 'lisa'];
       const skillLines = agents.map(agent => {
         const nativeDir = path.join(ocHome, `workspace-${agent}`, 'skills');
@@ -2705,8 +2705,8 @@ os._exit(0)
 
     // S6. 路由阈值进化（路由事件中本地路由比例 + routing-thresholds.json 存在性）
     try {
-      const routeEventsPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'route-events.jsonl');
-      const thresholdsPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'routing-thresholds.json');
+      const routeEventsPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'route-events.jsonl');
+      const thresholdsPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'routing-thresholds.json');
       let localRoutePct = 0;
       let recentTotal = 0, recentLocal = 0;
       if (fs.existsSync(routeEventsPath)) {
@@ -2801,7 +2801,7 @@ os._exit(0)
       } catch (_) {}
 
       // M2b. MLX：扫描 ~/HomeAI/Models/mlx/ 目录
-      const mlxDir = path.join(HOMEAI_ROOT, 'Models', 'mlx');
+      const mlxDir = path.join(INSTANCE_ROOT, 'Models', 'mlx');
       const mlxModels = [];
       try {
         if (fs.existsSync(mlxDir)) {
@@ -2904,7 +2904,7 @@ os._exit(0)
 import sys, json, os
 sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
 import kuzu
-db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))
+db = kuzu.Database(os.environ.get('INSTANCE_ROOT', os.path.expanduser('~/HomeAI')) + '/Data/kuzu')
 conn = kuzu.Connection(db)
 result = conn.execute("MATCH (p:Entity {type:'person'})-[f:Fact]->(t:Entity) WHERE f.valid_until IS NULL AND f.source_type='distill' RETURN p.name AS person, p.id AS pid, f.relation AS relation, t.name AS target, f.context AS context ORDER BY f.valid_from DESC LIMIT 30")
 facts = []
@@ -3132,7 +3132,7 @@ ${factsDesc}`;
   if (toolName === 'generate_dpo_good_responses') {
     const patternType = toolInput.pattern_type || null;
     const threshold = Number(toolInput.threshold) || 10;
-    const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+    const learningDir = path.join(INSTANCE_ROOT, 'Data', 'learning');
     const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
 
     if (!fs.existsSync(dpoCandPath)) {
@@ -3203,7 +3203,7 @@ ${factsDesc}`;
   if (toolName === 'approve_dpo_batch') {
     const patternType = toolInput.pattern_type;
     const limit = Number(toolInput.limit) || 50;
-    const learningDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+    const learningDir = path.join(INSTANCE_ROOT, 'Data', 'learning');
     const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
 
     if (!fs.existsSync(dpoCandPath)) {
@@ -3319,7 +3319,7 @@ ${factsDesc}`;
     const overall = totalWeight > 0 ? (totalScore / totalWeight).toFixed(1) : '?';
 
     // 写入评分历史 JSONL
-    const historyDir = path.join(HOMEAI_ROOT, 'Data', 'learning');
+    const historyDir = path.join(INSTANCE_ROOT, 'Data', 'learning');
     try {
       fs.mkdirSync(historyDir, { recursive: true });
       const historyEntry = {
@@ -3342,7 +3342,7 @@ ${factsDesc}`;
       const advice = [];
       const autoTasks = [];
       const nowIso = new Date().toISOString();
-      const taskRegPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
+      const taskRegPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'task-registry.json');
 
       // L1：Lucas 问题率
       const l1IssueM = l1.match(/(\d+) 条疑似问题/);
@@ -3453,7 +3453,7 @@ ${factsDesc}`;
 
   if (toolName === 'evaluate_trend') {
     const count = Math.min(toolInput.count || 10, 50);
-    const historyPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'evaluation-history.jsonl');
+    const historyPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'evaluation-history.jsonl');
     if (!fs.existsSync(historyPath)) {
       return `暂无评估历史记录。请先运行 evaluate_system 生成首次评估。\n\n📊 仪表盘：${EVAL_DASHBOARD_URL}`;
     }
@@ -3524,8 +3524,10 @@ ${factsDesc}`;
 // 两类目标目录（Obsidian）：
 //   Claude Code 相关  → 00-ClaudeCode配置/ClaudeCode外部经验参考/
 //   架构/技术相关     → 07-设计与技术外部参考/
-const OBSIDIAN_CLAUDECODE_DIR = '/Users/xinbinanshan/Documents/Obsidian Vault/HomeAI/00-ClaudeCode配置/ClaudeCode外部经验参考';
-const OBSIDIAN_TECH_DIR       = '/Users/xinbinanshan/Documents/Obsidian Vault/HomeAI/07-设计与技术外部参考';
+const OBSIDIAN_CLAUDECODE_DIR = process.env.OBSIDIAN_CLAUDECODE_DIR ||
+  path.join(OBSIDIAN_VAULT_PATH, '00-ClaudeCode配置', 'ClaudeCode外部经验参考');
+const OBSIDIAN_TECH_DIR = process.env.OBSIDIAN_TECH_DIR ||
+  path.join(OBSIDIAN_VAULT_PATH, '07-设计与技术外部参考');
 
 // 每个 userId 最近一次提取的内容缓存（30 分钟窗口）
 const lastExtractedDoc = new Map();

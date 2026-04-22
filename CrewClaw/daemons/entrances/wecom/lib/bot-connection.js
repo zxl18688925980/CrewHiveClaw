@@ -7,7 +7,7 @@
  *
  * 工厂函数：module.exports = (logger, deps) => startBotLongConnection
  * deps: {
- *   WECOM_BOT_ID, WECOM_BOT_SECRET, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
+ *   WECOM_BOT_ID, WECOM_BOT_SECRET, INSTANCE_ROOT, PORT, WECOM_OWNER_ID,
  *   setGlobalBotReady, setGlobalBotClient,
  *   getBotClient, getBotReady,
  *   getOrgMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
@@ -31,7 +31,7 @@ const { WSClient } = require('@wecom/aibot-node-sdk');
 
 module.exports = function createBotConnection(logger, deps) {
   const {
-    WECOM_BOT_ID, WECOM_BOT_SECRET, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
+    WECOM_BOT_ID, WECOM_BOT_SECRET, INSTANCE_ROOT, PORT, WECOM_OWNER_ID,
     setGlobalBotReady, setGlobalBotClient,
     getBotClient, getBotReady,
     getOrgMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
@@ -113,9 +113,11 @@ function startBotLongConnection() {
     // 修复：先精确匹配已知 bot 名，再 fallback 到「@词+空格」格式
     let text = content;
     if (isGroup) {
+      const botName = process.env.WECOM_BOT_NAME || '启灵';
+      const botNameRe = new RegExp('^@' + botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*');
       text = text
-        .replace(/^@启灵\s*/, '')   // 精确匹配已知 bot 名（有无空格均处理）
-        .replace(/^@啟靈\s*/, '')   // 繁体备用
+        .replace(botNameRe, '')     // 精确匹配配置的 bot 名（有无空格均处理）
+        .replace(/^@啟靈\s*/, '')   // 繁体备用（仅 HomeAI 历史兼容）
         .trimStart();
       // 若还以 @ 开头（其他 bot 名），尝试空格分隔的通用剥离
       if (text.startsWith('@')) {
@@ -573,12 +575,14 @@ function startBotLongConnection() {
     const memberTag  = member ? `【${channel}·${member.role}${member.name}】` : `【${channel}·${fromUser}】`;
     const memberName = member ? `${member.role}${member.name}` : fromUser;
 
-    // 提取文本部分，并去掉 @启灵 前缀
+    // 提取文本部分，并去掉 @bot名 前缀
+    const _botName2 = process.env.WECOM_BOT_NAME || '启灵';
+    const _botRe2 = new RegExp('^@' + _botName2.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'g');
     const rawText = items
       .filter(it => it.msgtype === 'text')
       .map(it => it.text?.content || '')
       .join(' ')
-      .replace(/^@启灵\s*/g, '')
+      .replace(_botRe2, '')
       .replace(/^@啟靈\s*/g, '')
       .trim();
 
@@ -610,7 +614,7 @@ function startBotLongConnection() {
     // 逐张图片下载 + GLM vision 分析
     const imageDescs = [];
     const dateStr = todayCST();
-    const uploadDir = path.join(HOMEAI_ROOT, 'data', 'uploads', dateStr, 'images');
+    const uploadDir = path.join(INSTANCE_ROOT, 'data', 'uploads', dateStr, 'images');
     fs.mkdirSync(uploadDir, { recursive: true });
 
     for (let i = 0; i < imageItems.length; i++) {

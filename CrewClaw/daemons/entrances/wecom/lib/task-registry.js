@@ -9,10 +9,10 @@
 const fs   = require('fs');
 const path = require('path');
 
-const HOMEAI_ROOT     = path.join(__dirname, '../../../../../..');
-const TASK_REG_FILE   = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
-const L4_TASKS_FILE   = path.join(HOMEAI_ROOT, 'Data', 'learning', 'l4-tasks.json');
-const L4_CONTROL_FILE = path.join(HOMEAI_ROOT, 'Data', 'learning', 'l4-control.json');
+const INSTANCE_ROOT   = process.env.INSTANCE_ROOT || path.join(__dirname, '../../../../../..');
+const TASK_REG_FILE   = path.join(INSTANCE_ROOT, 'Data', 'learning', 'task-registry.json');
+const L4_TASKS_FILE   = path.join(INSTANCE_ROOT, 'Data', 'learning', 'l4-tasks.json');
+const L4_CONTROL_FILE = path.join(INSTANCE_ROOT, 'Data', 'learning', 'l4-control.json');
 
 const nowCST = () =>
   new Date(Date.now() + 8 * 3600000).toISOString().replace('Z', '+08:00');

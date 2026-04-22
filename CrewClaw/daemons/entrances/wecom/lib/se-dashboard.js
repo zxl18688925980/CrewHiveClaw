@@ -6,13 +6,13 @@
  *       POST demo-proxy/submit-requirement（访客提交开发需求 → 触发 Andy 流水线）
  *
  * 工厂函数：module.exports = (logger, deps) => express.Router()
- * deps: { WECOM_OWNER_ID, HOMEAI_ROOT, readTaskRegistry, writeTaskRegistry, loadInvites }
+ * deps: { WECOM_OWNER_ID, INSTANCE_ROOT, readTaskRegistry, writeTaskRegistry, loadInvites }
  */
 const express = require('express');
 const fs      = require('fs');
 const path    = require('path');
 
-module.exports = function createSEDashboard(logger, { WECOM_OWNER_ID, HOMEAI_ROOT, readTaskRegistry, writeTaskRegistry, loadInvites }) {
+module.exports = function createSEDashboard(logger, { WECOM_OWNER_ID, INSTANCE_ROOT, readTaskRegistry, writeTaskRegistry, loadInvites }) {
   const router = express.Router();
   const app = router;  // block uses app.get/app.post — aliased to router
 
@@ -98,7 +98,7 @@ app.post('/api/demo-proxy/submit-requirement', async (req, res) => {
     const requirementId = `req_${Date.now()}`;
 
     // 写入 task-registry.json（模拟 upsertTaskRegistry）
-    const TASK_REGISTRY_FILE = path.join(HOMEAI_ROOT, 'data/learning/task-registry.json');
+    const TASK_REGISTRY_FILE = path.join(INSTANCE_ROOT, 'data/learning/task-registry.json');
     let entries = [];
     try {
       if (fs.existsSync(TASK_REGISTRY_FILE)) {

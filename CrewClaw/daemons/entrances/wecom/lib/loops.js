@@ -10,7 +10,7 @@
  *   const _loopsFactory = require('./lib/loops');
  *   const loops = _loopsFactory(logger, { callGatewayAgent, callMainModel,
  *     executeMainTool, sendWeComMessage, sendLongWeComMessage,
- *     nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID });
+ *     nowCST, INSTANCE_ROOT, PORT, WECOM_OWNER_ID });
  */
 
 const fs      = require('fs');
@@ -27,7 +27,7 @@ module.exports = function createLoops(logger, deps) {
   const {
     callGatewayAgent, callMainModel, executeMainTool,
     sendWeComMessage, sendLongWeComMessage,
-    nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
+    nowCST, INSTANCE_ROOT, PORT, WECOM_OWNER_ID,
     getOrgMembers,
     MAIN_SYSTEM_PROMPT,
     readTaskRegistryRaw,
@@ -192,7 +192,7 @@ async function runLucasProactiveLoop() {
     if (staleTasks.length > 0) {
       // 记录本次告警时间（先批量写，防止重复触发）
       try {
-        const p = path.join(HOMEAI_ROOT, 'Data/learning/task-registry.json');
+        const p = path.join(INSTANCE_ROOT, 'Data/learning/task-registry.json');
         const entries = JSON.parse(fs.readFileSync(p, 'utf8'));
         let dirty = false;
         for (const task of staleTasks) {
@@ -367,7 +367,7 @@ async function runAndyHeartbeatLoop() {
   try {
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
     const PYTHON311 = '/opt/homebrew/opt/python@3.11/bin/python3.11';
-    const kuzuPath  = path.join(HOMEAI_ROOT, 'data', 'kuzu');
+    const kuzuPath  = path.join(INSTANCE_ROOT, 'data', 'kuzu');
 
     // 预计算1：高置信度结晶候选（has_pattern, confidence >= 0.8）
     let precomputedPatterns = '无高置信度候选（confidence >= 0.8）';
@@ -395,8 +395,8 @@ sys.stdout.flush()
 os._exit(0)
 `.trim();
     try {
-      const tmpPy = path.join(HOMEAI_ROOT, 'temp', `andy-hb-kuzu-${Date.now()}.py`);
-      fs.mkdirSync(path.join(HOMEAI_ROOT, 'temp'), { recursive: true });
+      const tmpPy = path.join(INSTANCE_ROOT, 'temp', `andy-hb-kuzu-${Date.now()}.py`);
+      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
       fs.writeFileSync(tmpPy, kuzuScript);
       const raw = execSync(`${PYTHON311} ${tmpPy}`, { encoding: 'utf8', timeout: 20000 }).trim();
       try { fs.unlinkSync(tmpPy); } catch (_) {}
@@ -412,7 +412,7 @@ os._exit(0)
 
     // 预计算2：skill-candidates.jsonl 中的 pending 条目
     let precomputedSkillCandidates = '无 pending 候选';
-    const skillCandPath = path.join(HOMEAI_ROOT, 'data/learning/skill-candidates.jsonl');
+    const skillCandPath = path.join(INSTANCE_ROOT, 'data/learning/skill-candidates.jsonl');
     try {
       if (fs.existsSync(skillCandPath)) {
         const lines = fs.readFileSync(skillCandPath, 'utf8').split('\n').filter(l => l.trim());
@@ -431,7 +431,7 @@ os._exit(0)
 
     // 预计算3：andy-goals.jsonl 上轮 in_progress 条目（Loop 2 目标闭环）
     let precomputedInProgressGoals = '无上轮进行中目标';
-    const goalsPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'andy-goals.jsonl');
+    const goalsPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'andy-goals.jsonl');
     try {
       if (fs.existsSync(goalsPath)) {
         const lines = fs.readFileSync(goalsPath, 'utf8').split('\n').filter(l => l.trim());
@@ -519,7 +519,7 @@ os._exit(0)
     // 预计算6：主动学习状态（检查 9 需要的学习进度）
     let precomputedLearningState = '无学习记录（首次学习）';
     try {
-      const learningStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-learning-state.json');
+      const learningStatePath = path.join(INSTANCE_ROOT,'Data', 'learning', 'andy-learning-state.json');
       if (fs.existsSync(learningStatePath)) {
         const ls = JSON.parse(fs.readFileSync(learningStatePath, 'utf8'));
         const lastStudy = ls.lastStudyAt || '从未';
@@ -536,7 +536,7 @@ os._exit(0)
     // ── 预计算7：spec 回溯数据（检查 10，每周一次）──────────────────────────
     let precomputedSpecRetro = '无 spec 数据';
     try {
-      const retroStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-spec-retro-state.json');
+      const retroStatePath = path.join(INSTANCE_ROOT,'Data', 'learning', 'andy-spec-retro-state.json');
       const retroState = fs.existsSync(retroStatePath) ? JSON.parse(fs.readFileSync(retroStatePath, 'utf8')) : {};
       const lastRetro = retroState.lastRetroAt;
       const daysSinceRetro = lastRetro ? Math.floor((Date.now() - new Date(lastRetro).getTime()) / 86400000) : Infinity;
@@ -544,7 +544,7 @@ os._exit(0)
         precomputedSpecRetro = `本周已回溯（${daysSinceRetro} 天前），跳过`;
       } else {
         // 从 opencode-results.jsonl 读最近 7 天的 spec 结果
-        const resultsPath = path.join(os.homedir(), 'HomeAI', 'CrewHiveClaw', 'data', 'learning', 'opencode-results.jsonl');
+        const resultsPath = path.join(INSTANCE_ROOT,'CrewHiveClaw', 'data', 'learning', 'opencode-results.jsonl');
         if (fs.existsSync(resultsPath)) {
           const lines = fs.readFileSync(resultsPath, 'utf8').trim().split('\n').filter(Boolean);
           const weekAgo = Date.now() - 7 * 86400000;
@@ -572,7 +572,7 @@ os._exit(0)
     // ── 预计算8：技术雷达状态（检查 11，每两周一次）──────────────────────────
     let precomputedTechRadar = '冷却中';
     try {
-      const searchStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-self-search-state.json');
+      const searchStatePath = path.join(INSTANCE_ROOT,'Data', 'learning', 'andy-self-search-state.json');
       const searchState = fs.existsSync(searchStatePath) ? JSON.parse(fs.readFileSync(searchStatePath, 'utf8')) : {};
       const lastSearch = searchState.lastSearchAt;
       const daysSinceSearch = lastSearch ? Math.floor((Date.now() - new Date(lastSearch).getTime()) / 86400000) : Infinity;
@@ -589,7 +589,7 @@ os._exit(0)
     // ── 预计算9：代码图谱变化摘要（检查 12，每日）──────────────────────────
     let precomputedCodeGraphChanges = '未运行';
     try {
-      const graphLogPath = path.join(os.homedir(), 'HomeAI', 'Logs', 'build-code-graph.log');
+      const graphLogPath = path.join(INSTANCE_ROOT,'Logs', 'build-code-graph.log');
       if (fs.existsSync(graphLogPath)) {
         const logContent = fs.readFileSync(graphLogPath, 'utf8').trim();
         const lastRunLine = logContent.split('\n').filter(l => l.includes('增量重建完成') || l.includes('Done')).slice(-1)[0];
@@ -645,7 +645,7 @@ os._exit(0)
         }
         if (signalParts.length > 0) {
           // 检查冷却
-          const proposalStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-arch-proposal-state.json');
+          const proposalStatePath = path.join(INSTANCE_ROOT,'Data', 'learning', 'andy-arch-proposal-state.json');
           const proposalState = fs.existsSync(proposalStatePath) ? JSON.parse(fs.readFileSync(proposalStatePath, 'utf8')) : {};
           const daysSinceProposal = proposalState.lastProposalAt
             ? Math.floor((Date.now() - new Date(proposalState.lastProposalAt).getTime()) / 86400000) : Infinity;
@@ -663,13 +663,13 @@ os._exit(0)
     let precomputedTechDebtSignals = '无异常';
     try {
       // 检查冷却
-      const debtStatePath = path.join(os.homedir(), 'HomeAI', 'Data', 'learning', 'andy-tech-debt-state.json');
+      const debtStatePath = path.join(INSTANCE_ROOT,'Data', 'learning', 'andy-tech-debt-state.json');
       const debtState = fs.existsSync(debtStatePath) ? JSON.parse(fs.readFileSync(debtStatePath, 'utf8')) : {};
       const daysSinceDebt = debtState.lastDebtScanAt
         ? Math.floor((Date.now() - new Date(debtState.lastDebtScanAt).getTime()) / 86400000) : Infinity;
       if (daysSinceDebt >= 14) {
         // 读 opencode-results.jsonl 找高频修改文件
-        const resultsPath = path.join(os.homedir(), 'HomeAI', 'CrewHiveClaw', 'data', 'learning', 'opencode-results.jsonl');
+        const resultsPath = path.join(INSTANCE_ROOT,'CrewHiveClaw', 'data', 'learning', 'opencode-results.jsonl');
         if (fs.existsSync(resultsPath)) {
           const lines = fs.readFileSync(resultsPath, 'utf8').trim().split('\n').filter(Boolean);
           const recentResults = lines.slice(-50).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
@@ -796,7 +796,7 @@ ${precomputedTechDebtSignals}
           if (jsonMatch) {
             const plan = JSON.parse(jsonMatch[1].trim());
             if (Array.isArray(plan) && plan.length > 0) {
-              const taskRegPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
+              const taskRegPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'task-registry.json');
               let entries = [];
               try { entries = JSON.parse(fs.readFileSync(taskRegPath, 'utf8')); } catch {}
               const nowIso = new Date().toISOString();

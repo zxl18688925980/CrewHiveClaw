@@ -6,7 +6,7 @@
  *       Demo TTS / STT / 语音对话 / Vision
  *
  * 工厂函数：module.exports = (logger, deps) => ({ router, loadInvites, resolveInviteCode, isInviteValid })
- * deps: { HOMEAI_ROOT, GATEWAY_URL, APP_GENERATED_DIR }
+ * deps: { INSTANCE_ROOT, GATEWAY_URL, APP_GENERATED_DIR }
  */
 const express      = require('express');
 const fs           = require('fs');
@@ -17,16 +17,16 @@ const TTS_PYTHON    = '/opt/homebrew/opt/python@3.11/bin/python3.11';
 const TTS_VOICE     = 'zh-CN-YunxiNeural';
 const LOCAL_TTS_URL = 'http://127.0.0.1:8082/tts';
 
-module.exports = function createDemoRoutes(logger, { HOMEAI_ROOT, GATEWAY_URL, APP_GENERATED_DIR }) {
+module.exports = function createDemoRoutes(logger, { INSTANCE_ROOT, GATEWAY_URL, APP_GENERATED_DIR }) {
   const router = express.Router();
   const app = router;  // block uses app.get/app.post — aliased to router
 
 // ─── 访客邀请 / 对话管理 ─────────────────────────────────────────────────────
 // visitor-registry.json: { TOKEN: { name, invitedBy, scopeTags, behaviorContext, status, expiresAt, shadowMemoryPath, createdAt } }
-const VISITOR_REGISTRY_PATH  = path.join(HOMEAI_ROOT, 'data', 'visitor-registry.json');
+const VISITOR_REGISTRY_PATH  = path.join(INSTANCE_ROOT, 'data', 'visitor-registry.json');
 // Lucas 主动推给访客的消息队列（内存，前端轮询取走）{ lowerToken: [{ id, text, ts }] }
-const DEMO_CHAT_HISTORY_PATH = path.join(HOMEAI_ROOT, 'data', 'demo-chat-history.json');
-const DEMO_DISABLED_FLAG     = path.join(HOMEAI_ROOT, 'data', 'demo-disabled.flag');
+const DEMO_CHAT_HISTORY_PATH = path.join(INSTANCE_ROOT, 'data', 'demo-chat-history.json');
+const DEMO_DISABLED_FLAG     = path.join(INSTANCE_ROOT, 'data', 'demo-disabled.flag');
 function isDemoDisabled() { return fs.existsSync(DEMO_DISABLED_FLAG); }
 
 function loadAllChatHistory() {
@@ -327,9 +327,10 @@ app.post('/api/demo-proxy/greet', async (req, res) => {
     return res.json({ ok: true, message: null, name: visitorName });
   }
 
+  const botName = process.env.WECOM_BOT_NAME || '助理';
   const greetMessage = visitorName
-    ? `您好，${visitorName}叔叔！我是启灵，曾小龙的孩子。爸爸邀请您来体验的，有什么想聊的，或者想要个网页小工具，直接说就好。`
-    : `您好！我是启灵，主人邀请您来体验的。有什么想聊的，直接说就好——比如想要个网页小工具、或者有什么开发需求想试试，都可以跟我说。先告诉我您怎么称呼？`;
+    ? `您好，${visitorName}！我是${botName}，主人邀请您来体验的。有什么想聊的，或者想要个网页小工具，直接说就好。`
+    : `您好！我是${botName}，主人邀请您来体验的。有什么想聊的，直接说就好——比如想要个网页小工具、或者有什么开发需求想试试，都可以跟我说。先告诉我您怎么称呼？`;
 
   res.json({ ok: true, message: greetMessage, name: visitorName });
 });
@@ -411,7 +412,7 @@ app.post('/api/demo-proxy/gen-invite', (req, res) => {
   // C2: 邀请创建后异步写入 Kuzu 访客节点（fire-and-forget，不阻塞响应）
   {
     const { spawn } = require('child_process');
-    const initVisitorScript = path.join(HOMEAI_ROOT, 'scripts', 'init-visitor.py');
+    const initVisitorScript = path.join(INSTANCE_ROOT, 'scripts', 'init-visitor.py');
     const proc = spawn(
       '/opt/homebrew/opt/python@3.11/bin/python3.11',
       [initVisitorScript, code],

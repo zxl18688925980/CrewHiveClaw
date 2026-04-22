@@ -13,9 +13,9 @@ const axios = require('axios');
 const { execFile, execFileSync, execSync } = require('child_process');
 const { chromium } = require('playwright');
 
-const HOMEAI_ROOT   = path.join(__dirname, '../../../../../..');
-const WHISPER_MODEL = path.join(HOMEAI_ROOT, 'Models/whisper/ggml-base.bin');
-const COOKIES_FILE  = path.join(HOMEAI_ROOT, 'config/douyin-cookies.txt');
+const INSTANCE_ROOT   = process.env.INSTANCE_ROOT || path.join(__dirname, '../../../../../..');
+const WHISPER_MODEL = path.join(INSTANCE_ROOT, 'Models/whisper/ggml-base.bin');
+const COOKIES_FILE  = path.join(INSTANCE_ROOT, 'config/douyin-cookies.txt');
 const WHISPER_CLI   = '/opt/homebrew/bin/whisper-cli';
 
 // 视频平台 URL 正则

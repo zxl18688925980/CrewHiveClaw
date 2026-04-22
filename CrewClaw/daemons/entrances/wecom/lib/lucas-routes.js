@@ -9,7 +9,7 @@
  *       demo-proxy/pending / demo-proxy/visitor-tasks
  *
  * 工厂函数：module.exports = (logger, deps) => express.Router()
- * deps: { HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
+ * deps: { INSTANCE_ROOT, PORT, WECOM_OWNER_ID,
  *         getBotClient, getBotReady,
  *         botSend, sendWeComGroupFile, sendWeComMessage,
  *         sendVoiceChunks, stripMarkdownForWecom,
@@ -25,7 +25,7 @@ const path    = require('path');
 const CHROMA_API_BASE = 'http://localhost:8000/api/v1/collections';
 
 module.exports = function createLucasRoutes(logger, {
-  HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
+  INSTANCE_ROOT, PORT, WECOM_OWNER_ID,
   getBotClient, getBotReady,
   botSend, sendWeComGroupFile, sendWeComMessage,
   sendVoiceChunks, stripMarkdownForWecom,
@@ -176,7 +176,7 @@ app.post('/api/wecom/send-to-group', async (req, res) => {
   if (!filePath && !text) return res.status(400).json({ success: false, error: 'filePath or text required' });
 
   const familyInfo = JSON.parse(fs.readFileSync(process.env.ORG_MEMBERS_CONFIG || path.join(process.env.HOME, '.homeai', 'family-info.json'), 'utf8'));
-  const chatId = familyInfo.wecomFamilyChatId;
+  const chatId = familyInfo.wecomOrgGroupChatId || familyInfo.wecomFamilyChatId;
 
   try {
     const groupHistKey = chatHistoryKey(true, chatId, null);
@@ -204,7 +204,7 @@ app.post('/api/wecom/send-to-group', async (req, res) => {
       return res.json({ success: true });
     }
 
-    const absPath = filePath.startsWith('/') ? filePath : path.join(HOMEAI_ROOT, filePath);
+    const absPath = filePath.startsWith('/') ? filePath : path.join(INSTANCE_ROOT, filePath);
     if (!fs.existsSync(absPath)) {
       return res.status(404).json({ success: false, error: `文件不存在：${absPath}` });
     }
@@ -245,7 +245,7 @@ app.post('/api/wecom/send-file', async (req, res) => {
   if (!target || !filePath) {
     return res.status(400).json({ success: false, error: 'target and filePath are required' });
   }
-  const absPath = filePath.startsWith('/') ? filePath : path.join(HOMEAI_ROOT, filePath);
+  const absPath = filePath.startsWith('/') ? filePath : path.join(INSTANCE_ROOT, filePath);
   if (!fs.existsSync(absPath)) {
     return res.status(404).json({ success: false, error: `文件不存在：${absPath}` });
   }
@@ -282,7 +282,7 @@ app.post('/api/wecom/send-voice', async (req, res) => {
     return res.status(400).json({ success: false, error: 'target and text are required' });
   }
   const familyInfo = JSON.parse(fs.readFileSync(process.env.ORG_MEMBERS_CONFIG || path.join(process.env.HOME, '.homeai', 'family-info.json'), 'utf8'));
-  const chatId = target === 'group' ? familyInfo.wecomFamilyChatId : target;
+  const chatId = target === 'group' ? (familyInfo.wecomOrgGroupChatId || familyInfo.wecomFamilyChatId) : target;
   try {
     await sendVoiceChunks(chatId, text);
     logger.info('主动语音已发送', { target: chatId, textLen: text.length, actor: 'lucas' });
@@ -429,7 +429,7 @@ app.get('/api/demo-proxy/visitor-tasks', (req, res) => {
     return res.status(401).json({ success: false, message: '缺少邀请码' });
   }
   try {
-    const TASK_FILE = path.join(HOMEAI_ROOT, 'data/learning/task-registry.json');
+    const TASK_FILE = path.join(INSTANCE_ROOT, 'data/learning/task-registry.json');
     if (!fs.existsSync(TASK_FILE)) {
       return res.json({ success: true, tasks: [] });
     }
