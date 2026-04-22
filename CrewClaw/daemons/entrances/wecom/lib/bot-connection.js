@@ -9,6 +9,7 @@
  * deps: {
  *   WECOM_BOT_ID, WECOM_BOT_SECRET, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
  *   setGlobalBotReady, setGlobalBotClient,
+ *   getBotClient, getBotReady,
  *   getFamilyMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
  *   groupBotLastSend, GROUP_BOT_MIN_INTERVAL_MS,
  *   _gatewayDownNotifiedAt_ref, GATEWAY_DOWN_NOTIFY_INTERVAL_MS,
@@ -32,6 +33,7 @@ module.exports = function createBotConnection(logger, deps) {
   const {
     WECOM_BOT_ID, WECOM_BOT_SECRET, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
     setGlobalBotReady, setGlobalBotClient,
+    getBotClient, getBotReady,
     getFamilyMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
     groupBotLastSend, GROUP_BOT_MIN_INTERVAL_MS,
     _gatewayDownNotifiedAt_ref, GATEWAY_DOWN_NOTIFY_INTERVAL_MS,
@@ -170,7 +172,7 @@ function startBotLongConnection() {
           const failPrompt = `${memberTag}[系统：刚才那个抖音视频语音提取失败了，无法获取内容。请如实告知家人"视频内容提取失败了，我没能看到里面的内容"，不要推测或编造视频内容。]`;
           try {
             const failReply = await callGatewayAgent('lucas', failPrompt, followUpSessionKey);
-            if (failReply && globalBotClient && globalBotReady) {
+            if (failReply && getBotClient() && getBotReady()) {
               botSend(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(null)', { error: e?.message || String(e) }));
             }
           } catch (e) {
@@ -184,7 +186,7 @@ function startBotLongConnection() {
           const failPrompt = `${memberTag}[系统：刚才那个抖音视频提取失败了，原因是：${meta.error}。请如实告知家人"视频内容提取失败，原因是${meta.error}"，不要推测或编造视频内容。]`;
           try {
             const failReply = await callGatewayAgent('lucas', failPrompt, followUpSessionKey);
-            if (failReply && globalBotClient && globalBotReady) {
+            if (failReply && getBotClient() && getBotReady()) {
               botSend(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(err)', { error: e?.message || String(e) }));
             }
           } catch (e) {
@@ -223,7 +225,7 @@ function startBotLongConnection() {
             }
             // 批量视频转录 prompt 可能较大，超时设 5 分钟
             const analysis = await callGatewayAgent('lucas', followUpPrompt, followUpSessionKey, 300000);
-            if (analysis && globalBotClient && globalBotReady) {
+            if (analysis && getBotClient() && getBotReady()) {
               botSend(botTarget, analysis).catch(e => logger.warn('Bot 抖音转录合并推送失败', { error: e?.message || String(e) }));
             }
           } catch (e) {

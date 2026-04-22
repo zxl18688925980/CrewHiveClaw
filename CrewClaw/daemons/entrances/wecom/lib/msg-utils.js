@@ -155,9 +155,9 @@ async function sendOneTts(toUserId, ttsText, style = 'normal') {
 
   // ── 上传并发送语音泡泡 ──
   try {
-    const uploaded = await globalBotClient.uploadMedia(audioBuf, { type: 'voice', filename: `reply-${Date.now()}.wav` });
+    const uploaded = await getBotClient().uploadMedia(audioBuf, { type: 'voice', filename: `reply-${Date.now()}.wav` });
     const mediaId = uploaded?.media_id || uploaded;
-    await globalBotClient.sendMediaMessage(toUserId, 'voice', mediaId);
+    await getBotClient().sendMediaMessage(toUserId, 'voice', mediaId);
     return true;
   } catch (e) {
     logger.warn('语音上传/发送失败', { error: e?.message || String(e), toUserId });
@@ -168,7 +168,7 @@ async function sendOneTts(toUserId, ttsText, style = 'normal') {
 /** 文字 → 多条语音（每段 ≤200 字，顺序发送，fire-and-forget）
  * style: 'normal'（默认）| 'rap'（节奏感强，传给 Fish-Speech） */
 async function sendVoiceChunks(toUserId, text, style = 'normal') {
-  if (!globalBotClient || !globalBotReady) return;
+  if (!getBotClient() || !getBotReady()) return;
   const chunks = splitTtsChunks(text, 200);
   let sent = 0;
   for (const chunk of chunks) {

@@ -130,7 +130,7 @@ app.post('/api/wecom/push-reply', async (req, res) => {
       }
       return; // 私聊路径已在上方处理日志，提前返回
     }
-    const channel = isGroup ? (globalBotReady ? 'bot' : 'app') : 'bot';
+    const channel = isGroup ? (getBotReady() ? 'bot' : 'app') : 'bot';
     logger.info('异步回复已发送', { fromUser, chatId, isGroup, channel, actor: 'lucas' });
   } catch (e) {
     logger.error('异步回复发送失败', { error: e.message });

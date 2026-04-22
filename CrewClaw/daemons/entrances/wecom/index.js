@@ -252,6 +252,8 @@ function initBotConnection() {
     WECOM_BOT_ID, WECOM_BOT_SECRET, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
     setGlobalBotReady: (v) => { globalBotReady = v; },
     setGlobalBotClient: (v) => { globalBotClient = v; },
+    getBotClient: () => globalBotClient,
+    getBotReady:  () => globalBotReady,
     getFamilyMembers: () => familyMembers,
     getTaskManager:   () => taskManager,
     getDemoGroupConfig: () => demoGroupConfig,

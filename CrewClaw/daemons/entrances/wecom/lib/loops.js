@@ -778,7 +778,7 @@ ${precomputedTechDebtSignals}
 
     // 调用 Andy（独立 session，Plan 模式，不影响正常流水线）
     logger.info('Andy HEARTBEAT 夜间规划：发送 prompt', { signalCount: 11 });
-    callGatewayAgent('andy', heartbeatPrompt, 'heartbeat-cron')
+    callGatewayAgent('andy', heartbeatPrompt, 'heartbeat-cron', 600000)
       .then(reply => {
         logger.info('Andy HEARTBEAT 规划完成', { reply: (reply || '').slice(0, 200) });
 
