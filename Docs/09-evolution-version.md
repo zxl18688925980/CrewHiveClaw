@@ -3933,3 +3933,55 @@ SE 超然观测者原则落地：移除所有 Bot 降级逻辑 + 移除 Andy 审
 ### 越界干预记录
 
 本次变更由系统工程师发起并主导（正确越界）：发现 Bot 降级逻辑和 SE 审批机制违反「SE 超然观测者」原则，属于架构级错误，通过代码变更和认知文件更新完成矫正。记录于此作为后续设计参考。
+
+---
+
+## v711 · SE 可观测性修复 + Readme 正朔刷新
+
+**日期**：2026-04-22
+**类型**：越界干预（SE 主导可观测性修复）+ 正朔刷新
+
+### 背景
+
+延续上一会话的 SE 可观测性审计工作，并完成本会话的 Readme 系列文档刷新（将代码变更同步至正朔）。
+
+### 关键变更
+
+**SE 可观测性补全（`crewclaw-routing/index.ts`）**：
+
+审计发现两处 SE 观测盲点并修复：
+
+1. **`request_andy_evaluation`**（Andy 工具）：Lisa-evaluator 审 Andy spec，但 SE 之前完全看不到审查结果。补充两个 `notifyEngineer`：
+   - 调 evaluator 前：`【Andy 请求 Spec 审查】[req_id] spec_summary...`
+   - 结果返回后：`【Spec 审查结论】[req_id] PASS ✅ / FAIL ❌ + 结论摘要`
+   与 `request_evaluation`（Lisa 工具）的对称可观测性对齐。
+
+2. **`cancel_task`**（Lucas 工具）：Lucas 叫停任务时 SE 完全不知情。补充 `notifyEngineer`：
+   - `markTaskStatus(target.id, 'cancelled')` 之后：`【任务叫停】Lucas 取消了任务\nID: xxx\n需求：...`
+
+编译验证通过（`check-plugin.sh` exit 0），Gateway 重启成功（`/health` ok）。
+
+**`00-project-overview.md` 正朔刷新（6 处更新）**：
+
+将前几个版本（pipeline 任务统一、Andy HEARTBEAT 计划模式）的代码变更同步至文档：
+
+1. **外循环流程图（Line 464）**：`main-pending-tasks.json` → `task-registry.json`（requires_approval 标记说明）
+2. **`evaluate_system` 描述（Line 1524）**：写入目标改为 `task-registry.json`，补充 requires_approval=false/true 说明
+3. **`log_improvement_task` 描述（Line 1526）**：路径改为 `data/learning/task-registry.json`
+4. **定时任务表（Line 2086）**：Andy HEARTBEAT 改为 `23:00-23:30 CST 固定窗口`，描述改为计划模式
+5. **Andy HEARTBEAT 全描述（Line 2844）**：整段替换为计划模式描述（三步骤 + JSON 计划 + requires_approval 批准规则 + Skill 结晶规则）
+6. **SE 观测信号表（Line 1557 后）**：新增 `data/learning/task-registry.json` 行（包含 API 端点说明）
+
+**正朔协议**：Andy 认知文件已正确使用 `task-registry` 引用，无需更新。
+
+### 文件变更清单
+
+| 文件 | 变更内容 |
+|------|---------|
+| `CrewClaw/crewclaw-routing/index.ts` | `request_andy_evaluation` 补充 2 个 notifyEngineer；`cancel_task` 补充 1 个 notifyEngineer |
+| `Docs/00-project-overview.md` | 6 处更新（详见上方）|
+| `HomeAI/CLAUDE.md` | 版本 v710→v711，Readme 刷新记录 |
+
+### 越界干预记录
+
+`request_andy_evaluation` 和 `cancel_task` 可观测性修复属于基础设施层面的架构修正（SE 超然观测者原则），由系统工程师主导介入，记录于此。

@@ -11902,9 +11902,20 @@ last_used: null
           `请对照评估标准逐项审查，输出 PASS / FAIL 结论和具体检查项。`,
         ].filter(Boolean).join("\n");
 
+        // 通知 SE：Andy 发起独立 Spec 审查
+        void notifyEngineer(
+          `【Andy 请求 Spec 审查】${p.requirement_id ? `[${p.requirement_id}]` : ""}\n${p.spec_summary.slice(0, 150)}`,
+          "pipeline", DESIGNER_AGENT_ID,
+        );
+
         try {
           const evalReply = await callGatewayAgent("lisa-evaluator", evalPrompt, 300_000, threadId, DESIGNER_AGENT_ID);
           const passed = evalReply.includes("PASS") && !evalReply.includes("FAIL");
+          // 通知 SE：Spec 审查结论
+          void notifyEngineer(
+            `【Spec 审查结论】${p.requirement_id ? `[${p.requirement_id}]` : ""} ${passed ? "PASS ✅" : "FAIL ❌"}\n${evalReply.slice(0, 300)}`,
+            "pipeline", DESIGNER_AGENT_ID,
+          );
           // Evaluator FAIL → 立即通知 Lucas（需求方），避免需求方空等
           if (!passed) {
             const lucasNotifyPrompt = [
@@ -12923,6 +12934,12 @@ last_used: null
 
         // 标记取消
         markTaskStatus(target.id, "cancelled");
+
+        // 通知 SE：Lucas 叫停了任务
+        void notifyEngineer(
+          `【任务叫停】Lucas 取消了任务\nID: ${target.id}\n需求：${target.requirement.slice(0, 100)}`,
+          "info", FRONTEND_AGENT_ID,
+        );
 
         // 如果是排队任务，同时从 task-queue.jsonl 中删除
         if (target.status === "queued") {

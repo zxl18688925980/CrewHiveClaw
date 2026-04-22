@@ -461,9 +461,9 @@ Main 在系统中具有独特的上帝视角：能访问全量 ChromaDB（所有
     ↓ 机械运行，产出可量化的原始结果（召回命中数 / 填充率 / 文件存在性 / 需求覆盖数）
 教师模型（Main，Claude Sonnet 4.6，上帝视角）
     ↓ 对原始结果做判断：哪里退化？哪里从未被覆盖？盲区在哪一层？
-main-pending-tasks.json（进化意见，含具体改进建议）
+task-registry.json（进化意见以流水线任务形式写入，requires_approval 标记控制自动入队 / 待 SE 批准）
     ↓
-系统工程师审阅 → 决定是否介入
+系统工程师审阅 → 批准 / 拒绝 pending-review 任务
 ```
 
 - **教师工具**：机械可重复执行，确定性。负责从真实数据提取测试用例、运行评测、收集原始结果数字。工具层面不做判断，只产出事实。
@@ -1521,9 +1521,9 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `evaluate_l2`          | Engineering Anything 交付能力：任务类型覆盖度（task-registry 去重）、端到端交付成功率（opencode 近 10 次成功率）、交付物多样性（App/generated/ 文件数）、**三角色协作链健康**（task-registry completed/failed 比例，不含 cancelled/queued）|
 | `evaluate_l3`          | 组织协作进化 四维度：**①成员画像**（inject.md 含蒸馏信息比例——行为模式/沟通风格/协作关系等关键词覆盖率）、**②关系图谱**（Kuzu 协作边 co_discusses/requests_from/supports/role_in_context）、**③影子Agent**（ChromaDB shadow_interactions 演进环记录数 + 访客 Registry active/dormant/archived 统计）、**④跨成员感知**（关系蒸馏日志上次运行时间 + 成员档案含协作信息比例）|
 | `evaluate_l4`          | 系统自我演化状态（两层）：【系统层】进化信号（S1：skill-candidates + dpo-candidates，区分 pending vs total 避免堆总量误导）、知识内化（蒸馏产出 + codebase_patterns）、Skill 积累（S3：同时统计 native + archive 两个目录，三角色总数）+ 三阶段机制运转状态（Phase 1 draft 自动生成率 / Phase 2 usage 覆盖率 / Phase 3 迭代+废弃统计）、Andy 巡检时效（距上次 HEARTBEAT 小时数）+ Skill 健康审计产出、**AGENTS.md 规则收敛度**（三角色合计规则行数，lower_better，越少说明行为越内化到权重）、**路由阈值进化**（route-events.jsonl 近 200 条本地路由占比，越高说明本地模型承担越多）；【模型层】按 pattern_type 分组统计 dpo-candidates.jsonl 积累量（⚪/🟡/🔴，距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势、本地模型就绪状态；**模型能力评估（evaluate_local_model）**：Kuzu 家人事实自动生成知识题（0.4 权重）+ ChromaDB 真实对话测对话能力（0.6 权重），零硬编码，第二个部署有数据即可运行 |
-| `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`）；**进化意见生成器**（规则驱动 IIFE，return 前插入）：检测 5 类信号——L1 问题率（>12%/25% 两档）/ L2 交付成功率（<60%）/ L4 DPO 达阈值 / L4 信号积压（>30）/ L4 Andy HEARTBEAT 超时（>48h），行动就绪条件自动写入 `main-pending-tasks.json`（pending status），输出 `▶ 进化意见（N 条）` 或 `▶ 进化意见：无需干预`。业主发「系统评估」即触发 |
+| `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`）；**进化意见生成器**（规则驱动 IIFE，return 前插入）：检测 5 类信号——L1 问题率（>12%/25% 两档）/ L2 交付成功率（<60%）/ L4 DPO 达阈值 / L4 信号积压（>30）/ L4 Andy HEARTBEAT 超时（>48h），行动就绪条件自动写入 `task-registry.json`（requires_approval=false 直接入队；=true 进入 pending-review 等 SE 批准），输出 `▶ 进化意见（N 条）` 或 `▶ 进化意见：无需干预`。业主发「系统评估」即触发 |
 | `update_heartbeat`     | 追加监控观察（`append_observation`）/ 标记日报已发（`mark_daily_sent`，清空待汇总观察）|
-| `log_improvement_task` | 记录监控发现的系统改进点到 `data/main-pending-tasks.json`；必填 `action_type`（`agents_md` 改行为规则 / `code_fix` 改代码 / `readme` 改正朔刷新认知 / `observe` 积累数据再判断），工程师收到任务即知推荐动作；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
+| `log_improvement_task` | 记录监控发现的系统改进点到 `data/learning/task-registry.json`；必填 `action_type`（`agents_md` 改行为规则 / `code_fix` 改代码 / `readme` 改正朔刷新认知 / `observe` 积累数据再判断），工程师收到任务即知推荐动作；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
 
 典型远程调试流程：改完插件代码 → `restart_gateway` → `test_lucas` → 确认修复，全程企业微信完成。
 
@@ -1555,6 +1555,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `data/learning/opencode-sessions.json` | opencode session 状态持久化 | wecom-entrance 重启后 Andy 仍可通过 `get_opencode_result` 查询历史 session |
 | `data/learning/followup-queue.jsonl` | 协作链完成时写入（taskId / userId / 需求摘要 / 交付时间 / status=pending）；Lucas 20:00 HEARTBEAT 扫描后标记 `status=sent` | 观察 `pending` 条目是否被 Lucas 按时跟进 |
 | `data/learning/andy-goals.jsonl` | Andy HEARTBEAT Check 0 写入（id / trigger / description / actionTaken / status）；每次最多新增一条，上次 pending/in_progress 时优先推进上次目标 | 观察 `trigger` 是否反映真实薄弱指标；`status` 能否推进到 completed |
+| `data/learning/task-registry.json` | Andy HEARTBEAT 夜间规划输出（基础设施写入）+ evaluate_system 进化意见写入；`requires_approval=false` 的任务直接进入执行队列，`requires_approval=true` 的任务进入 pending-review | 通过 Main 通道查看和操作待审批任务（API：`GET /api/main/pipeline-tasks`、`POST /:id/approve`、`POST /:id/cancel`）；`agents_md` 类和 `architecture_proposal` 类任务必须 SE 批准后才执行 |
 
 ### 框架角色能力契约
 
@@ -2083,7 +2084,7 @@ CODE_CALLS（有向边）
 | 凌晨 3 点 | 团队洞察蒸馏 | Andy 视角分析家人行为模式 → Kuzu `andy→person` Fact |
 | 凌晨 4 点 | 协作关系蒸馏 | `distill-relationship-dynamics.py`，人与人协作边 + 演进环 |
 | 凌晨 5 点 | 代码图谱增量重建 | `build-code-graph.py --incremental`，核心路径约 39 秒 |
-| 凌晨 6 点 | Andy HEARTBEAT | 例行动作最后——消费 Main 评估 + 蒸馏结果 + skill-candidates，退步维度高亮 |
+| 23:00-23:30（CST 固定窗口）| Andy HEARTBEAT | 综合分析全天信号（Kuzu 结晶候选/skill-candidates/behavior_patterns/技术雷达等）→ 输出 JSON 改进计划（max 5 条）→ 基础设施写入 task-registry.json（requires_approval=false 直接入队，true 待 SE 批准）|
 | 每周一凌晨 7 点 | L4 DPO 周级扫描 | `generate_dpo_good_responses(threshold=10)`，有结果推送工程师审批 |
 | 每日 20:00 | Lucas HEARTBEAT | 开发任务跟进（followup-queue.jsonl pending 条目） |
 
@@ -2841,7 +2842,7 @@ flag_for_skill({
 
 **L4 激活**：能力进化机制成熟后，两个角色获得真正的主动行为，写入各自 HEARTBEAT.md：
 
-- **Andy**：HEARTBEAT 分两层——**Check 0（目标闭环，两步强制）**：① 先强制更新上轮 `andy-goals.jsonl` 中所有 `in_progress` 目标的状态（done / blocked / continued），不得跳过；② 再读 gateway-watchdog 预注入的系统健康快照（opencode matchRate 趋势 / decisions 各类型条目数），识别最薄弱指标、生成新目标并立即行动。**Check 1~9（响应式处理）**：巡检 Kuzu `has_pattern`（`confidence ≥ 0.8`）+ `skill-candidates.jsonl` pending 条目，判断是否直接调 `trigger_lisa_implementation` 结晶 Skill（不再等系统工程师审批，自主实现）；**预计算注入（12 个数据块全覆盖 + Skill 使用统计）**：检查 0/1/2/3/4/7/8/10/11/12/13/14 全部由 gateway-watchdog 预计算注入 HEARTBEAT prompt（含系统健康快照、Kuzu 结晶候选、skill-candidates、链路健康、behavior_patterns、知识注入、主动搜索状态、spec 回溯、技术雷达、代码图谱变化、架构提案信号、技术债信号），Andy 直接读取即可，不依赖 exec 查询 ChromaDB；**Skill 健康审计（新增）**：预计算注入 `skill-usage.jsonl` 最近 7 天使用统计（每个 Skill 的 usage_count / success_count / deviated 次数），Andy 判断：usage_count=0 且 age>7 天 → 标 deprecated；success_rate < 30% 且 usage_count>5 → 标需迭代；trigger_count 高但 usage_count 低 → 改 description；**Check 8 主动学习**：每 7 天读一篇 Obsidian `04-系统工程师关键决策记录/`，提炼设计洞察写入 decisions（source=proactive_learning），让 Andy 理解设计来时路，从「任务执行者」转向「系统思考者」；**三维主动性体系（Check 10-14）**：①事件感知维度——opencode 完成后 spec vs diff 对照反思（6h 冷却）、Lisa 连续 ≥3 次报实现阻塞后分析能力缺口（4h 冷却）、代码图谱重建后检测架构漂移（每日 5am）；②知识获取维度——Check 10 每周 spec 回溯（回顾本周 spec 精确度）、Check 11 每两周技术雷达（搜索关注方向最新进展）、Check 12 每日代码变化感知（更新 ARCH.md）；③自主判断维度——Check 13 每月架构改进提案（积累 ≥3 条同方向信号后主动提出）、Check 14 每两周技术债标记（识别高频修改文件和耦合过重模块）。信号跨维流转：事件感知维度事件沉淀 decisions → 自主判断维度 Check 13 聚合信号 → 达阈值后提案；**透明化**：HEARTBEAT 结果非 `HEARTBEAT_OK` 时（有主动行动），基础设施层自动 fire-and-forget 推送工程师通道，工程师可随时感知 Andy 在做什么
+- **Andy**：**计划模式（23:00-23:30 CST 固定窗口）**。HEARTBEAT prompt 由 gateway-watchdog 预计算注入全天信号汇总（Kuzu 结晶候选 / skill-candidates / behavior_patterns / 知识注入 / spec 回溯 / 技术雷达 / 代码图谱变化 / 架构提案信号 / 技术债信号），Andy 直接读取，不依赖 exec 查询 ChromaDB。**第零步（L4 控制检查）**：调 `check_l4_control()`，`global_pause=true` 跳过所有主动改进，只输出暂停说明。**第一步（上轮目标闭环）**：读上轮 `in_progress` 目标，逐一评估为 completed / abandoned / in_progress（含 progressNote）；仍有未闭环条目时不生成新计划，先闭环上轮。**第二步（综合分析全天信号）**：整体看完所有信号，重点关注：agent=andy 的 Kuzu 结晶候选（confidence≥0.8 且次数≥3）、skill-candidates 积压、behavior_patterns 规则缺口（≥3次）、知识注入可转 spec 的洞察、Spec 回溯 matchRate 缺口、技术雷达搜索窗口（≥14 天）、代码图谱结构性变化、架构提案信号（≥3 条同方向 decision）、技术债（高频修改文件 / 高调用深度函数）、主动学习状态（≥7 天未学）。**第三步（输出改进计划）**：分析完成后输出 JSON 数组（max 5 条，按 priority 降序，每类 action_type 最多 1-2 条；无明确信号支撑 → 输出空数组）。基础设施解析 JSON，按 `requires_approval` 标记自动提交到 `task-registry.json`（`false` 直接入执行队列；`true` 进入 pending-review 等 SE 批准）。`agents_md` / `architecture_proposal` 类任务必须 `requires_approval=true`，其余默认 `false`。**Skill 结晶规则**：先 `clawhub search` 检查生态覆盖 → 再 `skill_manage(list)` 检查重叠 → 均无覆盖才 `skill_manage(create, layer="archive")` 写归档层；只处理 agent=andy 的模式。**透明化**：有改进计划时基础设施自动推送工程师通道，无改进点时输出 `HEARTBEAT_OK`
 - **Lisa**：每周回顾 `code_history`，把新的实现模式提炼写回 `MEMORY.md`；每次 HEARTBEAT 扫描 `behavior_patterns`，同类模式出现 3 次以上 → 格式化提案 → `notify_engineer` 发系统工程师审批（与 Andy 相同的规则自进化管道）
 
 两个行为都是「真正需要 LLM 判断」的任务，值得一次 Agent 调用。在此之前不填，是避免为了形式完整而浪费调用。

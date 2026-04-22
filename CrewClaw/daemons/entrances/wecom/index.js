@@ -5207,12 +5207,13 @@ ${factsDesc}`;
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
     // ── 进化意见生成（规则驱动，不靠模型推断）──────────────────────────────
-    // 检测各层明确条件 → 生成 actionable 建议 → 行动就绪的自动写入 pending-tasks
+    // 检测各层明确条件 → 生成 actionable 建议 → 行动就绪的写入 task-registry.json
+    // requires_approval 规则：agents_md（核心行为规则变更）→ pending-review；其他 → 直接 queued
     const evolutionAdvice = (() => {
       const advice = [];
       const autoTasks = [];
       const nowIso = new Date().toISOString();
-      const tasksPath = path.join(HOMEAI_ROOT, 'Data', 'main-pending-tasks.json');
+      const taskRegPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
 
       // L1：Lucas 问题率
       const l1IssueM = l1.match(/(\d+) 条疑似问题/);
@@ -5222,7 +5223,8 @@ ${factsDesc}`;
         const rate = docs > 0 ? issues / docs : 0;
         if (rate > 0.25) {
           advice.push(`🔴 L1：Lucas 问题率 ${(rate * 100).toFixed(0)}%（${issues}/${docs}），行为铁律需加强`);
-          autoTasks.push({ priority: 'high', action_type: 'agents_md',
+          // 修改行为规则 → 需要 SE 批准
+          autoTasks.push({ priority: 'high', action_type: 'agents_md', requires_approval: true,
             title: `Lucas 质量恶化（问题率 ${(rate * 100).toFixed(0)}%）`,
             description: `evaluate_l1 检测到 Lucas 问题率 ${(rate * 100).toFixed(0)}%（${issues}/${docs} 条）。建议：检查近期 conversations 集合找典型模式，更新 lucas-behavioral-rules.json 补充铁律。` });
         } else if (rate > 0.12) {
@@ -5236,7 +5238,8 @@ ${factsDesc}`;
         const succ = parseInt(l2RateM[1]), total = parseInt(l2RateM[2]);
         if (total >= 5 && succ / total < 0.6) {
           advice.push(`⚠️ L2：交付成功率 ${succ}/${total}（${(succ/total*100).toFixed(0)}%），三角色协作链需检查`);
-          autoTasks.push({ priority: 'medium', action_type: 'code_fix',
+          // 代码修复 → 直接进队列
+          autoTasks.push({ priority: 'medium', action_type: 'code_fix', requires_approval: false,
             title: `L2 交付成功率低（${(succ/total*100).toFixed(0)}%），协作链需排查`,
             description: `evaluate_l2 检测到交付成功率 ${succ}/${total}。建议查看 task-registry.json 中 failed 任务的失败原因，检查 Andy→Lisa 触发链。` });
         }
@@ -5246,7 +5249,8 @@ ${factsDesc}`;
       const ripePatterns = (l4.match(/🔴[^\n]+已达阈值[^\n]*/g) || []);
       if (ripePatterns.length > 0) {
         advice.push(`🔴 L4：${ripePatterns.length} 个 DPO 模式达内化阈值，应触发微调训练`);
-        autoTasks.push({ priority: 'high', action_type: 'code_fix',
+        // 微调训练 → 直接进队列
+        autoTasks.push({ priority: 'high', action_type: 'code_fix', requires_approval: false,
           title: `DPO ${ripePatterns.length} 个模式达内化阈值，待触发微调`,
           description: `evaluate_l4 检测到模式达 50 条阈值：${ripePatterns.slice(0, 3).map(m => m.trim()).join('；')}。建议运行 run-finetune.sh 启动微调训练。` });
       }
@@ -5263,7 +5267,7 @@ ${factsDesc}`;
       const andyHbM = l4.match(/Andy HEARTBEAT 上次巡检[^（]*（([\d.]+)h 前）/);
       if (andyHbM && parseFloat(andyHbM[1]) > 48) {
         advice.push(`⚠️ L4：Andy HEARTBEAT 已 ${andyHbM[1]}h 未触发，L4 自进化停滞`);
-        autoTasks.push({ priority: 'medium', action_type: 'code_fix',
+        autoTasks.push({ priority: 'medium', action_type: 'code_fix', requires_approval: false,
           title: `Andy HEARTBEAT 停滞（${andyHbM[1]}h 未运行）`,
           description: `Andy HEARTBEAT 已 ${andyHbM[1]}h 未巡检，L4 系统层自进化停滞。建议检查 runAndyHeartbeatLoop 是否正常调度。` });
       }
@@ -5282,20 +5286,37 @@ ${factsDesc}`;
         return '\n\n**▶ 进化意见：无需干预** — 各层状态正常，系统自主运行中。';
       }
 
-      // 写入 pending-tasks
+      // 写入 task-registry.json（统一流水线，SE 在看板上叫停或批准）
       if (autoTasks.length > 0) {
         try {
-          let stored = { tasks: [] };
-          try { stored = JSON.parse(fs.readFileSync(tasksPath, 'utf8')); } catch {}
+          let entries = [];
+          try { entries = JSON.parse(fs.readFileSync(taskRegPath, 'utf8')); } catch {}
           for (const t of autoTasks) {
-            stored.tasks.push({ id: `mt-ev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, createdAt: nowIso, source: 'evaluate_system', status: 'pending', ...t });
+            entries.push({
+              id: `req_ev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              requirement: t.description,
+              title: t.title,
+              submittedBy: 'evaluate-system',
+              submittedAt: nowIso,
+              // requires_approval=true → SE 在看板批准后才进队列；false → 直接 queued
+              status: t.requires_approval ? 'pending-review' : 'queued',
+              taskType: t.action_type,
+              priority: t.priority,
+              requires_approval: t.requires_approval,
+              source: 'evaluate-system',
+              lucasAcked: false,
+            });
           }
-          fs.writeFileSync(tasksPath, JSON.stringify(stored, null, 2), 'utf8');
+          fs.writeFileSync(taskRegPath, JSON.stringify(entries, null, 2), 'utf8');
         } catch (_) {}
       }
 
-      return `\n\n**▶ 进化意见（${advice.length} 条）**\n${advice.join('\n')}` +
-        (autoTasks.length > 0 ? `\n_已自动写入 ${autoTasks.length} 条改进任务_` : '');
+      const pendingReview = autoTasks.filter(t => t.requires_approval).length;
+      const autoQueued    = autoTasks.filter(t => !t.requires_approval).length;
+      const taskSummary = autoTasks.length > 0
+        ? `\n_已写入流水线：${autoQueued} 条自动进队 + ${pendingReview > 0 ? `${pendingReview} 条待 SE 批准` : '0 条待批准'}_`
+        : '';
+      return `\n\n**▶ 进化意见（${advice.length} 条）**\n${advice.join('\n')}${taskSummary}`;
     })();
 
     return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}${evolutionAdvice}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}\n\n---\n📊 [交互式仪表盘](${EVAL_DASHBOARD_URL})`;
@@ -7109,6 +7130,74 @@ app.get('/api/demo-proxy/visitor-tasks', (req, res) => {
   }
 });
 
+// ─── SE 流水线任务看板（Main 专属，全量视图 + 叫停 + 批准）────────────────────
+// 认证：X-SE-Token 必须等于 WECOM_OWNER_ID（SE 身份）
+function verifySEToken(req, res) {
+  const token = (req.headers['x-se-token'] || '').trim();
+  if (!token || token !== WECOM_OWNER_ID) {
+    res.status(403).json({ success: false, message: 'SE 身份验证失败' });
+    return false;
+  }
+  return true;
+}
+function readTaskRegistry() {
+  const p = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
+  try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : []; } catch { return []; }
+}
+function writeTaskRegistry(entries) {
+  const p = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
+  fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8');
+}
+
+// GET /api/main/pipeline-tasks — SE 看全量任务（所有 submittedBy，含系统生成的）
+app.get('/api/main/pipeline-tasks', (req, res) => {
+  if (!verifySEToken(req, res)) return;
+  const entries = readTaskRegistry();
+  // 按状态排序：pending-review → queued → running → completed/failed（最近的在前）
+  const order = { 'pending-review': 0, queued: 1, running: 2, completed: 3, failed: 4, cancelled: 5 };
+  entries.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || new Date(b.submittedAt) - new Date(a.submittedAt));
+  res.json({ success: true, total: entries.length, tasks: entries });
+});
+
+// POST /api/main/pipeline-tasks/:id/approve — pending-review → queued（SE 批准）
+app.post('/api/main/pipeline-tasks/:id/approve', (req, res) => {
+  if (!verifySEToken(req, res)) return;
+  const { id } = req.params;
+  const entries = readTaskRegistry();
+  const idx = entries.findIndex(e => e.id === id);
+  if (idx === -1) return res.status(404).json({ success: false, message: '任务不存在' });
+  if (entries[idx].status !== 'pending-review') {
+    return res.status(400).json({ success: false, message: `当前状态 ${entries[idx].status}，只有 pending-review 可批准` });
+  }
+  entries[idx].status = 'queued';
+  entries[idx].approvedAt = new Date().toISOString();
+  entries[idx].approvedBy = 'se';
+  writeTaskRegistry(entries);
+  logger.info('SE 批准任务进队列', { taskId: id, title: entries[idx].title });
+  res.json({ success: true, task: entries[idx] });
+});
+
+// POST /api/main/pipeline-tasks/:id/cancel — SE 叫停任意任务（不受 submittedBy 限制）
+app.post('/api/main/pipeline-tasks/:id/cancel', (req, res) => {
+  if (!verifySEToken(req, res)) return;
+  const { id } = req.params;
+  const { reason = 'SE 叫停' } = req.body || {};
+  const entries = readTaskRegistry();
+  const idx = entries.findIndex(e => e.id === id);
+  if (idx === -1) return res.status(404).json({ success: false, message: '任务不存在' });
+  if (['completed', 'cancelled'].includes(entries[idx].status)) {
+    return res.status(400).json({ success: false, message: `任务已 ${entries[idx].status}，无法叫停` });
+  }
+  const prevStatus = entries[idx].status;
+  entries[idx].status = 'cancelled';
+  entries[idx].cancelledAt = new Date().toISOString();
+  entries[idx].cancelledBy = 'se';
+  entries[idx].cancelReason = reason;
+  writeTaskRegistry(entries);
+  logger.info('SE 叫停任务', { taskId: id, prevStatus, reason });
+  res.json({ success: true, task: entries[idx] });
+});
+
 // POST /api/demo-proxy/submit-requirement — 访客提交开发需求
 app.post('/api/demo-proxy/submit-requirement', async (req, res) => {
   const { requirement, visitorCode } = req.body || {};
@@ -7566,7 +7655,7 @@ async function runMainMonitorLoop() {
 // 每 24 小时触发一次，预计算 Kuzu 结晶候选 + skill-candidates.jsonl pending 条目，
 // 拼入 heartbeat prompt 后调 Andy，Andy 决策是否固化、发送提案给系统工程师。
 
-const ANDY_HEARTBEAT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 每 24 小时
+// Andy HEARTBEAT 固定在每天 23:00-23:30 CST 运行（夜间批量，收集全天信号后统一规划）
 
 async function runAndyHeartbeatLoop() {
   logger.info('Andy HEARTBEAT 巡检循环触发');
@@ -7909,62 +7998,137 @@ os._exit(0)
       precomputedTechDebtSignals = `读取失败：${e.message.slice(0, 60)}`;
     }
 
-    const heartbeatPrompt = `[ANDY HEARTBEAT ${now}]
+    const heartbeatPrompt = `[ANDY 夜间自我进化计划 ${now}]
+
+今天已结束。以下是今天积累的所有进化信号，你的任务是**综合分析后输出改进计划**。
+
+---
 
 ${andyHeartbeatContent}
 
 ---
 
-【预计算数据 - 检查 0 前置：上轮进行中目标（Loop 2 闭环）】
+【今日信号汇总】
+
+上轮进行中目标（需先闭环）：
 ${precomputedInProgressGoals}
 
-【预计算数据 - 检查 1：Kuzu 结晶候选（has_pattern, confidence >= 0.8）】
+Kuzu 高置信度结晶候选（confidence >= 0.8）：
 ${precomputedPatterns}
 
-【预计算数据 - 检查 2：skill-candidates.jsonl pending 条目】
+Skill 候选积压（skill-candidates.jsonl pending）：
 ${precomputedSkillCandidates}
 
-【预计算数据 - 检查 3：链路健康】
-当前 skill-candidates pending 数量：${precomputedSkillCandidates.startsWith('无') ? 0 : precomputedSkillCandidates.split('\n').filter(l => l.startsWith('-')).length}
-最后 HEARTBEAT 巡检时间：${now}
-
-【预计算数据 - 检查 4：behavior_patterns（Andy 近期行为模式）】
+Andy 近期行为模式（behavior_patterns）：
 ${precomputedBehaviorPatterns}
 
-【预计算数据 - 检查 5：knowledge_injection（近期知识注入）】
+近期知识注入（knowledge_injection）：
 ${precomputedKnowledgeInjections}
 
-【预计算数据 - 检查 8：主动学习状态】
+主动学习状态：
 ${precomputedLearningState}
 
-【预计算数据 - 检查 10：spec 回溯数据（每周一次）】
+Spec 回溯数据（每周一次）：
 ${precomputedSpecRetro}
 
-【预计算数据 - 检查 11：技术雷达状态（每两周一次）】
+技术雷达状态（每两周一次）：
 ${precomputedTechRadar}
 
-【预计算数据 - 检查 12：代码图谱变化摘要（每日）】
+代码图谱变化摘要（每日）：
 ${precomputedCodeGraphChanges}
 
-【预计算数据 - 检查 13：架构提案信号（每月一次）】
+架构提案信号（每月一次）：
 ${precomputedArchProposalSignals}
 
-【预计算数据 - 检查 14：技术债信号（每两周一次）】
+技术债信号（每两周一次）：
 ${precomputedTechDebtSignals}
 
-请按 HEARTBEAT.md 中的检查流程执行巡检。所有预计算数据已注入，直接读取即可，无需 exec 查询。检查 8（主动学习）满足条件时用 read_file 读决策记录。检查 10-14 为新增主动性检查（事件感知/知识获取/自主判断 三维度），按触发条件执行。`;
+---
 
-    // 调用 Andy（独立 session，不影响正常流水线）
-    logger.info('Andy HEARTBEAT：发送巡检 prompt', { patternCount: precomputedPatterns === '无高置信度候选（confidence >= 0.8）' ? 0 : 'N/A' });
+## 你的任务
+
+**第一步：综合分析**（整体看完所有信号再判断，不要逐条处理）
+- 哪些信号今天最重要？
+- 哪些信号相互关联，可以合并为一个改进任务？
+- 优先级：修复质量退化 > 改进流水线 > 能力扩展 > 技术探索
+
+**第二步：输出改进计划**（严格按以下 JSON 格式，基础设施会自动提交到流水线，逐条执行）
+
+输出一个 JSON 代码块，格式如下：
+
+\`\`\`json
+[
+  {
+    "title": "任务标题（30字以内）",
+    "description": "具体要做什么，包含足够的上下文让实现时直接理解（100字以内）",
+    "action_type": "code_fix | agents_md | skill_crystallization | spec_improvement | tech_research | architecture_proposal",
+    "priority": "high | medium | low",
+    "requires_approval": false
+  }
+]
+\`\`\`
+
+**requires_approval 规则**：
+- \`agents_md\` 且涉及核心行为规则变更 → true（SE 在看板批准）
+- \`architecture_proposal\` → true
+- 其他所有 → false（直接进队列，系统自主执行）
+
+**限制**：
+- 最多 5 条任务，按优先级排序
+- 只提有明确信号支撑的改进（无信号不造任务）
+- 上轮 in_progress 目标必须先在 andy-goals.jsonl 中标记 completed/abandoned，再生成新任务`;
+
+    // 调用 Andy（独立 session，Plan 模式，不影响正常流水线）
+    logger.info('Andy HEARTBEAT 夜间规划：发送 prompt', { signalCount: 11 });
     callGatewayAgent('andy', heartbeatPrompt, 'heartbeat-cron')
       .then(reply => {
-        logger.info('Andy HEARTBEAT 巡检完成', { reply: (reply || '').slice(0, 150) });
+        logger.info('Andy HEARTBEAT 规划完成', { reply: (reply || '').slice(0, 200) });
 
-        // 有主动行动时推送工程师通道（fire-and-forget，不阻塞时间戳更新）
-        if (reply && !reply.toUpperCase().includes('HEARTBEAT_OK') && WECOM_OWNER_ID) {
-          sendLongWeComMessage(WECOM_OWNER_ID, `[Andy HEARTBEAT 报告] 告警等级：${reply.includes('❌') || reply.includes('🔴') ? '🔴' : '🟡'}\n[${now}]\n\n${reply}`)
-            .then(() => logger.info('Andy HEARTBEAT：巡检报告已推送工程师'))
-            .catch(e => logger.warn('Andy HEARTBEAT：推送工程师失败', { error: e.message }));
+        // ── 解析 Andy 输出的改进计划 JSON，逐条提交到 task-registry.json ──────────
+        let submittedCount = 0, pendingReviewCount = 0;
+        try {
+          const jsonMatch = (reply || '').match(/```json\s*([\s\S]*?)```/);
+          if (jsonMatch) {
+            const plan = JSON.parse(jsonMatch[1].trim());
+            if (Array.isArray(plan) && plan.length > 0) {
+              const taskRegPath = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
+              let entries = [];
+              try { entries = JSON.parse(fs.readFileSync(taskRegPath, 'utf8')); } catch {}
+              const nowIso = new Date().toISOString();
+              for (const t of plan.slice(0, 5)) { // 最多 5 条
+                if (!t.title || !t.description) continue;
+                const requiresApproval = !!(t.requires_approval);
+                entries.push({
+                  id: `req_hb_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                  requirement: t.description,
+                  title: t.title,
+                  submittedBy: 'andy-heartbeat',
+                  submittedAt: nowIso,
+                  status: requiresApproval ? 'pending-review' : 'queued',
+                  taskType: t.action_type || 'code_fix',
+                  priority: t.priority || 'medium',
+                  requires_approval: requiresApproval,
+                  source: 'andy-heartbeat',
+                  lucasAcked: false,
+                });
+                if (requiresApproval) pendingReviewCount++; else submittedCount++;
+              }
+              fs.writeFileSync(taskRegPath, JSON.stringify(entries, null, 2), 'utf8');
+              logger.info('Andy HEARTBEAT：改进计划已提交流水线', { autoQueued: submittedCount, pendingReview: pendingReviewCount });
+            }
+          }
+        } catch (e) {
+          logger.warn('Andy HEARTBEAT：解析计划 JSON 失败', { error: e.message });
+        }
+
+        // 通知 SE：推送计划摘要（无论是否有任务都通知，让 SE 知道规划完成了）
+        if (WECOM_OWNER_ID) {
+          const taskNote = submittedCount + pendingReviewCount > 0
+            ? `\n自动进队：${submittedCount} 条 | 待批准：${pendingReviewCount} 条`
+            : '\n无改进任务（各项指标正常）';
+          sendLongWeComMessage(WECOM_OWNER_ID, `[Andy 夜间规划完成] ${now}${taskNote}\n\n${(reply || '').slice(0, 500)}`)
+            .then(() => logger.info('Andy HEARTBEAT：规划报告已推送 SE'))
+            .catch(e => logger.warn('Andy HEARTBEAT：推送 SE 失败', { error: e.message }));
         }
 
         // 更新 Andy HEARTBEAT.md 时间戳
@@ -8024,12 +8188,19 @@ app.listen(PORT, () => {
     logger.info('Main 监控循环已注册', { intervalHours: MAIN_MONITOR_INTERVAL_MS / 3600000, 协议: '告警级别3紧急/告警级别2日报/告警级别1静默' });
   }
 
-  // 启动 Andy HEARTBEAT 巡检循环（L4 系统自我演化，启动后延迟 15 分钟首次触发，之后每 24 小时）
-  setTimeout(() => {
-    runAndyHeartbeatLoop();
-    setInterval(runAndyHeartbeatLoop, ANDY_HEARTBEAT_INTERVAL_MS);
-  }, 15 * 60 * 1000);
-  logger.info('Andy HEARTBEAT 巡检循环已注册', { intervalHours: ANDY_HEARTBEAT_INTERVAL_MS / 3600000 });
+  // Andy HEARTBEAT：每天 23:00-23:30 CST 固定窗口，每 5 分钟检查一次是否到窗口
+  // 夜间批量模式：收集全天信号 → Andy 综合规划 → 逐条提交 task-registry.json
+  let _andyHbLastDate = '';
+  setInterval(() => {
+    const cstNow = new Date(Date.now() + 8 * 3600000); // UTC+8
+    const h = cstNow.getUTCHours(), m = cstNow.getUTCMinutes();
+    const dateStr = cstNow.toISOString().slice(0, 10);
+    if (h === 23 && m < 30 && _andyHbLastDate !== dateStr) {
+      _andyHbLastDate = dateStr;
+      runAndyHeartbeatLoop();
+    }
+  }, 5 * 60 * 1000);
+  logger.info('Andy HEARTBEAT 夜间规划循环已注册', { window: '23:00-23:30 CST' });
 });
 
 module.exports = app;
