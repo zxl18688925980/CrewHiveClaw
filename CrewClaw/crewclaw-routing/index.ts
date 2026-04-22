@@ -3272,11 +3272,11 @@ function isNonHumanUser(userId: string): boolean {
     userId === "group" || userId === "owner" || userId === "heartbeat-cron" || UUID_RE.test(userId);
 }
 
-async function pushToChannel(response: string, userId: string, success: boolean): Promise<void> {
+async function pushToChannel(response: string, userId: string, success: boolean, fromAgent?: string): Promise<void> {
   if (isNonHumanUser(userId)) {
     // 系统任务失败时通知 SE（HEARTBEAT / evaluate_system 等无人类接收方）
     if (!success) {
-      void notifyEngineer(`【系统任务异常】${response.slice(0, 200)}`, "info", "system");
+      void notifyEngineer(`【系统任务异常】${response.slice(0, 200)}`, "info", fromAgent ?? "system");
     }
     return;
   }
@@ -3331,11 +3331,11 @@ async function notifyEngineerReview(params: {
 
 // 事件驱动主动推送：pipeline 完成立即通知请求者，不等 Lucas 定时循环
 // 私聊：直接调用 send_message；群聊：降级到 push-reply；system-scheduler 不推送
-async function pushEventDriven(text: string, userId: string, success: boolean): Promise<void> {
+async function pushEventDriven(text: string, userId: string, success: boolean, fromAgent?: string): Promise<void> {
   if (!userId || isNonHumanUser(userId)) return;
   const msg = success ? text : `❌ 处理失败：${text}`;
   if (userId.startsWith("group:")) {
-    await pushToChannel(msg, userId, success);
+    await pushToChannel(msg, userId, success, fromAgent);
     return;
   }
   try {
@@ -3349,7 +3349,7 @@ async function pushEventDriven(text: string, userId: string, success: boolean): 
   } catch (_e) {
     // 主动推送失败，降级到 push-reply 兜底
     // msg 已包含 "❌ 处理失败：" 前缀（success=false 时），传 true 防止 push-reply 再次添加前缀
-    await pushToChannel(msg, userId, true);
+    await pushToChannel(msg, userId, true, fromAgent);
   }
 }
 
@@ -3418,13 +3418,14 @@ async function runLucasPipelineFallback(
     ].join("\n");
     const lucasDecision = await callGatewayAgent(FRONTEND_AGENT_ID, lucasDecisionPrompt, 60_000, undefined, FRONTEND_AGENT_ID);
     if (lucasDecision) {
-      await pushToChannel(lucasDecision, params.userId, true);
+      await pushToChannel(lucasDecision, params.userId, true, FRONTEND_AGENT_ID);
     }
   } catch (_e) {
     await pushToChannel(
       `Andy 分析了这个需求，但没有启动实现。可能是需求细节还不够，稍后可以把具体场景说得更详细一些。`,
       params.userId,
       true,
+      FRONTEND_AGENT_ID,
     );
   }
 }
@@ -3499,6 +3500,7 @@ async function runAndyPipeline(params: {
       `⏳ 开发团队正忙（当前有 ${andyRunningCount} 个需求在处理），你的需求已排队，稍后自动开始。`,
       params.userId,
       true,
+      FRONTEND_AGENT_ID,
     );
   }
   await andyAcquire();
@@ -3560,7 +3562,7 @@ async function runAndyPipeline(params: {
           `完成后用一句话总结规划方案。`,
         ].join("\n")) + historyBlock;
     if (isTaskCancelled(requirementId)) {
-      void pushToChannel(`ℹ️ 任务已被叫停，Andy 完成后不会继续触发 Lisa。`, params.userId, true);
+      void pushToChannel(`ℹ️ 任务已被叫停，Andy 完成后不会继续触发 Lisa。`, params.userId, true, FRONTEND_AGENT_ID);
     } else {
       // ── Exploration 阶段通知：Andy 开始分析前告知 Lucas（类 ClaudeCode Discovery 可见性）──
       void notifyEngineer(`【${requirementId}】Andy 开始探索需求：${params.requirement.slice(0, 80)}`, "pipeline", DESIGNER_AGENT_ID);
@@ -3703,12 +3705,13 @@ async function runAndyPipeline(params: {
           `口气自然随意，不要用 ❌ 开头。`,
         ].join("\n");
         const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 30_000, undefined, FRONTEND_AGENT_ID);
-        await pushToChannel(lucasVerdict, params.userId, true);
+        await pushToChannel(lucasVerdict, params.userId, true, FRONTEND_AGENT_ID);
       } catch (_e) {
         await pushToChannel(
           `Andy 处理这个需求时遇到了问题，协作链暂停了。你可以稍后重新发一遍需求，或者等我排查好了告诉你。`,
           params.userId,
           true,
+          FRONTEND_AGENT_ID,
         );
       }
     }
@@ -9118,7 +9121,7 @@ last_used: null
 
         // 立即返回给 Lucas，不等 Lisa 完成
         if (requestorId && requestorId !== "unknown") {
-          void pushToChannel(`正在分析 Bug：${p.symptom.slice(0, 60)}...`, requestorId, true);
+          void pushToChannel(`正在分析 Bug：${p.symptom.slice(0, 60)}...`, requestorId, true, DESIGNER_AGENT_ID);
         }
 
         // 异步执行完整流程：Lisa 分析 → Andy 技术审阅（顺带告知 Lucas 知情）→ Lisa 修复 → Andy 验收 → Lucas 沟通用户
@@ -9292,7 +9295,7 @@ last_used: null
               } catch (_e) {
                 // 验收失败降级：直接推 Lisa 修复报告给用户
                 if (requestorId && requestorId !== "unknown") {
-                  void pushToChannel(lisaFixResponse, requestorId, true);
+                  void pushToChannel(lisaFixResponse, requestorId, true, IMPLEMENTOR_AGENT_ID);
                 }
               }
             }
@@ -9316,6 +9319,7 @@ last_used: null
                 ].join("\n"),
                 requestorId,
                 false,
+                DESIGNER_AGENT_ID,
               );
             }
           }
@@ -9553,7 +9557,7 @@ last_used: null
 
         // 叫停检查：Lucas 已取消此任务，不再触发 Lisa
         if (p.requirement_id && isTaskCancelled(p.requirement_id)) {
-          void pushToChannel(`ℹ️ 任务「${p.requirement_id}」已被叫停，Lisa 不会开始实现。`, requestorId, true);
+          void pushToChannel(`ℹ️ 任务「${p.requirement_id}」已被叫停，Lisa 不会开始实现。`, requestorId, true, IMPLEMENTOR_AGENT_ID);
           return {
             content: [{ type: "text", text: "⚠️ 任务已被 Lucas 叫停，实现取消。" }],
             details: { cancelled: true, requirementId: p.requirement_id },
@@ -9663,7 +9667,7 @@ last_used: null
                       `如果用户问起进展，可以告知"遇到了技术问题正在处理"。`,
                     ].join("\n"), 20_000, undefined, DESIGNER_AGENT_ID);
                     if (requestorId && requestorId !== "unknown") {
-                      void pushToChannel(`Coordinator 执行异常：${errMsg}`, requestorId, false);
+                      void pushToChannel(`Coordinator 执行异常：${errMsg}`, requestorId, false, DESIGNER_AGENT_ID);
                     }
                   }
                 })();
@@ -9984,6 +9988,7 @@ last_used: null
                     `⚠️ 框架文件变更告警\nAndy spec 涉及核心框架文件：[${fileList}]\nLisa 即将实现，请关注并验收。\nSpec 摘要：${p.spec.slice(0, 200)}`,
                     process.env.WECOM_OWNER_ID ?? "",
                     false,
+                    DESIGNER_AGENT_ID,
                   );
                 }
               }
@@ -10628,7 +10633,7 @@ last_used: null
             "pipeline",
             IMPLEMENTOR_AGENT_ID,
           );
-          await pushEventDriven(responseText, requestorId, success);
+          await pushEventDriven(responseText, requestorId, success, IMPLEMENTOR_AGENT_ID);
           // Fix 3：Lisa 完成后主动更新任务状态（覆盖 runAndyPipeline 可能已标的 failed）
           // 增强约束：标记 completed 前，确认 git diff 仍有变更（防止 Lisa 幻觉或变更被撤销）
           if (reqId.startsWith("req_")) {
@@ -11281,7 +11286,7 @@ last_used: null
         } catch (_e) { /* pipeline 目录不存在或为空，继续 */ }
 
         if (requestorId && requestorId !== "unknown") {
-          void pushToChannel(`Andy 正在触发集成阶段...`, requestorId, true);
+          void pushToChannel(`Andy 正在触发集成阶段...`, requestorId, true, DESIGNER_AGENT_ID);
         }
 
         (async () => {
@@ -11309,12 +11314,12 @@ last_used: null
                 "请用一两句人话告诉家人：做好了什么功能、怎么用。语气自然，不要技术术语。",
               ].join("\n\n");
               const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 60_000, undefined, DESIGNER_AGENT_ID);
-              void pushToChannel(lucasVerdict ?? lisaResponse, requestorId, true);
+              void pushToChannel(lucasVerdict ?? lisaResponse, requestorId, true, FRONTEND_AGENT_ID);
             }
           } catch (e) {
             const errMsg = e instanceof Error ? e.message : String(e);
             if (requestorId && requestorId !== "unknown") {
-              void pushToChannel(`集成阶段出错：${errMsg}`, requestorId, false);
+              void pushToChannel(`集成阶段出错：${errMsg}`, requestorId, false, IMPLEMENTOR_AGENT_ID);
             }
           }
         })();
