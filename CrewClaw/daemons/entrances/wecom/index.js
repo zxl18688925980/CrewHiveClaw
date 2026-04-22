@@ -5351,9 +5351,54 @@ async function saveTechDocToObsidian(category, doc) {
 // Main 主入口：Claude 对话 + 工具循环
 // source: 'wecom_remote'（企业微信远程）| 'cli_local'（CLI 本地，业主在身边）
 async function handleMainCommand(content, userId = 'owner', source = 'wecom_remote', imageBase64 = null, imageMime = null, imageRelativePath = null) {
+  // ── 基础设施恢复命令（拦截最优先，不依赖 Gateway 存活）─────────────────────
+  const trimmed = content.trim();
+
+  if (/^(恢复gateway|重启gateway|restart gateway|恢复系统|重启系统)$/i.test(trimmed)) {
+    try {
+      const uid = process.getuid();
+      execSync(`launchctl enable gui/${uid}/ai.openclaw.gateway 2>/dev/null || true`, { shell: true });
+      execSync(`bash ${process.env.HOME}/.openclaw/start-gateway.sh &`, { shell: true, detached: true });
+      // 重置后备通知计时器，Gateway 恢复后下次真正挂才重新通知
+      _gatewayDownNotifiedAt = 0;
+      return '✅ Gateway 重启指令已发出（launchctl enable + start-gateway.sh）。\n\n约 15 秒后可验证：发「检查gateway」确认状态。';
+    } catch (e) {
+      return `❌ Gateway 重启失败：${e.message}`;
+    }
+  }
+
+  if (/^(检查gateway|gateway状态|gateway status)$/i.test(trimmed)) {
+    try {
+      const resp = await fetch('http://localhost:18789/health', { signal: AbortSignal.timeout(5000) });
+      const data = await resp.json().catch(() => ({}));
+      return resp.ok
+        ? `✅ Gateway 正常（HTTP ${resp.status}）${data.status ? ' · ' + data.status : ''}`
+        : `⚠️ Gateway 异常（HTTP ${resp.status}）`;
+    } catch (e) {
+      return `❌ Gateway 不可达：${e.message}`;
+    }
+  }
+
+  if (/^(重启wecom|restart wecom|重启入口)$/i.test(trimmed)) {
+    try {
+      execSync('pm2 restart wecom-entrance', { shell: true });
+      return '✅ wecom-entrance 重启指令已发出。';
+    } catch (e) {
+      return `❌ 重启失败：${e.message}`;
+    }
+  }
+
+  if (/^(重启watchdog|restart watchdog)$/i.test(trimmed)) {
+    try {
+      execSync('pm2 restart gateway-watchdog', { shell: true });
+      return '✅ gateway-watchdog 重启指令已发出。';
+    } catch (e) {
+      return `❌ 重启失败：${e.message}`;
+    }
+  }
+
   // ── 审批命令（拦截优先于 Claude，不消耗 token）────────────────────────────
   const APPROVALS_FILE = path.join(HOMEAI_ROOT, 'Data', 'pending-approvals.json');
-  const trimmed = content.trim();
 
   // 查待审批
   if (/^(查待审批|查审批|待审批列表|审批列表)$/.test(trimmed)) {
