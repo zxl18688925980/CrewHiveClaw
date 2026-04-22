@@ -34,12 +34,14 @@ const fs             = require('fs');
 const { execSync }   = require('child_process');
 const { WSClient }   = require('@wecom/aibot-node-sdk');
 // Anthropic SDK 已移除（Main 改用 MiniMax，不再直接调用 Claude API）
-const { chromium }   = require('playwright');
+// chromium (playwright) → lib/media.js
 const { TaskManager } = require('./task-manager');
 require('dotenv').config();
 // task-registry 模块（logger 就绪后在下方 initTaskRegistry() 中初始化）
 const _taskRegistryFactory = require('./lib/task-registry');
 let _tr;  // 由 initTaskRegistry() 填充
+const _mediaFactory = require('./lib/media');
+let _media;  // 由 initMedia() 填充
 
 // ── 时区统一：所有时间戳使用 CST（UTC+8）──
 const nowCST   = () => new Date(Date.now() + 8 * 3600000).toISOString().replace('Z', '+08:00');
@@ -50,10 +52,15 @@ let readTaskRegistry, writeTaskRegistry, inferTaskAgent;
 let readTaskRegistryRaw, markTaskLucasAcked;
 let readL4Tasks, readL4Control, writeL4Control;
 
+// media 函数/常量占位符（由 initMedia() 在 logger 就绪后填充）
+let parseDouyinShareText, scrapeVideoContent, scrapeDouyinContent;
+let transcribeDouyinAudio, transcribeLocalVideo, analyzeDouyinFrames;
+let formatVideoInjection, scrapeWechatArticle, describeImageWithLlava;
+let VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE;
+
 // ─── 全局路径常量（必须在任何函数定义之前）────────────────────────────────────
 const HOMEAI_ROOT     = path.join(__dirname, '../../../../..');
-const WHISPER_MODEL   = path.join(HOMEAI_ROOT, 'Models/whisper/ggml-base.bin');
-const COOKIES_FILE    = path.join(HOMEAI_ROOT, 'config/douyin-cookies.txt');
+// WHISPER_MODEL / COOKIES_FILE → lib/media.js
 // L4_TASKS_FILE / L4_CONTROL_FILE → lib/task-registry.js
 
 // readL4Tasks / readL4Control / writeL4Control → lib/task-registry.js
@@ -64,499 +71,11 @@ const L4_STOP_RE   = /^叫停\s+(l4-\d+)/i;
 const L4_PAUSE_RE  = /^暂停\s*l4$/i;
 const L4_RESUME_RE = /^恢复\s*l4$/i;
 
-// 视频平台 URL 正则
-// yt-dlp 可处理的平台（YouTube / Bilibili / 微博 / 小红书）
-const VIDEO_URL_RE   = /https?:\/\/(www\.)?(youtube\.com\/watch|youtu\.be\/|bilibili\.com\/video|b23\.tv\/|m\.weibo\.cn\/status\/|weibo\.com\/tv\/|video\.weibo\.com\/|t\.cn\/|xiaohongshu\.com\/(explore|discovery)|xhslink\.com\/)[^\s]*/i;
-// 抖音单独处理（移动端分享页方案，无需登录/签名）
-const DOUYIN_URL_RE  = /https?:\/\/(v\.douyin\.com\/|www\.douyin\.com\/video)[^\s]*/i;
+// VIDEO_URL_RE / DOUYIN_URL_RE → lib/media.js
 
-/**
- * 从抖音分享文本中提取视频标题/摘要。
- * 抖音分享格式通常为：「6.64 复制打开抖音，看看【作者的作品】标题... URL」
- * 返回 { shareText, title } 或 null（仅 URL，无可用文本）
- */
-function parseDouyinShareText(fullText, url) {
-  // 去掉 URL 本身及之后内容
-  const textBeforeUrl = fullText.replace(url, '').trim();
-  // 去掉「X.XX 复制打开抖音，看看」等前缀噪音
-  const cleaned = textBeforeUrl
-    .replace(/^\d+\.\d+\s*复制打开抖音[，,]看看\s*/u, '')
-    .replace(/^复制打开抖音[，,]看看\s*/u, '')
-    .trim();
-  if (!cleaned || cleaned.length < 4) return null;
-  // 尝试提取【作者】后的标题
-  const titleMatch = cleaned.match(/【[^】]+】(.+)/u);
-  const title = titleMatch ? titleMatch[1].trim() : cleaned;
-  return { shareText: cleaned, title };
-}
+// parseDouyinShareText / scrapeVideoContent → lib/media.js
 
-/**
- * 用 yt-dlp 提取视频元数据 + 字幕，返回 { title, uploader, duration, desc, transcript } 或 null
- * transcript 优先取自动字幕（前 1000 字），无字幕则取 description 前 500 字
- *
- * 抖音需要登录态 cookie：
- *   方法一（推荐）：在 Chrome 登录抖音，yt-dlp 自动读取
- *   方法二（备用）：用浏览器插件导出 cookies.txt，保存到 HomeAI/config/douyin-cookies.txt
- */
-async function scrapeVideoContent(url) {
-  const YT_DLP        = '/opt/homebrew/bin/yt-dlp';
-  const COOKIES_FILE  = path.join(HOMEAI_ROOT, 'config/douyin-cookies.txt');
-  const { execFileSync } = require('child_process');
-
-  // 尝试顺序：① cookies 文件 → ② Chrome 浏览器 cookies → ③ 裸跑（YouTube/Bilibili 不需要登录）
-  let meta = null;
-  const baseArgs   = ['--dump-json', '--no-download', '--quiet', url];
-  const tryArgs    = [
-    ...(fs.existsSync(COOKIES_FILE) ? [['--cookies', COOKIES_FILE, ...baseArgs]] : []),
-    ['--cookies-from-browser', 'chrome', ...baseArgs],
-    baseArgs,
-  ];
-
-  for (const args of tryArgs) {
-    try {
-      const raw = execFileSync(YT_DLP, args, { encoding: 'utf8', timeout: 30000 });
-      meta = JSON.parse(raw.trim());
-      break;
-    } catch {}
-  }
-
-  if (!meta) return null;
-
-  const title    = meta.title || '';
-  const uploader = meta.uploader || meta.channel || '';
-  const duration = meta.duration ? `${Math.floor(meta.duration / 60)}分${meta.duration % 60}秒` : '';
-  const desc     = (meta.description || '').slice(0, 300);
-
-  // 尝试提取自动字幕（中文优先，回落英文）
-  let transcript = '';
-  const tmpBase = `/tmp/yt-dlp-sub-${Date.now()}`;
-  try {
-    const subArgs = [
-      '--no-download', '--quiet',
-      '--write-auto-subs', '--sub-format', 'vtt',
-      '--sub-langs', 'zh,zh-Hans,zh-CN,en',
-      '-o', tmpBase + '.%(ext)s',
-      url,
-    ];
-    execFileSync(YT_DLP, subArgs, { encoding: 'utf8', timeout: 30000 });
-
-    // 找生成的 vtt 文件
-    const { execSync } = require('child_process');
-    const subFiles = execSync(`ls ${tmpBase}*.vtt 2>/dev/null || true`, { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-    if (subFiles.length) {
-      const vtt = fs.readFileSync(subFiles[0], 'utf8');
-      // 去掉 VTT 头和时间戳行，提取纯文本
-      transcript = vtt
-        .split('\n')
-        .filter(l => l.trim() && !l.startsWith('WEBVTT') && !l.match(/^\d{2}:\d{2}/) && !l.match(/^\d+$/))
-        .join(' ')
-        .replace(/<[^>]+>/g, '')
-        .replace(/\s+/g, ' ')
-        .slice(0, 1000);
-      // 清理临时文件
-      for (const f of subFiles) { try { fs.unlinkSync(f); } catch {} }
-    }
-  } catch {}
-
-  return { title, uploader, duration, desc, transcript };
-}
-
-const DOUYIN_MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 TikTok/26.2.0 iPhone13,3';
-const DOUYIN_HEADERS = {
-  'User-Agent': DOUYIN_MOBILE_UA,
-  'Accept': 'text/html,application/xhtml+xml',
-  'Accept-Language': 'zh-CN,zh;q=0.9',
-  'Referer': 'https://www.douyin.com/',
-};
-const WHISPER_CLI   = '/opt/homebrew/bin/whisper-cli';
-// WHISPER_MODEL 依赖 HOMEAI_ROOT，在其定义后声明（见下方）
-
-// TTS 配置
-const TTS_PYTHON    = '/opt/homebrew/opt/python@3.11/bin/python3.11';  // edge-tts 安装在 3.11
-const TTS_VOICE     = 'zh-CN-YunxiNeural';  // 普通话男声，edge-tts fallback 用
-const LOCAL_TTS_URL = 'http://127.0.0.1:8082/tts';  // 本地 TTS 服务（优先，PM2: local-tts）
-
-// 触发帧分析的关键词（家人说「看画面/截图/图片/文字」等时激活 LLaVA）
-const FRAME_ANALYSIS_RE = /画面|截图|图片|文字|写的|画的|屏幕|PPT|幻灯|看看图/u;
-
-/**
- * 通过移动端分享页提取抖音视频元数据 + 音频转录（+ 可选画面分析）
- * 流程：
- *   1. 短链 → 跟随跳转 → 提取 videoId
- *   2. iesdouyin.com/share/video/{id}/ → HTML 提取 desc/nickname/CDN URL
- *   3. ffmpeg 只提取音频（视频不落盘） → whisper-cli 中文 ASR → transcript
- *   4. 若 withFrames=true：ffmpeg 抽帧 → LLaVA 逐帧描述 → frameDesc
- * 返回 { title, uploader, desc, transcript, frameDesc } 或 null
- */
-async function scrapeDouyinContent(url, { withFrames = false } = {}) {
-  try {
-    // Step 1: 提取 videoId
-    let videoId = null;
-    const directIdMatch = url.match(/\/video\/(\d{15,20})/);
-    if (directIdMatch) {
-      videoId = directIdMatch[1];
-    } else {
-      const resp = await axios.get(url, {
-        headers: DOUYIN_HEADERS, maxRedirects: 5, timeout: 15000, validateStatus: () => true,
-      });
-      const finalUrl = resp.request?.res?.responseUrl || url;
-      const m = finalUrl.match(/\/video\/(\d{15,20})/);
-      if (m) videoId = m[1];
-    }
-    if (!videoId) {
-      logger.warn('scrapeDouyinContent: videoId 提取失败，短链未跳转到 /video/{id}', { url });
-      return { error: '短链跳转失败，无法识别视频ID，可能是链接已过期或格式错误' };
-    }
-
-    // Step 2: 分享页 HTML → 元数据 + CDN URL
-    // iesdouyin.com 已改为客户端渲染（2026-04），视频数据嵌在 window._ROUTER_DATA 里
-    const shareUrl = `https://www.iesdouyin.com/share/video/${videoId}/`;
-    const resp2 = await axios.get(shareUrl, {
-      headers: DOUYIN_HEADERS, timeout: 15000, validateStatus: () => true,
-    });
-    const html = typeof resp2.data === 'string' ? resp2.data : JSON.stringify(resp2.data);
-
-    // 新路径：解析 window._ROUTER_DATA → videoInfoRes.item_list[0]
-    let desc = '';
-    let uploader = '';
-    let cdnUrl = null;
-    const rdMatch = html.match(/window\._ROUTER_DATA\s*=\s*(\{[\s\S]*?\})(?=\s*<\/script>)/);
-    if (rdMatch) {
-      try {
-        const rd = JSON.parse(rdMatch[1]);
-        const page = rd.loaderData && rd.loaderData['video_(id)/page'];
-        const item = page && page.videoInfoRes && page.videoInfoRes.item_list && page.videoInfoRes.item_list[0];
-        if (item) {
-          desc = item.desc || '';
-          uploader = (item.author && item.author.nickname) || '';
-          // download_addr 最通用（直接下载 URL），优先用它
-          // play_addr 有 playwm（水印版，需特殊 Referer），降级备选
-          const downloadUrls = item.video && item.video.download_addr && item.video.download_addr.url_list || [];
-          const playUrls = item.video && item.video.play_addr && item.video.play_addr.url_list || [];
-          cdnUrl = downloadUrls[0] || playUrls.find(u => !u.includes('playwm')) || playUrls[0] || null;
-          // 构建 play（无水印）URL：从 playwm URL 去掉 "wm" 后缀
-          if (cdnUrl && cdnUrl.includes('playwm')) {
-            const playUrl = cdnUrl.replace('/playwm/', '/play/');
-            if (playUrl !== cdnUrl) cdnUrl = playUrl;
-          }
-          if (cdnUrl) {
-            logger.info('scrapeDouyinContent: CDN URL', { videoId, url: cdnUrl.slice(0, 80), isPlaywm: cdnUrl.includes('playwm') });
-          }
-          logger.info('scrapeDouyinContent: _ROUTER_DATA 解析成功', { videoId, desc: desc.slice(0, 40), hasCdn: !!cdnUrl });
-        } else {
-          const filterReason = page && page.videoInfoRes && page.videoInfoRes.filter_list && page.videoInfoRes.filter_list[0] && page.videoInfoRes.filter_list[0].filter_reason;
-          logger.warn('scrapeDouyinContent: item_list 为空', { videoId, filterReason });
-        }
-      } catch (parseErr) {
-        logger.warn('scrapeDouyinContent: _ROUTER_DATA 解析失败', { error: parseErr.message });
-      }
-    }
-
-    // 旧路径降级：_ROUTER_DATA 不存在时，尝试直接扫正则（兼容旧格式）
-    if (!desc) {
-      const descMatch = html.match(/"desc"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      const nickMatch = html.match(/"nickname"\s*:\s*"((?:[^"\\]|\\.){1,80})"/);
-      if (descMatch && descMatch[1].length >= 5) {
-        const unesc = s => s.replace(/\\n/g, '\n').replace(/\\\\u/g, '\\u').replace(/\\\\"/, '"').replace(/\\\\\\\\/g, '\\\\');
-        desc = unesc(descMatch[1]);
-        uploader = nickMatch ? unesc(nickMatch[1]) : '';
-        logger.info('scrapeDouyinContent: 旧正则降级成功', { videoId });
-      }
-    }
-
-    if (!desc) {
-      logger.warn('scrapeDouyinContent: desc 提取失败', { shareUrl, htmlLen: html.length });
-      return { error: '分享页解析失败，无法提取视频简介，可能是视频已删除或平台限制' };
-    }
-
-    // Step 4: 解析可下载的 CDN URL
-    // 策略：直接用 _ROUTER_DATA 中的 play/playwm URL（已验证可下载），yt-dlp 作为备选
-    // yt-dlp Douyin extractor 有已知 bug (#12669)，总是失败，白等 1-2 秒
-    let resolvedCdnUrl = null;
-    if (cdnUrl) {
-      // cdnUrl 已在上方处理：playwm → play（无水印）
-      resolvedCdnUrl = cdnUrl;
-      logger.info('scrapeDouyinContent: 使用 _ROUTER_DATA CDN URL', { videoId, url: resolvedCdnUrl.slice(0, 80) });
-    } else {
-      // _ROUTER_DATA 未拿到 CDN URL（罕见），尝试 yt-dlp
-      try {
-        const cookiesArgs = fs.existsSync(COOKIES_FILE)
-          ? ['--cookies', COOKIES_FILE]
-          : ['--cookies-from-browser', 'chrome'];
-        const ytOut = (await execFileAsync('/opt/homebrew/bin/yt-dlp', [
-          '--get-url', '--quiet', '--no-warnings',
-          '-f', 'bestaudio/best',
-          ...cookiesArgs,
-          `https://www.douyin.com/video/${videoId}`,
-        ], { encoding: 'utf8', timeout: 15000 })).trim();
-        if (ytOut && ytOut.startsWith('http')) {
-          resolvedCdnUrl = ytOut.split('\n')[0].trim();
-          logger.info('scrapeDouyinContent: yt-dlp 备选成功', { videoId, url: resolvedCdnUrl.slice(0, 80) });
-        }
-      } catch (ytErr) {
-        logger.warn('scrapeDouyinContent: yt-dlp 备选也失败', { error: ytErr.message?.slice(0, 100) });
-      }
-    }
-    let transcript = '';
-    if (resolvedCdnUrl && fs.existsSync(WHISPER_CLI) && fs.existsSync(WHISPER_MODEL)) {
-      transcript = await transcribeDouyinAudio(resolvedCdnUrl);
-    }
-
-    // Step 5: 画面帧分析（按需，withFrames=true 时才执行）
-    let frameDesc = '';
-    if (withFrames && resolvedCdnUrl) {
-      frameDesc = await analyzeDouyinFrames(resolvedCdnUrl);
-    }
-
-    return { title: desc, uploader, desc, transcript, frameDesc };
-  } catch (e) {
-    logger.warn('scrapeDouyinContent 失败', { error: e.message });
-    return { error: `提取过程异常：${e.message}` };
-  }
-}
-
-/** 异步 execFile 包装，不阻塞 Node.js 事件循环 */
-function execFileAsync(cmd, args, opts = {}) {
-  const { execFile } = require('child_process');
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, opts, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
-
-/**
- * ffmpeg 从 CDN URL 提取音频（不落盘视频） → whisper-cli 转录
- * 使用异步 execFile，不阻塞事件循环
- * 返回转录文字字符串，失败返回 ''
- */
-async function transcribeDouyinAudio(cdnUrl) {
-  const tmpAudio = `/tmp/douyin-audio-${Date.now()}.wav`;
-  try {
-    await execFileAsync('/opt/homebrew/bin/ffmpeg', [
-      '-y', '-loglevel', 'error',
-      '-headers', 'Referer: https://www.iesdouyin.com/\r\n',
-      '-user_agent', DOUYIN_MOBILE_UA,
-      '-i', cdnUrl,
-      '-vn', '-ar', '16000', '-ac', '1', '-f', 'wav',
-      '-t', '300',
-      tmpAudio,
-    ], { timeout: 60000 });
-
-    const result = await execFileAsync(WHISPER_CLI, [
-      '--model', WHISPER_MODEL,
-      '--language', 'zh',
-      '--no-timestamps',
-      '-f', tmpAudio,
-    ], { timeout: 120000, encoding: 'utf8' });
-
-    return result.trim().slice(0, 3000);
-  } catch (e) {
-    logger.warn('transcribeDouyinAudio 失败', { error: e.message });
-    return '';
-  } finally {
-    try { fs.unlinkSync(tmpAudio); } catch {}
-  }
-}
-
-/**
- * ffmpeg 从本地视频文件提取音频 → whisper-cli 转录
- * 用于家人直接发来的视频文件（非链接）
- */
-async function transcribeLocalVideo(videoPath) {
-  const tmpAudio = `/tmp/local-video-audio-${Date.now()}.wav`;
-  try {
-    await execFileAsync('/opt/homebrew/bin/ffmpeg', [
-      '-y', '-loglevel', 'error',
-      '-i', videoPath,
-      '-vn', '-ar', '16000', '-ac', '1', '-f', 'wav',
-      '-t', '300',
-      tmpAudio,
-    ], { timeout: 90000 });
-
-    const result = await execFileAsync(WHISPER_CLI, [
-      '--model', WHISPER_MODEL,
-      '--language', 'zh',
-      '--no-timestamps',
-      '-f', tmpAudio,
-    ], { timeout: 120000, encoding: 'utf8' });
-
-    return result.trim().slice(0, 3000);
-  } catch (e) {
-    logger.warn('transcribeLocalVideo 失败', { error: e.message });
-    return '';
-  } finally {
-    try { fs.unlinkSync(tmpAudio); } catch {}
-  }
-}
-
-/**
- * ffmpeg 从 CDN URL 抽取关键帧 → LLaVA 逐帧描述 → 汇总画面内容
- * 策略：每 5 秒抽 1 帧，最多 8 帧，缩放到 480px 宽（减小 LLaVA 处理量）
- * 返回汇总描述字符串，失败返回 ''
- */
-async function analyzeDouyinFrames(cdnUrl) {
-  const tmpDir = `/tmp/douyin-frames-${Date.now()}`;
-  try {
-    fs.mkdirSync(tmpDir, { recursive: true });
-
-    // 抽帧：每 5 秒 1 帧，最多 8 帧，480px 宽（异步，不阻塞事件循环）
-    await execFileAsync('/opt/homebrew/bin/ffmpeg', [
-      '-y', '-loglevel', 'error',
-      '-user_agent', DOUYIN_MOBILE_UA,
-      '-i', cdnUrl,
-      '-vf', 'fps=0.2,scale=480:-1',
-      '-frames:v', '8',
-      path.join(tmpDir, 'frame_%02d.jpg'),
-    ], { timeout: 60000 });
-
-    const frames = fs.readdirSync(tmpDir)
-      .filter(f => f.endsWith('.jpg'))
-      .sort()
-      .map(f => path.join(tmpDir, f));
-
-    if (!frames.length) return '';
-
-    // 逐帧调 LLaVA 描述
-    const descriptions = [];
-    for (let i = 0; i < frames.length; i++) {
-      const desc = await describeImageWithLlava(frames[i]);
-      if (desc) descriptions.push(`第${i + 1}帧：${desc}`);
-    }
-
-    return descriptions.join('\n');
-  } catch (e) {
-    logger.warn('analyzeDouyinFrames 失败', { error: e.message });
-    return '';
-  } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-  }
-}
-
-/** 将视频提取结果格式化为注入字符串 */
-function formatVideoInjection(video, url) {
-  const audioBody = video.transcript
-    ? `【语音转录】\n${video.transcript}`
-    : video.desc
-      ? `【视频描述】\n${video.desc}`
-      : '（无语音转录/描述）';
-  const frameBody = video.frameDesc
-    ? `\n\n【画面内容（AI视觉分析）】\n${video.frameDesc}`
-    : '';
-  return [
-    `\n\n【视频内容已自动提取】`,
-    `原始链接：${url}`,
-    `标题：${video.title}`,
-    video.uploader ? `来源：${video.uploader}` : '',
-    video.duration  ? `时长：${video.duration}` : '',
-    '',
-    audioBody + frameBody,
-  ].filter(s => s !== null && s !== undefined && !(s === '' && !video.uploader && !video.duration)).join('\n');
-}
-
-/** 用 Playwright 抓取微信公众号文章正文，返回 { title, text } 或 null */
-async function scrapeWechatArticle(url) {
-  let browser;
-  try {
-    browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-    await page.setExtraHTTPHeaders({
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50',
-    });
-    await page.goto(url, { waitUntil: 'commit', timeout: 30000 });
-    await page.waitForSelector('#js_content', { timeout: 15000 }).catch(() => {});
-
-    const result = await page.evaluate(() => {
-      const titleEl  = document.querySelector('#activity-name') || document.querySelector('h1');
-      const authorEl = document.querySelector('#js_name');
-      const bodyEl   = document.querySelector('#js_content');
-      if (!bodyEl) return null;
-      // 移除图片、按钮等无关元素，只取文字
-      bodyEl.querySelectorAll('img, video, iframe, br').forEach(el => {
-        if (el.tagName === 'BR') el.replaceWith('\n');
-        else el.remove();
-      });
-      return {
-        title:  (titleEl?.innerText || document.title || '').trim(),
-        author: (authorEl?.innerText || '').trim(),
-        text:   bodyEl.innerText.replace(/\n{3,}/g, '\n\n').trim(),
-      };
-    });
-
-    return result;
-  } catch (e) {
-    return null;
-  } finally {
-    if (browser) await browser.close().catch(() => {});
-  }
-}
-
-/**
- * 图片视觉描述：qwen3.6 Ollama（主）→ GLM vision 云端（降级）
- */
-async function describeImageWithLlava(imagePath) {
-  const base64Image = fs.readFileSync(imagePath).toString('base64');
-  const ext = path.extname(imagePath).toLowerCase().replace('.', '') || 'jpeg';
-  const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
-  const prompt = '请用中文详细描述这张图片的所有内容，包括文字、数字、地址、人物、物品、场景等，不要遗漏任何可见文字。';
-  const VISION_REFUSAL_RE = /无法(直接)?查看|没有(实际的?)?图片数据|无法(分析|处理)(图片|图像)|cannot (view|see|analyze|process) (the )?image/i;
-
-  // 主：Ollama qwen3.6 原生多模态
-  try {
-    const resp = await axios.post(
-      'http://127.0.0.1:11434/v1/chat/completions',
-      {
-        model: 'qwen3.6',
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-            { type: 'text', text: prompt },
-          ],
-        }],
-        max_tokens: 512,
-        temperature: 0,
-      },
-      { timeout: 120000 }
-    );
-    const result = resp.data?.choices?.[0]?.message?.content?.trim();
-    if (result && !VISION_REFUSAL_RE.test(result)) {
-      logger.info('qwen3.6 多模态描述成功');
-      return result;
-    }
-    if (result) {
-      logger.warn('qwen3.6 返回拒绝回复，降级 GLM', { preview: result.slice(0, 80) });
-    }
-  } catch (e) {
-    logger.warn('qwen3.6 vision 失败，降级 GLM', { error: e.message });
-  }
-
-  // 降级：GLM vision
-  const zhipuKey = process.env.ZAI_API_KEY || process.env.ZHIPU_API_KEY;
-  if (!zhipuKey) return null;
-  try {
-    const resp = await axios.post(
-      'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-      {
-        model: 'glm-4v-flash',
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-            { type: 'text', text: '请用中文详细描述这张图片的所有内容，包括文字、数字、地址、人物、物品、场景等，不要遗漏任何可见文字。' },
-          ],
-        }],
-        max_tokens: 500,
-      },
-      { headers: { Authorization: `Bearer ${zhipuKey}`, 'Content-Type': 'application/json' }, timeout: 30000 }
-    );
-    return resp.data?.choices?.[0]?.message?.content?.trim() || null;
-  } catch (e) {
-    logger.warn('GLM vision 失败', { error: e.message });
-    return null;
-  }
-}
+// scrapeDouyinContent…describeImageWithLlava → lib/media.js
 
 const logger = winston.createLogger({
   level: 'info',
@@ -593,6 +112,13 @@ function initTaskRegistry() {
      readTaskRegistryRaw, markTaskLucasAcked,
      readL4Tasks, readL4Control, writeL4Control } = _tr);
 }
+function initMedia() {
+  _media = _mediaFactory(logger);
+  ({ parseDouyinShareText, scrapeVideoContent, scrapeDouyinContent,
+     transcribeDouyinAudio, transcribeLocalVideo, analyzeDouyinFrames,
+     formatVideoInjection, scrapeWechatArticle, describeImageWithLlava,
+     VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE } = _media);
+}
 
 const GATEWAY_URL   = process.env.GATEWAY_URL   || 'http://localhost:18789';
 const GATEWAY_TOKEN = (() => {
@@ -620,6 +146,7 @@ try {
 // 演示群配置（独立于家庭配置，按 chatId 路由到通用 AI 人格）
 let demoGroupConfig = { chatIds: [], systemPrompt: '', maxTokens: 512 };
 initTaskRegistry();
+initMedia();
 
 function loadDemoGroupConfig() {
   try {
