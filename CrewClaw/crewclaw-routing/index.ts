@@ -3276,7 +3276,7 @@ async function pushToChannel(response: string, userId: string, success: boolean,
   if (isNonHumanUser(userId)) {
     // 系统任务失败时通知 SE（HEARTBEAT / evaluate_system 等无人类接收方）
     if (!success) {
-      void notifyEngineer(`【系统任务异常】${response.slice(0, 200)}`, "info", fromAgent ?? "system");
+      void notifyEngineer(`【系统任务异常·${fromAgent ?? "system"}】\n${response.slice(0, 300)}`, "intervention", fromAgent ?? "system");
     }
     return;
   }

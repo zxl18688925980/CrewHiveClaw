@@ -6885,7 +6885,7 @@ app.post('/api/wecom/send-to-group', async (req, res) => {
         fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `群消息未送达。\n目标群：${chatId}\n异常：${botErr.message}\n原消息：${text.slice(0, 300)}` }),
+          body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `⚠️ 群消息未送达。\n目标群：${chatId}\n异常：${botErr.message}\n原消息：${text.slice(0, 300)}` }),
         }).catch(() => {});
         return res.json({ success: false, error: botErr.message });
       }
@@ -7347,7 +7347,7 @@ app.post('/api/wecom/send-message', async (req, res) => {
     fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `私聊消息未送达。\n目标用户：${userId}\n异常：${errMsg}\n原消息：${displayText.slice(0, 300)}` }),
+      body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `⚠️ 私聊消息未送达。\n目标用户：${userId}\n异常：${errMsg}\n原消息：${displayText.slice(0, 300)}` }),
     }).catch(() => {});
     res.status(500).json({ success: false, error: errMsg });
   }
@@ -8241,7 +8241,7 @@ app.listen(PORT, () => {
       logger.warn('启动扫描：检测到孤儿任务，已标记 interrupted', { count: orphans.length, ids: orphans.map(o => o.id) });
       // 通知系统工程师
       for (const task of orphans) {
-        const msg = `【任务中断恢复】进程重启导致任务中断\n任务ID: ${task.id}\n标题: ${task.title || task.requirement?.slice(0, 50) || '(无标题)'}\nrunning→interrupted\n提交时间: ${task.submittedAt}`;
+        const msg = `【任务中断恢复】进程重启导致任务中断\n任务ID: ${task.id}\n标题: ${task.title || task.requirement?.slice(0, 50) || '(无标题)'}\n中断阶段: ${task.currentPhase || '未知'}\nrunning→interrupted\n提交时间: ${task.submittedAt}`;
         fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -8279,7 +8279,7 @@ app.listen(PORT, () => {
         const lastNotified = entry.stuckNotifiedAt ? new Date(entry.stuckNotifiedAt).getTime() : 0;
         if (now - lastNotified < NOTIFY_COOLDOWN_MS) continue;
         const hours = (runningFor / 3600000).toFixed(1);
-        const msg = `【任务疑似卡住】已 running ${hours}h 未完成\n任务ID: ${entry.id}\n标题: ${entry.title || entry.requirement?.slice(0, 50) || '(无标题)'}\n提交时间: ${entry.submittedAt}`;
+        const msg = `【任务疑似卡住】已 running ${hours}h 未完成\n任务ID: ${entry.id}\n标题: ${entry.title || entry.requirement?.slice(0, 50) || '(无标题)'}\n当前阶段: ${entry.currentPhase || '未知'}\n提交时间: ${entry.submittedAt}`;
         fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
