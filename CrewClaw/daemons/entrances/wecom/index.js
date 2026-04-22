@@ -187,6 +187,7 @@ function initMainTools() {
     nowCST,
     sendWeComFile,
     HOMEAI_ROOT,
+    VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE,
   });
   ({ callMainModel, executeMainTool, handleMainCommand, saveTechDocToObsidian, SAVE_DOC_RE, SAVE_TECH_RE } = _mt2);
 }

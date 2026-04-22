@@ -18,7 +18,8 @@ const { execSync, execFileSync } = require('child_process');
 const axios         = require('axios');
 
 module.exports = function createMainTools(logger, deps) {
-  const { readAgentModelConfig, callAgentModel, nowCST, sendWeComFile, HOMEAI_ROOT } = deps;
+  const { readAgentModelConfig, callAgentModel, nowCST, sendWeComFile, HOMEAI_ROOT,
+          VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE } = deps;
 
   // 剥离推理模型 <think>...</think> 块（MiniMax/GLM/DeepSeek-R1 等推理模型返回）
   function stripThink(text) {

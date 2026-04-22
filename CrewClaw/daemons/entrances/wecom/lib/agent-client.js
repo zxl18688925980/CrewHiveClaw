@@ -97,10 +97,13 @@ async function callAgentModel(agentId, systemPrompt, messages, maxTokens = 1024)
   } catch {
     completionsUrl = `${baseUrl}/chat/completions`;
   }
+  // GPT-5 系列（及部分新 OpenAI 模型）用 max_completion_tokens，其余用 max_tokens
+  const isOpenAI = completionsUrl.includes('api.openai.com');
+  const tokenParam = isOpenAI ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens };
   const resp = await fetch(completionsUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'system', content: systemPrompt }, ...messages] }),
+    body: JSON.stringify({ model, ...tokenParam, messages: [{ role: 'system', content: systemPrompt }, ...messages] }),
   });
   if (!resp.ok) {
     const errText = await resp.text().catch(() => `HTTP ${resp.status}`);
