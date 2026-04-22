@@ -3810,5 +3810,6 @@ async function handleMainCommand(content, userId = 'owner', source = 'wecom_remo
     saveTechDocToObsidian,
     SAVE_DOC_RE,
     SAVE_TECH_RE,
+    MAIN_SYSTEM_PROMPT,
   };
 };

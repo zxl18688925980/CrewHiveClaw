@@ -23,6 +23,8 @@ module.exports = function createLoops(logger, deps) {
     callGatewayAgent, callMainModel, executeMainTool,
     sendWeComMessage, sendLongWeComMessage,
     nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
+    getFamilyMembers,
+    MAIN_SYSTEM_PROMPT,
   } = deps;
 
 // ─── Lucas 主动循环（Proactive Loop）────────────────────────────────────────
@@ -92,7 +94,7 @@ async function runLucasProactiveLoop() {
   try {
     // 构建大小写不敏感的成员 userId 反查表（覆盖所有组织成员，不只家人）
     const memberUserIdMap = {};
-    for (const realId of Object.keys(familyMembers)) {
+    for (const realId of Object.keys(getFamilyMembers())) {
       memberUserIdMap[realId.toLowerCase()] = realId;
     }
 

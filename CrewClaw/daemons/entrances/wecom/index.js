@@ -75,7 +75,7 @@ let VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE;
 
 // main-tools 函数占位符（由 initMainTools() 在 sendWeComFile 就绪后填充）
 let callMainModel, executeMainTool;
-let handleMainCommand, saveTechDocToObsidian, SAVE_DOC_RE, SAVE_TECH_RE;
+let handleMainCommand, saveTechDocToObsidian, SAVE_DOC_RE, SAVE_TECH_RE, MAIN_SYSTEM_PROMPT;
 
 // loops 函数占位符（由 initLoops() 填充）
 let runLucasProactiveLoop, runMainMonitorLoop, runMainWeeklyEvaluation, runAndyHeartbeatLoop;
@@ -189,13 +189,15 @@ function initMainTools() {
     HOMEAI_ROOT,
     VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE,
   });
-  ({ callMainModel, executeMainTool, handleMainCommand, saveTechDocToObsidian, SAVE_DOC_RE, SAVE_TECH_RE } = _mt2);
+  ({ callMainModel, executeMainTool, handleMainCommand, saveTechDocToObsidian, SAVE_DOC_RE, SAVE_TECH_RE, MAIN_SYSTEM_PROMPT } = _mt2);
 }
 function initLoops() {
   _loops = _loopsFactory(logger, {
     callGatewayAgent, callMainModel, executeMainTool,
     sendWeComMessage, sendLongWeComMessage,
     nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
+    getFamilyMembers: () => familyMembers,
+    MAIN_SYSTEM_PROMPT,
   });
   ({ runLucasProactiveLoop, runMainMonitorLoop, runMainWeeklyEvaluation, runAndyHeartbeatLoop } = _loops);
 }
