@@ -2266,6 +2266,7 @@ PM2 日志目录：${HOMEAI_ROOT}/logs/pm2/
 - trigger_finetune：触发增量微调
 - scan_pipeline_health：全面扫描系统健康（PM2 + Gateway + 最近 1h 日志错误），返回结构化报告
 - scan_lucas_quality：扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空回复等质量问题
+- recall_se_history：召回最近 N 天的 SE 通知历史（ChromaDB agent_interactions），了解上次发现了什么问题/现在是否改善——建立跨对话记忆连续性（limit / days 可选）
 
 流水线任务看板（SE 专属，直接操作 task-registry.json，无需手动读文件）：
 - query_pipeline_tasks：查全量流水线任务（含用户提交 + 系统自动生成）。status_filter 可选 all / pending-review / queued / running / active（默认）
@@ -2619,6 +2620,18 @@ const MAIN_TOOLS = [
         action_type: { type: 'string', enum: ['agents_md', 'code_fix', 'readme', 'observe'], description: '建议干预类型——agents_md: 行为问题（幻觉承诺/回复风格/工具滥用），改 AGENTS.md 行为规则可修 | code_fix: 功能缺失/工具 bug/插件逻辑错误，需改代码 | readme: 架构级调整，需修正 Readme 正朔再刷新 Agent 认知 | observe: 信号尚弱，先积累数据再判断，暂不干预' },
       },
       required: ['title', 'description', 'priority', 'action_type'],
+    },
+  },
+  {
+    name: 'recall_se_history',
+    description: '召回最近 N 天的系统工程师通知历史（ChromaDB agent_interactions 集合）。用于建立跨对话记忆连续性——了解上次发现了什么问题、现在是否改善。返回通知摘要，按时间倒序。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: '返回条数（默认 20，最多 50）' },
+        days:  { type: 'number', description: '查最近 N 天（默认 14）' },
+      },
+      required: [],
     },
   },
 ];
@@ -4385,6 +4398,44 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+
+    // ── 外循环教师测试：逾期未交付需求检测（真实数据）──
+    // 从 ChromaDB requirements 集合找 outcome 为空且 >30 天的需求，作为 L2 交付盲点
+    try {
+      const reqColR = await fetch(`${CHROMA_API_BASE}/requirements`);
+      if (reqColR.ok) {
+        const { id: reqColId } = await reqColR.json();
+        const reqGetR = await fetch(`${CHROMA_API_BASE}/${reqColId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 200, include: ['documents', 'metadatas'] }),
+        });
+        if (reqGetR.ok) {
+          const reqData  = await reqGetR.json();
+          const reqMetas = reqData.metadatas  || [];
+          const reqDocs  = reqData.documents  || [];
+          const cutoff30 = Date.now() - 30 * 24 * 3600000;
+          const overdueItems = reqMetas.map((m, i) => ({ m, doc: reqDocs[i] || '' })).filter(({ m }) => {
+            const outcome  = (m?.outcome  || '').trim();
+            const status   = (m?.status   || '').toLowerCase();
+            const ts       = new Date(m?.timestamp || m?.created_at || '').getTime();
+            if (outcome && outcome !== 'pending' && status !== 'open') return false; // 已有结果
+            if (isNaN(ts) || ts >= cutoff30) return false; // 太新或无时间戳
+            return true;
+          });
+          if (overdueItems.length === 0) {
+            results.push('✅ 逾期未交付需求：无（所有 >30 天需求均已有 outcome）');
+          } else {
+            const examples = overdueItems.slice(0, 3).map(({ doc }) => doc.slice(0, 60)).join(' | ');
+            results.push(`⚠️ 逾期未交付需求（外循环教师）：${overdueItems.length} 条需求 >30 天无 outcome（示例：${examples}...）`);
+            if (score === '✅') score = '⚠️';
+          }
+        }
+      }
+    } catch (e) {
+      results.push(`⚪ 逾期需求检测跳过：${e.message.slice(0, 60)}`);
+    }
+
     // ── 数值评分 ──
     const _rub2 = loadRubric();
     const _L2I = _rub2?.layers?.L2?.items;
@@ -5239,6 +5290,53 @@ ${factsDesc}`;
 
     fs.writeFileSync(dpoCandPath, newLines.join('\n') + '\n', 'utf8');
     return `✅ approve_dpo_batch 完成：pattern=${patternType}，已确认 ${approvedCount} 条（confirmed=true）。\n这些条目现在可以进入本地模型微调队列。`;
+  }
+
+  if (toolName === 'recall_se_history') {
+    const limit = Math.min(toolInput.limit || 20, 50);
+    const days  = toolInput.days  || 14;
+    try {
+      const colResp = await fetch(`${CHROMA_API_BASE}/agent_interactions`);
+      if (!colResp.ok) return 'agent_interactions 集合不可达，ChromaDB 可能未运行';
+      const { id: colId } = await colResp.json();
+      const getResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: Math.min(limit * 3, 150), include: ['documents', 'metadatas'] }),
+      });
+      if (!getResp.ok) return `recall_se_history 查询失败：${getResp.status}`;
+      const data = await getResp.json();
+      if (!data.documents || data.documents.length === 0)
+        return '暂无 SE 通知历史记录（agent_interactions 为空）';
+      const cutoff = Date.now() - days * 24 * 3600000;
+      const items = (data.metadatas || []).map((m, i) => ({
+        doc:   (data.documents || [])[i] || '',
+        ts:    m?.timestamp || m?.created_at || '',
+        type:  m?.type  || '',
+        agent: m?.fromAgent || m?.agent || '',
+      })).filter(item => {
+        if (!item.ts) return true;
+        const t = new Date(item.ts).getTime();
+        return isNaN(t) || t >= cutoff;
+      }).sort((a, b) => {
+        const ta = new Date(a.ts).getTime() || 0, tb = new Date(b.ts).getTime() || 0;
+        return tb - ta;
+      }).slice(0, limit);
+      if (items.length === 0) return `最近 ${days} 天无 SE 通知记录`;
+      const lines = [`SE 通知历史（最近 ${days} 天，共 ${items.length} 条）:`];
+      for (const item of items) {
+        const dateStr  = item.ts
+          ? new Date(item.ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+          : '未知时间';
+        const typeStr  = item.type  ? `[${item.type}] `  : '';
+        const agentStr = item.agent ? `来自 ${item.agent} ` : '';
+        const preview  = item.doc.slice(0, 150).replace(/\n/g, ' ');
+        lines.push(`- ${dateStr} ${typeStr}${agentStr}| ${preview}${item.doc.length > 150 ? '...' : ''}`);
+      }
+      return lines.join('\n');
+    } catch (e) {
+      return `recall_se_history 失败：${e.message}`;
+    }
   }
 
   if (toolName === 'evaluate_system') {
@@ -7784,6 +7882,25 @@ async function runMainMonitorLoop() {
   }
 }
 
+
+// ─── Main 周度自动评估（每周日 22:00-22:30 CST）────────────────────────────────
+async function runMainWeeklyEvaluation() {
+  logger.info('Main 周度自动评估触发');
+  try {
+    const result = await executeMainTool('evaluate_system', { _trigger: 'weekly_auto' });
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const msg = `【Main 周度自动评估 ${now}】\n\n${result}`;
+    fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'report', fromAgent: 'main', message: msg }),
+    }).catch(e => logger.warn('Main 周度评估推送失败', { error: e.message }));
+    logger.info('Main 周度自动评估完成');
+  } catch (e) {
+    logger.error('Main 周度自动评估失败', { error: e.message });
+  }
+}
+
 // ─── Andy HEARTBEAT 巡检循环（L4 系统自我演化）────────────────────────────────────
 //
 // 每 24 小时触发一次，预计算 Kuzu 结晶候选 + skill-candidates.jsonl pending 条目，
@@ -8335,6 +8452,21 @@ app.listen(PORT, () => {
     }
   }, 5 * 60 * 1000);
   logger.info('Andy HEARTBEAT 夜间规划循环已注册', { window: '23:00-23:30 CST' });
+
+  // Main 周度自动评估：每周日 22:00-22:30 CST，每 5 分钟检查一次
+  let _mainWeeklyLastDate = '';
+  setInterval(() => {
+    const cstNow = new Date(Date.now() + 8 * 3600000); // UTC+8
+    const day = cstNow.getUTCDay(); // 0=Sunday
+    const h = cstNow.getUTCHours(), m = cstNow.getUTCMinutes();
+    const dateStr = cstNow.toISOString().slice(0, 10);
+    if (day === 0 && h === 22 && m < 30 && _mainWeeklyLastDate !== dateStr) {
+      _mainWeeklyLastDate = dateStr;
+      runMainWeeklyEvaluation().catch(e => logger.error('Main 周度评估异常', { error: e.message }));
+    }
+  }, 5 * 60 * 1000);
+  logger.info('Main 周度自动评估已注册', { window: '每周日 22:00-22:30 CST' });
+
 
   // ── Layer 2：启动扫描——检测进程重启导致的孤儿任务 ───────────────────────
   // 进程崩溃时 catch 块不执行，running 任务永远卡住；启动时扫描并清零
