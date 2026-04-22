@@ -2564,8 +2564,42 @@ const MAIN_TOOLS = [
     },
   },
   {
+    name: 'query_pipeline_tasks',
+    description: '查看流水线任务看板（全量视图，含用户提交任务 + 系统自动生成任务）。返回所有状态任务，按 pending-review → queued → running → completed/failed 排序。SE 专属。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status_filter: { type: 'string', enum: ['all', 'pending-review', 'queued', 'running', 'active'], description: 'all=全部 | pending-review=待批准 | queued=排队中 | running=执行中 | active=进行中（queued+running）。默认 active' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'approve_pipeline_task',
+    description: 'SE 批准 pending-review 任务进队列执行。只有 requires_approval=true 的任务（认知文件修改、架构提案等）才进 pending-review。批准后自动进 queued 由 Lucas 调度。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 ID（如 req_ev_1745xxx）' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'cancel_pipeline_task',
+    description: 'SE 叫停任意流水线任务（不受 submittedBy 限制）。可叫停 pending-review / queued / running 的任何任务，含用户提交和系统自动生成的。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 ID（如 req_1745xxx）' },
+        reason: { type: 'string', description: '叫停原因（可选）' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
     name: 'log_improvement_task',
-    description: '记录系统改进建议到 Claude Code CLI 任务队列（~/HomeAI/Data/main-pending-tasks.json）。供工程师下次打开 CLI 时处理。适用于：发现架构缺口、质量积累性问题、优化机会——不是立即告警的紧急问题，而是值得工程师在下次工作周期处理的改进点。',
+    description: '记录系统改进建议到流水线任务队列（~/HomeAI/Data/learning/task-registry.json）。适用于发现架构缺口、质量积累性问题、优化机会——不是立即告警的紧急问题，而是值得在下次工作周期处理的改进点。',
     input_schema: {
       type: 'object',
       properties: {
@@ -3072,54 +3106,102 @@ async function executeMainTool(toolName, toolInput) {
     }
   }
 
+  if (toolName === 'query_pipeline_tasks') {
+    try {
+      const { status_filter = 'active' } = toolInput;
+      const entries = readTaskRegistry();
+      const filtered = status_filter === 'all' ? entries
+        : status_filter === 'active' ? entries.filter(t => ['queued', 'running', 'pending-review'].includes(t.status))
+        : entries.filter(t => t.status === status_filter);
+      const order = { 'pending-review': 0, queued: 1, running: 2, completed: 3, failed: 4, cancelled: 5 };
+      filtered.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || new Date(b.submittedAt) - new Date(a.submittedAt));
+      if (filtered.length === 0) return `✅ 当前无${status_filter === 'all' ? '' : '进行中的'}任务`;
+      const lines = filtered.map(t => {
+        const age = Math.round((Date.now() - new Date(t.submittedAt)) / 3600000);
+        const by = t.submittedBy || '未知';
+        return `[${t.status}] ${t.id}\n  ${(t.title || t.requirement || '').slice(0, 60)}\n  提交：${by} | ${age}h 前`;
+      });
+      return `【流水线任务看板】共 ${filtered.length} 条\n\n${lines.join('\n\n')}`;
+    } catch (e) {
+      return `query_pipeline_tasks 失败：${e.message}`;
+    }
+  }
+
+  if (toolName === 'approve_pipeline_task') {
+    try {
+      const { task_id } = toolInput;
+      if (!task_id) return '错误：task_id 必填';
+      const entries = readTaskRegistry();
+      const idx = entries.findIndex(e => e.id === task_id);
+      if (idx === -1) return `任务 ${task_id} 不存在`;
+      if (entries[idx].status !== 'pending-review') return `当前状态 ${entries[idx].status}，只有 pending-review 可批准`;
+      entries[idx].status = 'queued';
+      entries[idx].approvedAt = new Date().toISOString();
+      entries[idx].approvedBy = 'se';
+      writeTaskRegistry(entries);
+      logger.info('SE 批准任务进队列', { taskId: task_id, title: entries[idx].title });
+      return `✅ 任务 [${task_id}] 已批准，进入队列等待执行\n标题：${entries[idx].title || entries[idx].requirement || ''}`;
+    } catch (e) {
+      return `approve_pipeline_task 失败：${e.message}`;
+    }
+  }
+
+  if (toolName === 'cancel_pipeline_task') {
+    try {
+      const { task_id, reason = 'SE 叫停' } = toolInput;
+      if (!task_id) return '错误：task_id 必填';
+      const entries = readTaskRegistry();
+      const idx = entries.findIndex(e => e.id === task_id);
+      if (idx === -1) return `任务 ${task_id} 不存在`;
+      if (['completed', 'cancelled'].includes(entries[idx].status)) return `任务已 ${entries[idx].status}，无法叫停`;
+      const prevStatus = entries[idx].status;
+      entries[idx].status = 'cancelled';
+      entries[idx].cancelledAt = new Date().toISOString();
+      entries[idx].cancelledBy = 'se';
+      entries[idx].cancelReason = reason;
+      writeTaskRegistry(entries);
+      logger.info('SE 叫停任务', { taskId: task_id, prevStatus, reason });
+      return `✅ 任务 [${task_id}] 已叫停（原状态：${prevStatus}）\n标题：${entries[idx].title || entries[idx].requirement || ''}`;
+    } catch (e) {
+      return `cancel_pipeline_task 失败：${e.message}`;
+    }
+  }
+
   if (toolName === 'log_improvement_task') {
-    const tasksPath = path.join(HOMEAI_ROOT, 'Data', 'main-pending-tasks.json');
     try {
       const { title, description, priority = 'medium', action_type = 'observe' } = toolInput;
       if (!title || !description) return '错误：title 和 description 必填';
 
-      // 读取现有任务文件（不存在则初始化）
-      let data = { tasks: [] };
-      if (fs.existsSync(tasksPath)) {
-        try { data = JSON.parse(fs.readFileSync(tasksPath, 'utf8')); } catch {}
-      }
-      if (!Array.isArray(data.tasks)) data.tasks = [];
-
-      // 重复检测：pending 任务中存在标题关键词高度重叠的则跳过
-      // 防止每次巡检都写入同一类问题（如 operator.read、chromadb、false_commitment）
-      const pendingTasks = data.tasks.filter(t => t.status === 'pending');
+      const entries = readTaskRegistry();
+      // 重复检测：queued/pending-review 中存在标题关键词高度重叠的则跳过
+      const activeEntries = entries.filter(t => ['queued', 'pending-review', 'running'].includes(t.status));
       const titleWords = title.toLowerCase().split(/[\s，。：、\-\(（\)）]+/).filter(w => w.length >= 3);
-      const duplicate = pendingTasks.find(t => {
-        const existWords = t.title.toLowerCase().split(/[\s，。：、\-\(（\)）]+/).filter(w => w.length >= 3);
-        const overlap = titleWords.filter(w => existWords.includes(w)).length;
-        // 2 个以上实质词重叠 = 同类任务
-        return overlap >= 2;
+      const duplicate = activeEntries.find(t => {
+        const existWords = (t.title || t.requirement || '').toLowerCase().split(/[\s，。：、\-\(（\)）]+/).filter(w => w.length >= 3);
+        return titleWords.filter(w => existWords.includes(w)).length >= 2;
       });
       if (duplicate) {
-        return `⚠️ 已存在类似 pending 任务 [${duplicate.id}]：「${duplicate.title}」，跳过重复记录。如问题已处理请先将原任务标为 done。`;
+        return `⚠️ 已存在类似任务 [${duplicate.id}]：「${duplicate.title || duplicate.requirement}」，跳过重复记录。`;
       }
 
-      // 生成任务 ID（日期+序号）
-      const today = todayCST();
-      const todayCount = data.tasks.filter(t => t.id.startsWith(`mt-${today}`)).length;
-      const id = `mt-${today}-${String(todayCount + 1).padStart(3, '0')}`;
-
-      const task = {
+      const requiresApproval = action_type === 'agents_md';
+      const id = `req_main_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+      entries.push({
         id,
-        createdAt: nowCST(),
-        priority,
-        action_type,
+        requirement: description,
         title,
-        description,
-        status: 'pending',
+        submittedBy: 'main-monitor',
+        submittedAt: new Date().toISOString(),
+        status: requiresApproval ? 'pending-review' : 'queued',
+        taskType: action_type,
+        priority,
+        requires_approval: requiresApproval,
         source: 'main_monitor',
-      };
-      data.tasks.push(task);
-
-      fs.mkdirSync(path.dirname(tasksPath), { recursive: true });
-      fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
-      const actionLabels = { agents_md: '改AGENTS.md', code_fix: '改代码', readme: '改Readme', observe: '只观察' };
-      return `✅ 已记录改进任务 [${id}]：${title}（优先级：${priority} | 建议动作：${actionLabels[action_type] ?? action_type}）`;
+        lucasAcked: false,
+      });
+      writeTaskRegistry(entries);
+      const actionLabels = { agents_md: '改AGENTS.md（待SE批准）', code_fix: '改代码', readme: '改Readme', observe: '只观察' };
+      return `✅ 已记录改进任务 [${id}]：${title}（优先级：${priority} | 动作：${actionLabels[action_type] ?? action_type}）`;
     } catch (e) {
       return `log_improvement_task 失败：${e.message}`;
     }
@@ -7294,6 +7376,8 @@ app.post('/api/demo-proxy/submit-requirement', async (req, res) => {
   }
 });
 
+const FAMILY_GROUP_CHAT_ID = process.env.WECOM_FAMILY_GROUP_CHAT_ID || 'wra6wXbgAAu_7v2qu1wnc8Lu3-Za3diQ';
+
 app.post('/api/wecom/send-message', async (req, res) => {
   const { userId, text, voiceText } = req.body || {};
   if (!userId || !text) {
@@ -7312,11 +7396,16 @@ app.post('/api/wecom/send-message', async (req, res) => {
     return res.json({ success: true, userId, channel: 'visitor-push' });
   }
 
-  // 非法 userId 过滤：系统会话 / UUID / 群聊简写 / 测试用户 → 静默跳过，不发企微
+  // 群消息：userId === 'group' → 解析为家庭群 chatId，走 bot 群发
+  const isGroupSend = userId === 'group';
+  const resolvedTarget = isGroupSend ? FAMILY_GROUP_CHAT_ID : userId;
+
+  // 非法 userId 过滤：系统会话 / UUID / 测试用户 → 静默跳过，不发企微
+  // 注意：'group' 已在上方处理，不再跳过
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (userId.startsWith('system') || userId === 'unknown' || userId === 'test' ||
-      userId === 'group' || userId === 'owner' || userId === 'heartbeat-cron' ||
-      UUID_RE.test(userId)) {
+  if (!isGroupSend && (userId.startsWith('system') || userId === 'unknown' || userId === 'test' ||
+      userId === 'owner' || userId === 'heartbeat-cron' ||
+      UUID_RE.test(userId))) {
     logger.info('send-message: 跳过非法 userId', { userId, textLen: text.length });
     return res.json({ success: true, skipped: true, reason: 'non-human-user' });
   }
@@ -7330,24 +7419,30 @@ app.post('/api/wecom/send-message', async (req, res) => {
   const ttsStyle    = hasRapTag ? 'rap' : 'normal';
 
   try {
-    // 私聊主动推送：只走 bot 通道（显示「启灵」）；失败通知系统工程师，不降级
-    await botSend(userId, displayText);
-    appendChatHistory(chatHistoryKey(false, null, userId), '[启灵主动发送]', displayText);
-    logger.info('主动发消息已发送', { userId, channel: 'bot', actor: 'lucas' });
-    // 语音：显式 voiceText 或 [VOICE]/[RAP] 标记，fire-and-forget
-    if (voiceText) {
-      sendVoiceChunks(userId, voiceText).catch(() => {});
-    } else if (needVoice) {
-      sendVoiceChunks(userId, displayText, ttsStyle).catch(() => {});
+    await botSend(resolvedTarget, displayText);
+    if (isGroupSend) {
+      appendChatHistory(chatHistoryKey(true, FAMILY_GROUP_CHAT_ID, null), '[启灵主动发送]', displayText);
+      logger.info('群消息已发送', { chatId: FAMILY_GROUP_CHAT_ID, channel: 'bot', actor: 'lucas' });
+    } else {
+      appendChatHistory(chatHistoryKey(false, null, userId), '[启灵主动发送]', displayText);
+      logger.info('主动发消息已发送', { userId, channel: 'bot', actor: 'lucas' });
     }
-    res.json({ success: true, userId });
+    // 语音：显式 voiceText 或 [VOICE]/[RAP] 标记，fire-and-forget
+    const voiceTarget = isGroupSend ? FAMILY_GROUP_CHAT_ID : userId;
+    if (voiceText) {
+      sendVoiceChunks(voiceTarget, voiceText).catch(() => {});
+    } else if (needVoice) {
+      sendVoiceChunks(voiceTarget, displayText, ttsStyle).catch(() => {});
+    }
+    res.json({ success: true, userId: resolvedTarget });
   } catch (botErr) {
     const errMsg = botErr instanceof Error ? botErr.message : (botErr?.errmsg || JSON.stringify(botErr));
-    logger.error('主动发消息失败，通知系统工程师', { userId, error: errMsg });
+    const dest = isGroupSend ? `家庭群(${FAMILY_GROUP_CHAT_ID})` : userId;
+    logger.error('主动发消息失败，通知系统工程师', { dest, error: errMsg });
     fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `⚠️ 私聊消息未送达。\n目标用户：${userId}\n异常：${errMsg}\n原消息：${displayText.slice(0, 300)}` }),
+      body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `⚠️ ${isGroupSend ? '群聊' : '私聊'}消息未送达。\n目标：${dest}\n异常：${errMsg}\n原消息：${displayText.slice(0, 300)}` }),
     }).catch(() => {});
     res.status(500).json({ success: false, error: errMsg });
   }
@@ -7531,36 +7626,50 @@ async function runLucasProactiveLoop() {
       }
       return ageMs > estMs;
     });
-    for (const task of staleTasks) {
-      const submittedBy = (task.submittedBy || '').trim();
-      if (submittedBy.startsWith('visitor:')) continue;
-      const isUUID = /^[0-9a-f-]{36}$/.test(submittedBy);
-      const targetUserId = isUUID
-        ? WECOM_OWNER_ID
-        : (memberUserIdMap[submittedBy.toLowerCase()] || WECOM_OWNER_ID);
-      if (!targetUserId) continue;
-
-      const ageH = Math.round((Date.now() - new Date(task.submittedAt).getTime()) / 3600000);
-      const message = [
-        `[任务进度提醒] 一个开发任务已进行 ${ageH} 小时，请主动确认进展。`,
-        ``,
-        `任务：${task.requirement?.slice(0, 80) || task.id}`,
-        `当前阶段：${task.currentPhase || '进行中'}`,
-        ``,
-        `请调用 ask_lisa 确认进展，然后主动告知提交者。`,
-      ].join('\n');
-
-      logger.info('Lucas 主动上报超时任务（异步触发）', { userId: targetUserId, taskId: task.id, ageH });
-      // 记录本次告警时间，防止频繁打扰
+    // 合并所有超时任务为一次 Lucas 调用，避免 N 个并发 session 互相竞争 Gateway
+    if (staleTasks.length > 0) {
+      // 记录本次告警时间（先批量写，防止重复触发）
       try {
         const p = path.join(HOMEAI_ROOT, 'Data/learning/task-registry.json');
         const entries = JSON.parse(fs.readFileSync(p, 'utf8'));
-        const idx = entries.findIndex(e => e.id === task.id);
-        if (idx >= 0) { entries[idx].lastStaleAlertAt = nowCST(); fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8'); }
+        let dirty = false;
+        for (const task of staleTasks) {
+          const idx = entries.findIndex(e => e.id === task.id);
+          if (idx >= 0) { entries[idx].lastStaleAlertAt = nowCST(); dirty = true; }
+        }
+        if (dirty) fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8');
       } catch {}
-      callGatewayAgent('lucas', message, targetUserId)
-        .then(reply => logger.info('Lucas 超时任务上报完成', { taskId: task.id, reply: (reply || '').slice(0, 100) }))
-        .catch(e => logger.error('Lucas 超时任务上报失败', { taskId: task.id, error: e.message }));
+
+      // 找代表性提交者（优先 WECOM_OWNER_ID，其次取第一个有效 userId）
+      let targetUserId = null;
+      for (const task of staleTasks) {
+        const submittedBy = (task.submittedBy || '').trim();
+        if (submittedBy.startsWith('visitor:')) continue;
+        const isUUID = /^[0-9a-f-]{36}$/.test(submittedBy);
+        const uid = isUUID ? WECOM_OWNER_ID : (memberUserIdMap[submittedBy.toLowerCase()] || WECOM_OWNER_ID);
+        if (uid) { targetUserId = uid; break; }
+      }
+      if (!targetUserId) targetUserId = WECOM_OWNER_ID;
+
+      const taskLines = staleTasks.map(task => {
+        const ageH = Math.round((Date.now() - new Date(task.submittedAt).getTime()) / 3600000);
+        const phase = task.currentPhase || '进行中';
+        const progressTool = (phase === 'planning' || phase === 'andy_designing') ? 'ask_andy' : 'ask_lisa';
+        return `- ${task.requirement?.slice(0, 60) || task.id}（${ageH}h，阶段：${phase}，查进展：${progressTool}）`;
+      }).join('\n');
+
+      const batchMessage = [
+        `[任务进度提醒] 以下 ${staleTasks.length} 个开发任务超时未完成，请逐一确认进展并告知提交者：`,
+        ``,
+        taskLines,
+        ``,
+        `按每个任务的"查进展"工具分别调用，确认后主动通知提交者。`,
+      ].join('\n');
+
+      logger.info('Lucas 主动上报超时任务（批量合并）', { count: staleTasks.length, userId: targetUserId });
+      callGatewayAgent('lucas', batchMessage, targetUserId)
+        .then(reply => logger.info('Lucas 超时任务批量上报完成', { count: staleTasks.length, reply: (reply || '').slice(0, 100) }))
+        .catch(e => logger.error('Lucas 超时任务批量上报失败', { count: staleTasks.length, error: e.message }));
     }
 
     if (pendingAck.length === 0 && staleTasks.length === 0) {
