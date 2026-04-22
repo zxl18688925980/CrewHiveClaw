@@ -13274,18 +13274,20 @@ last_used: null
       label: "主动发消息给家人",
       name: "send_message",
       description: [
-        "Lucas 专属工具：主动向指定家庭成员或访客发送消息。",
+        "Lucas 专属工具：主动向指定家庭成员、家庭群或访客发送文字消息。",
         "适用场景：",
         "1. 【最常用】发送图形工具链接给家人——当家人需要上传文件、图形操作时，必须调用此工具把链接发给对应家人，仅在回复文字里写链接地址无效，家人收不到",
-        "2. 任务完成后主动通知家人",
+        "2. 任务完成后主动通知家人（私聊或群聊）",
         "3. 提醒待办事项、跟进承诺",
         "4. 【访客主动联系】向正在访问 demo-chat 的访客发消息，userId 填 visitor:姓名（如 visitor:任婧、visitor:赵昱）",
-        "家庭成员 userId：XiaMoQiuFengLiang、ZiFeiYu、ZengXiaoLong 等企业微信 userId。",
-        "访客 userId：visitor:姓名，姓名为注册表中的 name 字段（如 visitor:任婧、visitor:丁跃明）。",
+        "userId 取值：",
+        "- 私聊家庭成员：XiaMoQiuFengLiang、ZiFeiYu、ZengXiaoLong 等企业微信 userId",
+        "- 发到家庭群：填 \"group\"",
+        "- 访客私聊：visitor:姓名（如 visitor:任婧、visitor:丁跃明）",
       ].join("\n"),
       parameters: Type.Object({
         userId: Type.String({
-          description: "收件人的企业微信 userId，例如 XiaMoQiuFengLiang",
+          description: "收件人。私聊填企业微信 userId（如 XiaMoQiuFengLiang）；发家庭群填 \"group\"；访客填 visitor:姓名",
         }),
         text: Type.String({
           description: "要发送的消息内容",
