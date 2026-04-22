@@ -7154,6 +7154,15 @@ function writeTaskRegistry(entries) {
   const p = path.join(HOMEAI_ROOT, 'Data', 'learning', 'task-registry.json');
   fs.writeFileSync(p, JSON.stringify(entries, null, 2), 'utf8');
 }
+// 根据任务当前阶段推断责任 Agent（用于 notify-engineer fromAgent，不使用 submittedBy 家人 ID）
+function inferTaskAgent(task) {
+  const phase = task.currentPhase || '';
+  if (phase === 'implementing' || phase === 'verifying') return 'lisa';
+  if (phase === 'planning' || phase === 'delivering') return 'andy';
+  // 有设计简报说明 Andy 已介入
+  if (task.designNote || task.deliveryBrief) return 'andy';
+  return 'system';
+}
 
 // GET /api/main/pipeline-tasks — SE 看全量任务（所有 submittedBy，含系统生成的）
 app.get('/api/main/pipeline-tasks', (req, res) => {
@@ -8236,7 +8245,7 @@ app.listen(PORT, () => {
         fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'intervention', fromAgent: task.submittedBy || 'system', message: msg }),
+          body: JSON.stringify({ type: 'intervention', fromAgent: inferTaskAgent(task), message: msg }),
         }).catch(err => logger.error('notify-engineer 失败（启动扫描）', { error: err.message }));
       }
       // 延迟 2 分钟等 Gateway 稳定后通知 Lucas，由他决定是否重触发
@@ -8274,7 +8283,7 @@ app.listen(PORT, () => {
         fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'intervention', fromAgent: entry.submittedBy || 'system', message: msg }),
+          body: JSON.stringify({ type: 'intervention', fromAgent: inferTaskAgent(entry), message: msg }),
         }).catch(err => logger.error('notify-engineer 失败（卡住检查）', { error: err.message }));
         entry.stuckNotifiedAt = new Date().toISOString();
         dirty = true;
