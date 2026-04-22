@@ -137,3 +137,9 @@ docs/superpowers
 # HomeAI runtime logs (never commit)
 logs/
 **/logs/
+
+# HomeAI 隐私与敏感数据（不可提交）
+HomeAILocal/logs/
+HomeAI/Data/node-registry.json
+temp/HomeAI-Complete-Manual*.md
+temp/HomeAI-Complete-Manual*.zip

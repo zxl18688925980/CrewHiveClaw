@@ -3137,14 +3137,14 @@ Lucas → manage_nodes call_agent(nodeId, message, agentId?)
 *工程通道（invoke_cc）*：
 ```
 系统工程师 CC → manage_nodes invoke_cc(nodeId, task)
-  → 读 node-registry 中的 ssh_alias（如 windows-DESKTOP-WKFNJAK）
+  → 读 node-registry 中的 ssh_alias（如 windows-{NODE_HOSTNAME}）
   → SSH（Cloudflare Tunnel ProxyCommand）→ claude --print '<task>'
   → Windows CC 执行任务 → 返回结果
 ```
 
 **Cloudflare Tunnel 配置（HomeAI Windows 节点）**：
-- SSH tunnel：`homeai-node-DESKTOP-WKFNJAK`（`win.homeai-wecom-zxl.top` → Windows:22）
-- HTTP Gateway tunnel：`homeai-gw-WKFNJAK`（`win-gw.homeai-wecom-zxl.top` → Windows:18789）
+- SSH tunnel：`homeai-node-{NODE_HOSTNAME}`（`win.your-domain.com` → Windows:22）
+- HTTP Gateway tunnel：`homeai-gw-{NODE_HOSTNAME}`（`win-gw.your-domain.com` → Windows:18789）
 - 两条 tunnel 独立运行，互不影响；Windows 侧两个 cloudflared 进程各自管理
 
 **设计取舍**：节点注册不需要独立服务，Gateway 内存注册表 + 持久化 JSON 足够——独立服务只增加故障点。
@@ -4118,7 +4118,7 @@ trigger_development_pipeline 调用时
 |--------|--------|------|
 | `FRONTEND_AGENT_ID` | `lucas` | 接待用户的主 Agent ID；所有「前台专属」逻辑的实际持有者 |
 | `PRIORITY_AGENTS` | `lucas` | 逗号分隔，从 Semaphore 保留池取槽位的 Agent 列表 |
-| `OWNER_ID` | `ZengXiaoLong` | 组织所有者 userId；系统告警、工程师通知的接收目标 |
+| `OWNER_ID` | `{OWNER_ID}` | 组织所有者 userId；系统告警、工程师通知的接收目标 |
 | `LOCAL_MODEL_NAME` | `homeai-assistant` | 本地 Ollama 模型名；低复杂度路由端点 |
 | `LUCAS_PROVIDER` | `dashscope` | 前台 Agent 云端 provider |
 | `LUCAS_MODEL` | `qwen3.6-plus` | 前台 Agent 云端模型 ID |
@@ -4314,7 +4314,7 @@ Lisa   ──推理请求 + 语料上传──▶  Lisa 大师（模型即服务
 ### 3.3 上传接口
 
 ```
-POST https://hive.homeai-wecom-zxl.top/api/corpus/upload
+POST https://hive.your-domain.com/api/corpus/upload
 Authorization: Bearer {api_key}
 Content-Type: application/x-ndjson
 

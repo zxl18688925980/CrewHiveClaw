@@ -816,8 +816,8 @@ KUZU_DB_PATH = _DATA_ROOT / "kuzu"
 
 **验证方法**：
 ```bash
-python3 -c "from pathlib import Path; p=Path('/Users/xinbinanshan/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/x.py'); print(p.parent.parent.parent)"
-# 应输出 /Users/xinbinanshan/HomeAI
+python3 -c "from pathlib import Path; p=Path('~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/x.py'); print(p.parent.parent.parent)"
+# 应输出 ~/HomeAI
 ```
 
 **教训**：
@@ -1074,9 +1074,9 @@ if (lastIteratedMatch?.[1] === today) continue;  // 今天已迭代，跳过
 
 **场景**：crewclaw-routing `before_prompt_build` 阶段通过 context-sources.ts 注册的 Kuzu person 级查询（person-realtime / pending-events / active-threads / relationship-network / topic-resonance / causal-facts），以及 `queryCausalFacts()` / `queryCausalFactsMultiHop()` 直接调用。
 
-**现象**：L0 四维度采样发现因果维度 = 0%，实际查 Kuzu 全库有 166 条 `causal_relation`。用 `ZengXiaoLong` 查返回 5 条，用 `zengxiaolong` 查返回 0 条。所有 6 个 person 级 context source 在 Lucas 上下文中长期静默为空（家人当前状态、活跃话题、待跟进事项、关系网络、话题共鸣、因果关系全部缺失）。
+**现象**：L0 四维度采样发现因果维度 = 0%，实际查 Kuzu 全库有 166 条 `causal_relation`。用 `{OWNER_ID}` 查返回 5 条，用 `zengxiaolong` 查返回 0 条。所有 6 个 person 级 context source 在 Lucas 上下文中长期静默为空（家人当前状态、活跃话题、待跟进事项、关系网络、话题共鸣、因果关系全部缺失）。
 
-**根因**：`normalizeUserId()` 对所有 userId 强制 `.toLowerCase()`（设计是为了剥离 `wecom-` 前缀并统一化）。ChromaDB 写入时也存小写（`userId: meta.fromId.toLowerCase()`），两者一致。但 Kuzu Entity ID 由 `init-family-relations.py` / `distill-memories.py` 写入时用 PascalCase（`ZengXiaoLong`、`XiaMoQiuFengLiang`、`ZiFeiYu`、`ZengYueYuTong`）。`sessionParams.userId` 经 normalizeUserId 变成小写后直接传给 Kuzu `$userId` 变量，Kuzu 精确匹配失败，结果全空，无任何报错。
+**根因**：`normalizeUserId()` 对所有 userId 强制 `.toLowerCase()`（设计是为了剥离 `wecom-` 前缀并统一化）。ChromaDB 写入时也存小写（`userId: meta.fromId.toLowerCase()`），两者一致。但 Kuzu Entity ID 由 `init-family-relations.py` / `distill-memories.py` 写入时用 PascalCase（`{OWNER_ID}`、`XiaMoQiuFengLiang`、`ZiFeiYu`、`ZengYueYuTong`）。`sessionParams.userId` 经 normalizeUserId 变成小写后直接传给 Kuzu `$userId` 变量，Kuzu 精确匹配失败，结果全空，无任何报错。
 
 **修复**：
 - `index.ts` 新增 `KUZU_USER_ID_MAP`（小写→PascalCase 映射）和 `toKuzuEntityId(userId)` 函数
@@ -1087,5 +1087,5 @@ if (lastIteratedMatch?.[1] === today) continue;  // 今天已迭代，跳过
 
 **规避原则**：凡是新增 Kuzu person-level 查询（匹配 Entity `{type:'person'}` 的 id），必须用 `kuzuUserId`（通过 `toKuzuEntityId()` 转换），不能直接用 `userId`。ChromaDB 查询继续用 `userId`（小写）。
 
-**状态**：已修复（index.ts + context-sources.ts，Gateway 重启验证通过，查询 ZengXiaoLong 返回 5 条 causal_relation）
+**状态**：已修复（index.ts + context-sources.ts，Gateway 重启验证通过，查询 {OWNER_ID} 返回 5 条 causal_relation）
 **确认日期**：2026-04-22

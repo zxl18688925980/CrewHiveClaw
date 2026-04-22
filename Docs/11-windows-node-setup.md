@@ -1,7 +1,7 @@
 # Windows 节点安装指南
 
 > 核心能力：让任何一台 Windows 个人电脑成为 HomeAI 的远程协同节点。
-> 安装脚本：`https://wecom.homeai-wecom-zxl.top/app/node-setup/windows-node-setup.ps1`
+> 安装脚本：`https://wecom.your-domain.com/app/node-setup/windows-node-setup.ps1`
 
 ---
 
@@ -36,7 +36,7 @@
 |------|------|
 | Windows 10/11 | 必须 |
 | 管理员权限 | 安装脚本需要以「管理员身份运行 PowerShell」 |
-| 网络可达 Gateway | 能访问 `https://wecom.homeai-wecom-zxl.top` |
+| 网络可达 Gateway | 能访问 `https://wecom.your-domain.com` |
 | Node.js v22+ | 脚本会自动安装，也可以提前手动装好 |
 
 ---
@@ -48,7 +48,7 @@
 在 Windows 电脑上，打开浏览器访问：
 
 ```
-https://wecom.homeai-wecom-zxl.top/app/node-setup/install.bat
+https://wecom.your-domain.com/app/node-setup/install.bat
 ```
 
 下载 `install.bat` 到桌面。这个 `.bat` 文件会自动：
@@ -93,7 +93,7 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Users\Administrator\Downloads\w
 =============================================================
 
  Node Name:     DESKTOP-XXXXXXX
- Gateway URL:   https://wecom.homeai-wecom-zxl.top
+ Gateway URL:   https://wecom.your-domain.com
  Service:       HomeAINode (Windows Service) 或 (Scheduled Task)
  OpenClaw:      Not installed 或 Installed
  Claude Code:   Installed 或 Not installed
@@ -123,7 +123,7 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Users\Administrator\Downloads\w
 **临时方案**：手动验证节点连通性：
 ```powershell
 # 测试心跳端点是否可达
-Invoke-RestMethod -Uri "https://wecom.homeai-wecom-zxl.top/api/node/heartbeat" -Method Post -Body '{"node_name":"DESKTOP-XXXXXXX","status":"online"}' -ContentType "application/json"
+Invoke-RestMethod -Uri "https://wecom.your-domain.com/api/node/heartbeat" -Method Post -Body '{"node_name":"DESKTOP-XXXXXXX","status":"online"}' -ContentType "application/json"
 ```
 
 ### 问题 2：OpenClaw 安装被跳过
@@ -172,7 +172,7 @@ Get-Content "C:\ProgramData\HomeAI Node\node.json"
 ```json
 {
     "node_name": "DESKTOP-XXXXXXX",
-    "gateway_url": "https://wecom.homeai-wecom-zxl.top",
+    "gateway_url": "https://wecom.your-domain.com",
     "api_key": "",
     "installed_at": "2026-04-16T..."
 }
@@ -196,7 +196,7 @@ claude --version
 
 ```powershell
 # 测试 Gateway 是否可达
-Invoke-WebRequest -Uri "https://wecom.homeai-wecom-zxl.top" -Method Head
+Invoke-WebRequest -Uri "https://wecom.your-domain.com" -Method Head
 # 应返回 200 或 301，不报连接错误
 ```
 
@@ -256,7 +256,7 @@ Remove-Item "$env:HOME\.openclaw" -Recurse -Force -ErrorAction SilentlyContinue
 
 ## 九、脚本文件清单
 
-部署在 `https://wecom.homeai-wecom-zxl.top/app/node-setup/`：
+部署在 `https://wecom.your-domain.com/app/node-setup/`：
 
 | 文件 | 用途 |
 |------|------|

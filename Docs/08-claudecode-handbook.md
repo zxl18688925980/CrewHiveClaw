@@ -277,7 +277,7 @@ git diff v408b HEAD -- "docs/HomeAI Readme.md"
 
 ```bash
 # 查看 Claude Code 的项目记忆
-ls ~/.claude/projects/-Users-xinbinanshan-HomeAI/memory/
+ls ~/.claude/projects/-Users-{username}-HomeAI/memory/
 ```
 
 **案例**：HomeAI 的 memory 文件记录了已知修复、守护进程路径迁移历史、已验证的关键结论。这些信息不适合放在 CLAUDE.md（太细节），但 Claude Code 在处理相关问题时需要参考。

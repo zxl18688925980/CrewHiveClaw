@@ -462,8 +462,8 @@ OpenClaw 的记忆系统采用「文件即真相」设计：
   → A 未完成时 B、C 阻塞 → 并发崩溃
 
 parseSessionUser 解析逻辑：
-  "group:ZengXiaoLong:msg123" → userId = "ZengXiaoLong"（取中间段）
-  "ZengXiaoLong:1742000000"   → userId = "ZengXiaoLong"（取前段）
+  "group:{OWNER_ID}:msg123" → userId = "{OWNER_ID}"（取中间段）
+  "{OWNER_ID}:1742000000"   → userId = "{OWNER_ID}"（取前段）
 ```
 
 > **⚠️ 测试 session 写保护**：session key 含 `test|watchdog` 的请求，跳过所有 ChromaDB 写入。否则 watchdog 探测请求会污染记忆数据。
