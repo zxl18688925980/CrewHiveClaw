@@ -1150,28 +1150,51 @@ app.post('/api/wecom/push-reply', async (req, res) => {
 
   try {
     if (isGroup) {
-      // 群聊：优先走 bot 通道（显示「启灵」），bot 未就绪时降级到企业应用（显示「系统工程师」）
-      if (globalBotClient && globalBotReady) {
-        await globalBotClient.sendMessage(chatId, {
-          msgtype: 'markdown',
-          markdown: { content: text },
-        });
-      } else {
-        await sendWeComGroupMessage(chatId, text);
+      // 群聊：只走 bot 通道（显示「启灵」）；失败通知系统工程师，不降级
+      try {
+        await botSend(chatId, text);
+        if (chatId) {
+          appendChatHistory(chatHistoryKey(true, chatId, null), '[启灵主动发送]', text);
+        }
+        logger.info('异步回复已发送', { chatId, isGroup: true, channel: 'bot', actor: 'lucas' });
+      } catch (botErr) {
+        logger.error('群聊 bot 推送失败，通知系统工程师', { chatId, error: botErr.message });
+        fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `⚠️ 群聊推送失败，消息未送达。\n目标群：${chatId}\n异常：${botErr.message}\n原消息：${text.slice(0, 300)}` }),
+        }).catch(() => {});
       }
-      // 无论走哪个通道，都以 Lucas 身份记录到群 chatHistory（actor 真实性）
-      if (chatId) {
-        appendChatHistory(chatHistoryKey(true, chatId, null), '[启灵主动发送]', text);
-      }
+      return;
     } else {
-      // 私聊主动推送：bot 协议只支持 group chatId，对 userId 始终 40008，直接走 HTTP API
-      await sendWeComMessage(fromUser, text);
-      // 以 Lucas 身份记录到该用户的 chatHistory（actor 真实性）
-      if (fromUser) {
-        appendChatHistory(chatHistoryKey(false, null, fromUser), '[启灵主动发送]', text);
+      // 私聊主动推送：只走 bot 通道（显示「启灵」）
+      // bot 不可用或失败 = 消息丢失，通知系统工程师说明异常，不降级到企业应用
+      if (globalBotClient && globalBotReady) {
+        try {
+          await globalBotClient.sendMessage(fromUser, { msgtype: 'markdown', markdown: { content: text } });
+          if (fromUser) {
+            appendChatHistory(chatHistoryKey(false, null, fromUser), '[启灵主动发送]', text);
+          }
+          logger.info('异步回复已发送', { fromUser, isGroup: false, channel: 'bot', actor: 'lucas' });
+        } catch (botErr) {
+          logger.error('私聊 bot 推送失败，通知系统工程师', { fromUser, error: botErr.message });
+          fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `⚠️ 私聊推送失败，消息未送达。\n目标用户：${fromUser}\n异常：${botErr.message}\n原消息：${text.slice(0, 300)}` }),
+          }).catch(() => {});
+        }
+      } else {
+        logger.warn('私聊推送时 bot 未就绪，通知系统工程师', { fromUser, globalBotReady });
+        fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `⚠️ 私聊推送时 bot 未就绪（globalBotReady=${globalBotReady}），消息未送达。\n目标用户：${fromUser}\n原消息：${text.slice(0, 300)}` }),
+        }).catch(() => {});
       }
+      return; // 私聊路径已在上方处理日志，提前返回
     }
-    const channel = isGroup ? (globalBotReady ? 'bot' : 'app') : 'app';
+    const channel = isGroup ? (globalBotReady ? 'bot' : 'app') : 'bot';
     logger.info('异步回复已发送', { fromUser, chatId, isGroup, channel, actor: 'lucas' });
   } catch (e) {
     logger.error('异步回复发送失败', { error: e.message });
@@ -5397,59 +5420,6 @@ async function handleMainCommand(content, userId = 'owner', source = 'wecom_remo
     }
   }
 
-  // ── 审批命令（拦截优先于 Claude，不消耗 token）────────────────────────────
-  const APPROVALS_FILE = path.join(HOMEAI_ROOT, 'Data', 'pending-approvals.json');
-
-  // 查待审批
-  if (/^(查待审批|查审批|待审批列表|审批列表)$/.test(trimmed)) {
-    let approvals = [];
-    try { approvals = JSON.parse(fs.readFileSync(APPROVALS_FILE, 'utf8')); } catch {}
-    const pending = approvals.filter(a => a.status === 'pending');
-    if (pending.length === 0) return '当前没有待审批事项。';
-    const lines = pending.map((a, i) =>
-      `[${i + 1}] ID: ${a.id}\n类别: ${a.category}  紧急度: ${a.urgency ?? 'normal'}\n标题: ${a.title}\n说明: ${a.description}\n提议操作: ${a.proposed_action}\n提交时间: ${a.created_at}`
-    );
-    return `待审批事项（${pending.length} 条）：\n\n${lines.join('\n\n---\n\n')}\n\n回复「批准 [ID]」或「拒绝 [ID] [原因]」执行决策。`;
-  }
-
-  // 批准 [ID]
-  const approveMatch = trimmed.match(/^批准\s+(\S+)$/);
-  if (approveMatch) {
-    const id = approveMatch[1];
-    let approvals = [];
-    try { approvals = JSON.parse(fs.readFileSync(APPROVALS_FILE, 'utf8')); } catch {}
-    const idx = approvals.findIndex(a => a.id === id);
-    if (idx === -1) return `❌ 找不到审批 ID：${id}`;
-    if (approvals[idx].status !== 'pending') return `⚠️ 该条目状态已是 ${approvals[idx].status}，无需重复操作。`;
-    const nowIso = new Date().toLocaleString('sv', { timeZone: 'Asia/Shanghai' }).replace(' ', 'T') + '+08:00';
-    approvals[idx].status = 'approved';
-    approvals[idx].decided_at = nowIso;
-    approvals[idx].decided_by = 'ZengXiaoLong';
-    fs.writeFileSync(APPROVALS_FILE, JSON.stringify(approvals, null, 2), 'utf8');
-    logger.info('Main 审批批准', { id, title: approvals[idx].title });
-    return `✅ 已批准：${approvals[idx].title}\n\nAndy 将在下次 HEARTBEAT 自动执行，完成后状态变更为 done。`;
-  }
-
-  // 拒绝 [ID] [原因]
-  const rejectMatch = trimmed.match(/^拒绝\s+(\S+)(?:\s+(.+))?$/);
-  if (rejectMatch) {
-    const id = rejectMatch[1];
-    const reason = rejectMatch[2] ?? '未说明原因';
-    let approvals = [];
-    try { approvals = JSON.parse(fs.readFileSync(APPROVALS_FILE, 'utf8')); } catch {}
-    const idx = approvals.findIndex(a => a.id === id);
-    if (idx === -1) return `❌ 找不到审批 ID：${id}`;
-    if (approvals[idx].status !== 'pending') return `⚠️ 该条目状态已是 ${approvals[idx].status}，无需重复操作。`;
-    const nowIso = new Date().toLocaleString('sv', { timeZone: 'Asia/Shanghai' }).replace(' ', 'T') + '+08:00';
-    approvals[idx].status = 'rejected';
-    approvals[idx].decided_at = nowIso;
-    approvals[idx].decided_by = 'ZengXiaoLong';
-    approvals[idx].decision_note = reason;
-    fs.writeFileSync(APPROVALS_FILE, JSON.stringify(approvals, null, 2), 'utf8');
-    logger.info('Main 审批拒绝', { id, title: approvals[idx].title, reason });
-    return `❌ 已拒绝：${approvals[idx].title}\n原因：${reason}`;
-  }
-
   // ── 微信公众号链接：预先用 Playwright 抓取正文注入，避免 Claude 用 curl 直接请求被拦截
   const wechatUrlMatch = !imageBase64 && content.match(/https?:\/\/mp\.weixin\.qq\.com\/[^\s\u4e00-\u9fa5\uff00-\uffef，。！？、；：""''【】《》]+/);
   if (wechatUrlMatch) {
@@ -5744,26 +5714,13 @@ async function sendWeComMessage(toUser, text) {
 
 /**
  * 通过 bot 通道推送消息到 target（群 chatId 或私聊 userId）。
- * 群聊：sendMessage(chatId, markdown) — 正常。
- * 私聊：sendMessage(userId, text/markdown) 触发 errcode=40008（bot 协议不支持），
- *       fallback 到企业应用 HTTP API（显示「系统工程师」）。
+ * 只走 bot，失败直接抛出——调用方决定如何处理错误，不在此降级污染信息。
  */
-async function botPushOrFallback(target, text) {
-  // 先尝试 bot 通道（显示「启灵」），失败再 fallback 到企业应用 HTTP API（显示「系统工程师」）
-  if (globalBotClient && globalBotReady) {
-    try {
-      await globalBotClient.sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
-      return;
-    } catch (botErr) {
-      logger.warn('botPushOrFallback: bot sendMessage 失败，fallback 到 HTTP API', { target, error: botErr.message });
-    }
+async function botSend(target, text) {
+  if (!globalBotClient || !globalBotReady) {
+    throw new Error(`bot 未就绪（globalBotReady=${globalBotReady}）`);
   }
-  // 群聊 fallback 到群发 API，私聊 fallback 到企业应用
-  if (target.startsWith('wr')) {
-    await sendWeComGroupMessage(target, text);
-  } else {
-    await sendWeComMessage(target, text);
-  }
+  await globalBotClient.sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
 }
 
 async function sendWeComFile(toUser, absPath) {
@@ -5916,7 +5873,7 @@ function startBotLongConnection() {
           try {
             const failReply = await callGatewayAgent('lucas', failPrompt, followUpSessionKey);
             if (failReply && globalBotClient && globalBotReady) {
-              botPushOrFallback(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(null)', { error: e?.message || String(e) }));
+              botSend(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(null)', { error: e?.message || String(e) }));
             }
           } catch (e) {
             logger.warn('Bot 抖音提取失败通知 Lucas 调用失败', { error: e.message });
@@ -5930,7 +5887,7 @@ function startBotLongConnection() {
           try {
             const failReply = await callGatewayAgent('lucas', failPrompt, followUpSessionKey);
             if (failReply && globalBotClient && globalBotReady) {
-              botPushOrFallback(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(err)', { error: e?.message || String(e) }));
+              botSend(botTarget, failReply).catch(e => logger.warn('Bot 抖音提取失败通知推送失败(err)', { error: e?.message || String(e) }));
             }
           } catch (e) {
             logger.warn('Bot 抖音提取失败通知 Lucas 调用失败', { error: e.message });
@@ -5969,7 +5926,7 @@ function startBotLongConnection() {
             // 批量视频转录 prompt 可能较大，超时设 5 分钟
             const analysis = await callGatewayAgent('lucas', followUpPrompt, followUpSessionKey, 300000);
             if (analysis && globalBotClient && globalBotReady) {
-              botPushOrFallback(botTarget, analysis).catch(e => logger.warn('Bot 抖音转录合并推送失败', { error: e?.message || String(e) }));
+              botSend(botTarget, analysis).catch(e => logger.warn('Bot 抖音转录合并推送失败', { error: e?.message || String(e) }));
             }
           } catch (e) {
             logger.warn('Bot 抖音转录合并分析 Lucas 调用失败', { error: e.message });
@@ -6823,19 +6780,20 @@ app.post('/api/wecom/send-to-group', async (req, res) => {
 
     // 纯文字通知（可附带语音）
     if (text && !filePath) {
-      // 群聊：优先走 bot 通道（显示「启灵」），bot 未就绪时降级到企业应用（显示「系统工程师」）
-      // ack 超时不报错（微信服务器有时不回 ack 但消息实际已投递）
+      // 群聊：只走 bot 通道（显示「启灵」）；失败通知 SE，不降级
       try {
-        if (globalBotClient && globalBotReady) {
-          await globalBotClient.sendMessage(chatId, { msgtype: 'markdown', markdown: { content: text } });
-        } else {
-          await sendWeComGroupMessage(chatId, text);
-        }
-      } catch (sendErr) {
-        logger.warn('群文字发送 ack 超时（消息可能已投递）', { error: sendErr?.message });
+        await botSend(chatId, text);
+      } catch (botErr) {
+        logger.error('群文字发送失败，通知系统工程师', { chatId, error: botErr.message });
+        fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `群消息未送达。\n目标群：${chatId}\n异常：${botErr.message}\n原消息：${text.slice(0, 300)}` }),
+        }).catch(() => {});
+        return res.json({ success: false, error: botErr.message });
       }
       appendChatHistory(groupHistKey, '[启灵主动发送]', text);
-      logger.info('群文字消息已发送', { chatId, length: text.length, channel: globalBotReady ? 'bot' : 'app', actor: 'lucas' });
+      logger.info('群文字消息已发送', { chatId, length: text.length, channel: 'bot', actor: 'lucas' });
       // 可选：同时发语音（fire-and-forget，失败不影响文字回复）
       if (voiceText) {
         sendVoiceChunks(chatId, voiceText).catch(() => {});
@@ -6849,14 +6807,14 @@ app.post('/api/wecom/send-to-group', async (req, res) => {
     }
     const filename = path.basename(absPath);
 
-    // 有文字则先发文字通知（优先 bot 通道）
+    // 有文字则先发文字通知（只走 bot 通道，失败不阻塞后续文件发送）
     if (text) {
-      if (globalBotClient && globalBotReady) {
-        await globalBotClient.sendMessage(chatId, { msgtype: 'markdown', markdown: { content: text } });
-      } else {
-        await sendWeComGroupMessage(chatId, text);
+      try {
+        await botSend(chatId, text);
+        appendChatHistory(groupHistKey, '[启灵主动发送]', text);
+      } catch (botErr) {
+        logger.warn('群文件前置文字发送失败，继续发文件', { chatId, error: botErr.message });
       }
-      appendChatHistory(groupHistKey, '[启灵主动发送]', text);
     }
 
     // 发文件到群
@@ -6976,10 +6934,34 @@ app.post('/api/wecom/notify-engineer', async (req, res) => {
     await sendLongWeComMessage(WECOM_OWNER_ID, text);
     logger.info('notify-engineer 已发送 (app)', { type, length: message.length });
     res.json({ success: true, channel: 'app' });
+    // fire-and-forget：写入 ChromaDB agent_interactions，供 Main recall_memory 做过程分析
+    (async () => {
+      try {
+        const embResp = await fetch('http://localhost:11434/api/embeddings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'nomic-embed-text', prompt: text.slice(0, 400) }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!embResp.ok) return;
+        const { embedding } = await embResp.json();
+        const colResp = await fetch(`${CHROMA_API_BASE}/agent_interactions`);
+        if (!colResp.ok) return;
+        const { id: colId } = await colResp.json();
+        await fetch(`${CHROMA_API_BASE}/${colId}/add`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ids: [`notify-engineer-${Date.now()}`],
+            embeddings: [embedding],
+            documents: [text],
+            metadatas: [{ agentId: fromAgent, toAgent: 'engineer', interactionType: `notify_${type}`, timestamp: new Date().toISOString() }],
+          }),
+        });
+      } catch (_e) { /* 写入失败静默处理 */ }
+    })();
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
-    logger.warn('notify-engineer app 通道失败', { error: errMsg });
-    // bot sendMessage(userId) 必定 40008（私聊不支持），不尝试无效 fallback
     logger.error('notify-engineer 发送失败', { error: errMsg });
     res.status(500).json({ success: false, error: errMsg });
   }
@@ -7174,23 +7156,10 @@ app.post('/api/wecom/send-message', async (req, res) => {
   const ttsStyle    = hasRapTag ? 'rap' : 'normal';
 
   try {
-    // 私聊主动推送：aibot sendMessage(userId) 实测 40008（bot 协议只支持 group chatId），
-    // 先尝试 bot 通道（显示「启灵」），失败则 fallback 到企业应用 HTTP API（显示「系统工程师」）
-    let botSent = false;
-    if (globalBotClient && globalBotReady) {
-      try {
-        await globalBotClient.sendMessage(userId, { msgtype: 'markdown', markdown: { content: displayText } });
-        botSent = true;
-      } catch (botErr) {
-        logger.warn('私聊 bot sendMessage 失败，fallback 到 HTTP API', { userId, error: botErr.message });
-      }
-    }
-    if (!botSent) {
-      await sendWeComMessage(userId, displayText);
-    }
-    const channel = botSent ? 'bot' : 'app';
+    // 私聊主动推送：只走 bot 通道（显示「启灵」）；失败通知系统工程师，不降级
+    await botSend(userId, displayText);
     appendChatHistory(chatHistoryKey(false, null, userId), '[启灵主动发送]', displayText);
-    logger.info('主动发消息已发送', { userId, channel, actor: 'lucas' });
+    logger.info('主动发消息已发送', { userId, channel: 'bot', actor: 'lucas' });
     // 语音：显式 voiceText 或 [VOICE]/[RAP] 标记，fire-and-forget
     if (voiceText) {
       sendVoiceChunks(userId, voiceText).catch(() => {});
@@ -7198,9 +7167,14 @@ app.post('/api/wecom/send-message', async (req, res) => {
       sendVoiceChunks(userId, displayText, ttsStyle).catch(() => {});
     }
     res.json({ success: true, userId });
-  } catch (e) {
-    const errMsg = e instanceof Error ? e.message : (e?.errmsg || JSON.stringify(e));
-    logger.error('主动发消息失败', { userId, error: errMsg });
+  } catch (botErr) {
+    const errMsg = botErr instanceof Error ? botErr.message : (botErr?.errmsg || JSON.stringify(botErr));
+    logger.error('主动发消息失败，通知系统工程师', { userId, error: errMsg });
+    fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'intervention', fromAgent: 'lucas', message: `私聊消息未送达。\n目标用户：${userId}\n异常：${errMsg}\n原消息：${displayText.slice(0, 300)}` }),
+    }).catch(() => {});
     res.status(500).json({ success: false, error: errMsg });
   }
 });
@@ -7908,14 +7882,7 @@ ${precomputedArchProposalSignals}
 【预计算数据 - 检查 14：技术债信号（每两周一次）】
 ${precomputedTechDebtSignals}
 
-请按 HEARTBEAT.md 中的检查流程执行巡检。所有预计算数据已注入，直接读取即可，无需 exec 查询。检查 8（主动学习）满足条件时用 read_file 读决策记录。检查 10-14 为新增主动性检查（事件感知/知识获取/自主判断 三维度），按触发条件执行。
-
-【检查 0（每次必执行，优先于其他所有检查）：执行已批准的审批事项】
-1. read_file ~/HomeAI/Data/pending-approvals.json
-2. 找所有 status="approved" 的条目
-3. 若有，按每条 proposed_action 的描述执行（认知文件修改用 write_file/patch_file，代码改动建议用 trigger_lisa_implementation，配置修改直接写对应文件）
-4. 执行后把该条目的 status 改为 "done"，decided_at 写当前时间，再用 write_file 覆盖写入 pending-approvals.json
-5. 有执行则在巡检报告里加一段「已执行审批: [标题列表]」；无 approved 条目则跳过，不提及`;
+请按 HEARTBEAT.md 中的检查流程执行巡检。所有预计算数据已注入，直接读取即可，无需 exec 查询。检查 8（主动学习）满足条件时用 read_file 读决策记录。检查 10-14 为新增主动性检查（事件感知/知识获取/自主判断 三维度），按触发条件执行。`;
 
     // 调用 Andy（独立 session，不影响正常流水线）
     logger.info('Andy HEARTBEAT：发送巡检 prompt', { patternCount: precomputedPatterns === '无高置信度候选（confidence >= 0.8）' ? 0 : 'N/A' });
