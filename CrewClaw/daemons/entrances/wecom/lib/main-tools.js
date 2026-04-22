@@ -3804,6 +3804,7 @@ async function handleMainCommand(content, userId = 'owner', source = 'wecom_remo
 
   return {
     callMainModel,
+    executeMainTool,
     handleMainCommand,
     saveTechDocToObsidian,
     SAVE_DOC_RE,
