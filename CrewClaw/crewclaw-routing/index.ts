@@ -353,6 +353,38 @@ const AGENT_EVOLUTION_CONFIGS: AgentEvolutionConfig[] = [
 //   localThreshold=0.9  → 绝大多数流量走本地
 
 const ROUTING_THRESHOLDS_FILE = join(PROJECT_ROOT, "data/learning/routing-thresholds.json");
+const L4_TASKS_FILE           = join(PROJECT_ROOT, "data/learning/l4-tasks.json");
+const L4_CONTROL_FILE         = join(PROJECT_ROOT, "data/learning/l4-control.json");
+
+// ── L4 任务看板数据结构 ────────────────────────────────────────────────────
+interface L4Task {
+  id: string;
+  type: string;
+  description: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  started_at: string;
+  completed_at: string | null;
+  summary?: string;
+  can_stop: boolean;
+  agent: string;
+}
+interface L4Control {
+  global_pause: boolean;
+  stop_tasks: string[];
+  pause_reason: string | null;
+  updated_at?: string;
+}
+function readL4Tasks(): L4Task[] {
+  try { if (existsSync(L4_TASKS_FILE)) return JSON.parse(readFileSync(L4_TASKS_FILE, "utf8")) as L4Task[]; } catch (_e) {}
+  return [];
+}
+function writeL4Tasks(tasks: L4Task[]): void {
+  try { mkdirSync(dirname(L4_TASKS_FILE), { recursive: true }); writeFileSync(L4_TASKS_FILE, JSON.stringify(tasks, null, 2), "utf8"); } catch (_e) {}
+}
+function readL4Control(): L4Control {
+  try { if (existsSync(L4_CONTROL_FILE)) return JSON.parse(readFileSync(L4_CONTROL_FILE, "utf8")) as L4Control; } catch (_e) {}
+  return { global_pause: false, stop_tasks: [], pause_reason: null };
+}
 
 interface AgentRoutingState {
   localThreshold: number;
@@ -11478,6 +11510,18 @@ last_used: null
           const lines = content.split("\n").length;
           const bytes = Buffer.byteLength(content, "utf8");
           const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
+
+          // ── 认知文件写入：实时通知 SE（可观测性）──────────────────────────
+          const cognitiveFileNames = new Set(["AGENTS.md", "SOUL.md", "MEMORY.md", "TOOLS.md", "HEARTBEAT.md", "DESIGN-PRINCIPLES.md"]);
+          const fileBasename = targetPath.split("/").pop() ?? "";
+          if (targetPath.includes(`${HOME}/.openclaw/workspace-`) && cognitiveFileNames.has(fileBasename)) {
+            const agentSlug = targetPath.split("/.openclaw/workspace-")[1]?.split("/")[0] ?? "unknown";
+            void notifyEngineer(
+              `【认知文件修改】${agentSlug} 更新了 ${fileBasename}\n路径：${displayPath}（${bytes} 字节）\n---\n发「查 L4」可查看完整自主行动记录`,
+              "info", toolCtx.agentId ?? DESIGNER_AGENT_ID,
+            );
+          }
+
           return {
             content: [{ type: "text", text: `✅ 已写入 ${displayPath}（${lines} 行，${bytes} 字节，${append ? "追加" : "覆盖"}）` }],
             details: { path: targetPath, lines, bytes, mode: append ? "append" : "overwrite" },
@@ -12101,6 +12145,106 @@ last_used: null
             details: { error: "restart_failed", service, message: errMsg },
           };
         }
+      },
+    }));
+
+    // ── register_l4_task / complete_l4_task / check_l4_control：Andy 专属，L4 可观测性 ──
+    //
+    // Andy 在 HEARTBEAT 主动改进前调 register_l4_task，完成后调 complete_l4_task。
+    // 每次 HEARTBEAT 开始时调 check_l4_control，检查 SE 是否发出暂停/叫停信号。
+
+    api.registerTool((toolCtx) => ({
+      label: "注册 L4 任务",
+      name: "register_l4_task",
+      description: [
+        "Andy 专属：在执行 HEARTBEAT 主动改进前调用，向 L4 任务看板注册本次行动，并实时通知系统工程师。",
+        "type：任务类型——heartbeat_improvement / cognitive_file_update / routing_change / skill_crystallization / tool_registration / architecture_proposal",
+        "description：任务描述（做什么、为什么，1-2句）",
+        "can_stop：是否支持 SE 通过「叫停 [ID]」中止（默认 true）",
+        "返回 task_id，完成或失败后调 complete_l4_task 更新状态。",
+      ].join("\n"),
+      parameters: Type.Object({
+        type: Type.String({ description: "任务类型" }),
+        description: Type.String({ description: "任务描述（做什么、为什么）" }),
+        can_stop: Type.Optional(Type.Boolean({ description: "是否支持叫停（默认 true）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId !== DESIGNER_AGENT_ID)
+          return { content: [{ type: "text", text: "Error: register_l4_task 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+        const { type, description: desc, can_stop = true } = params as { type: string; description: string; can_stop?: boolean };
+        const taskId = `l4-${Date.now()}`;
+        const task: L4Task = { id: taskId, type, description: desc, status: "running", started_at: new Date().toISOString(), completed_at: null, can_stop, agent: DESIGNER_AGENT_ID };
+        const tasks = readL4Tasks();
+        tasks.push(task);
+        writeL4Tasks(tasks);
+        void notifyEngineer(
+          `【L4 任务开始】${type}\nID: ${taskId}\n描述: ${desc}${can_stop ? `\n---\n发「叫停 ${taskId}」可中止此任务` : ""}`,
+          "info", DESIGNER_AGENT_ID,
+        );
+        return { content: [{ type: "text", text: `✅ L4 任务已注册：${taskId}（${type}）` }], details: { task_id: taskId, type, can_stop } };
+      },
+    }));
+
+    api.registerTool((toolCtx) => ({
+      label: "完成 L4 任务",
+      name: "complete_l4_task",
+      description: [
+        "Andy 专属：完成或失败后更新 L4 任务状态，并通知系统工程师。",
+        "task_id：register_l4_task 返回的任务 ID",
+        "status：completed（完成）| failed（失败）| stopped（被叫停后主动停止）",
+        "summary：结果摘要（做了什么、产生了什么影响，1-3句）",
+      ].join("\n"),
+      parameters: Type.Object({
+        task_id: Type.String({ description: "任务 ID" }),
+        status: Type.String({ description: "completed / failed / stopped" }),
+        summary: Type.String({ description: "结果摘要" }),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId !== DESIGNER_AGENT_ID)
+          return { content: [{ type: "text", text: "Error: complete_l4_task 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+        const { task_id, status, summary } = params as { task_id: string; status: string; summary: string };
+        const tasks = readL4Tasks();
+        const idx = tasks.findIndex((t) => t.id === task_id);
+        if (idx === -1)
+          return { content: [{ type: "text", text: `❌ 任务 ${task_id} 不存在` }], details: { error: "not_found" } };
+        tasks[idx] = { ...tasks[idx], status: status as L4Task["status"], completed_at: new Date().toISOString(), summary };
+        writeL4Tasks(tasks);
+        const icon = status === "completed" ? "✅" : status === "stopped" ? "⏹" : "❌";
+        void notifyEngineer(
+          `【L4 任务${status === "completed" ? "完成" : status === "stopped" ? "已叫停" : "失败"}】${icon}\nID: ${task_id}\n结果: ${summary}`,
+          status === "completed" ? "info" : "intervention", DESIGNER_AGENT_ID,
+        );
+        return { content: [{ type: "text", text: `${icon} L4 任务 ${task_id} 已标记为 ${status}` }], details: { task_id, status } };
+      },
+    }));
+
+    api.registerTool((toolCtx) => ({
+      label: "检查 L4 控制信号",
+      name: "check_l4_control",
+      description: [
+        "Andy 专属：检查系统工程师是否发出 L4 暂停或叫停信号。",
+        "每次 HEARTBEAT 开始时必须调用；长任务执行期间也可中途检查。",
+        "task_id（可选）：提供后额外检查该任务是否被 SE 单独叫停。",
+        "返回 should_stop（是否应停止当前任务或整个 HEARTBEAT）、global_pause、reason。",
+        "should_stop=true 时：停止当前操作，调 complete_l4_task(status=stopped)，在巡检报告里注明原因。",
+      ].join("\n"),
+      parameters: Type.Object({
+        task_id: Type.Optional(Type.String({ description: "当前执行中的任务 ID（可选）" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId !== DESIGNER_AGENT_ID)
+          return { content: [{ type: "text", text: "Error: check_l4_control 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+        const { task_id } = params as { task_id?: string };
+        const ctrl = readL4Control();
+        const taskStopped = task_id ? ctrl.stop_tasks.includes(task_id) : false;
+        const should_stop = ctrl.global_pause || taskStopped;
+        return {
+          content: [{ type: "text", text: should_stop
+            ? `⏸ 收到停止信号：${ctrl.global_pause ? "全局暂停" : `任务 ${task_id} 被叫停`}。原因：${ctrl.pause_reason ?? "未说明"}`
+            : "✅ 无停止信号，可继续执行",
+          }],
+          details: { should_stop, global_pause: ctrl.global_pause, task_stopped: taskStopped, reason: ctrl.pause_reason, stopped_tasks: ctrl.stop_tasks },
+        };
       },
     }));
 

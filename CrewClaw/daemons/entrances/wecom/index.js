@@ -43,9 +43,33 @@ const nowCST   = () => new Date(Date.now() + 8 * 3600000).toISOString().replace(
 const todayCST = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 
 // ─── 全局路径常量（必须在任何函数定义之前）────────────────────────────────────
-const HOMEAI_ROOT    = path.join(__dirname, '../../../../..');
-const WHISPER_MODEL  = path.join(HOMEAI_ROOT, 'Models/whisper/ggml-base.bin');
-const COOKIES_FILE   = path.join(HOMEAI_ROOT, 'config/douyin-cookies.txt');
+const HOMEAI_ROOT     = path.join(__dirname, '../../../../..');
+const WHISPER_MODEL   = path.join(HOMEAI_ROOT, 'Models/whisper/ggml-base.bin');
+const COOKIES_FILE    = path.join(HOMEAI_ROOT, 'config/douyin-cookies.txt');
+const L4_TASKS_FILE   = path.join(HOMEAI_ROOT, 'Data', 'learning', 'l4-tasks.json');
+const L4_CONTROL_FILE = path.join(HOMEAI_ROOT, 'Data', 'learning', 'l4-control.json');
+
+// ─── L4 任务看板辅助函数 ──────────────────────────────────────────────────────
+function readL4Tasks() {
+  try { if (fs.existsSync(L4_TASKS_FILE)) return JSON.parse(fs.readFileSync(L4_TASKS_FILE, 'utf8')); } catch (_e) {}
+  return [];
+}
+function readL4Control() {
+  try { if (fs.existsSync(L4_CONTROL_FILE)) return JSON.parse(fs.readFileSync(L4_CONTROL_FILE, 'utf8')); } catch (_e) {}
+  return { global_pause: false, stop_tasks: [], pause_reason: null };
+}
+function writeL4Control(data) {
+  try {
+    fs.mkdirSync(path.dirname(L4_CONTROL_FILE), { recursive: true });
+    fs.writeFileSync(L4_CONTROL_FILE, JSON.stringify({ ...data, updated_at: new Date().toISOString() }, null, 2), 'utf8');
+  } catch (_e) {}
+}
+
+// SE 远程 L4 控制命令正则
+const L4_QUERY_RE  = /^查\s*l4$/i;
+const L4_STOP_RE   = /^叫停\s+(l4-\d+)/i;
+const L4_PAUSE_RE  = /^暂停\s*l4$/i;
+const L4_RESUME_RE = /^恢复\s*l4$/i;
 
 // 视频平台 URL 正则
 // yt-dlp 可处理的平台（YouTube / Bilibili / 微博 / 小红书）
@@ -1054,7 +1078,50 @@ app.post('/wecom/callback', async (req, res) => {
     if (isOwner && !isGroup) {
       // ── 存档触发检测（优先于 handleMainCommand）
       const trimmed = content.trim();
-      if (SAVE_DOC_RE.test(trimmed) || SAVE_TECH_RE.test(trimmed)) {
+
+      // ── SE 远程 L4 控制命令（零 token，直接处理）──────────────────────────
+      if (L4_QUERY_RE.test(trimmed)) {
+        const tasks = readL4Tasks();
+        const running = tasks.filter(t => t.status === 'running');
+        const recent  = tasks.filter(t => t.status !== 'running').slice(-5);
+        const ctrl    = readL4Control();
+        let msg = '【L4 任务看板】\n\n';
+        if (running.length === 0) {
+          msg += '当前无运行中的 L4 任务\n';
+        } else {
+          msg += `运行中（${running.length} 个）：\n`;
+          running.forEach(t => { msg += `• [${t.id}] ${t.type}\n  ${t.description}\n  可叫停: ${t.can_stop ? '是' : '否'}\n\n`; });
+        }
+        if (recent.length > 0) {
+          const icon = s => s === 'completed' ? '✅' : s === 'stopped' ? '⏹' : '❌';
+          msg += `最近完成（${recent.length} 个）：\n`;
+          recent.forEach(t => { msg += `${icon(t.status)} [${t.id.slice(-8)}] ${(t.description || '').slice(0, 40)}\n`; });
+        }
+        if (ctrl.global_pause) msg += `\n⚠️ 全局暂停中\n原因：${ctrl.pause_reason || '未说明'}\n发「恢复 L4」解除`;
+        else if (running.length > 0) msg += `\n发「叫停 [ID]」可中止指定任务\n发「暂停 L4」可暂停所有主动改进`;
+        reply = msg;
+      } else if (L4_STOP_RE.test(trimmed)) {
+        const match = L4_STOP_RE.exec(trimmed);
+        const taskId = match[1];
+        const ctrl = readL4Control();
+        if (!ctrl.stop_tasks.includes(taskId)) ctrl.stop_tasks.push(taskId);
+        ctrl.pause_reason = `SE 叫停 ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+        writeL4Control(ctrl);
+        reply = `✅ 已发出叫停信号：${taskId}\nAndy 下次检查 L4 控制信号时将停止执行`;
+      } else if (L4_PAUSE_RE.test(trimmed)) {
+        const ctrl = readL4Control();
+        ctrl.global_pause = true;
+        ctrl.pause_reason = `SE 全局暂停 ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+        writeL4Control(ctrl);
+        reply = '✅ L4 全局暂停已启动\nAndy 下次 HEARTBEAT 开始时将跳过所有主动改进\n\n发「恢复 L4」解除暂停';
+      } else if (L4_RESUME_RE.test(trimmed)) {
+        const ctrl = readL4Control();
+        ctrl.global_pause = false;
+        ctrl.stop_tasks = [];
+        ctrl.pause_reason = null;
+        writeL4Control(ctrl);
+        reply = '✅ L4 已恢复运行\n全局暂停解除，叫停列表已清空';
+      } else if (SAVE_DOC_RE.test(trimmed) || SAVE_TECH_RE.test(trimmed)) {
         const category = SAVE_DOC_RE.test(trimmed) ? 'claudecode' : 'tech';
         const cached = lastExtractedDoc.get(fromUser);
         if (!cached || Date.now() - cached.ts > 30 * 60 * 1000) {
