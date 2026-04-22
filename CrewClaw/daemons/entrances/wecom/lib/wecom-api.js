@@ -25,6 +25,9 @@ module.exports = function createWecomApi(logger, deps) {
     getBotClient, getBotReady,
   } = deps;
 
+  // access_token 缓存（工厂内部状态）
+  let accessTokenCache = { token: null, expiresAt: 0 };
+
 // ─── AES 解密 ───────────────────────────────────────────────────────────────
 
 /**
@@ -157,10 +160,10 @@ async function sendWeComMessage(toUser, text) {
  * 只走 bot，失败直接抛出——调用方决定如何处理错误，不在此降级污染信息。
  */
 async function botSend(target, text) {
-  if (!globalBotClient || !globalBotReady) {
-    throw new Error(`bot 未就绪（globalBotReady=${globalBotReady}）`);
+  if (!getBotClient() || !getBotReady()) {
+    throw new Error(`bot 未就绪（globalBotReady=${getBotReady()}）`);
   }
-  await globalBotClient.sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
+  await getBotClient().sendMessage(target, { msgtype: 'markdown', markdown: { content: text } });
 }
 
 async function sendWeComFile(toUser, absPath) {
