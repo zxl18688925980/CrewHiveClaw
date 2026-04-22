@@ -367,6 +367,11 @@ function restartGateway() {
   try {
     execSync('kill -9 $(pgrep -f openclaw-gateway) 2>/dev/null || true', { shell: true });
     execSync('sleep 2', { shell: true });
+    // disabled 状态下 bootstrap 无效，先强制 enable 确保服务可被启动
+    execSync(
+      `launchctl enable gui/${process.getuid()}/ai.openclaw.gateway 2>/dev/null || true`,
+      { shell: true }
+    );
     execSync(
       'launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.plist 2>/dev/null || true',
       { shell: true, env: { ...process.env, UID: String(process.getuid()) } }

@@ -1281,6 +1281,10 @@ async function callAgentModel(agentId, systemPrompt, messages, maxTokens = 1024)
 }
 
 // ─── Lucas 后备：Gateway 不可用时跟随 Lucas 的配置模型 ─────────────────────────
+// 每次进程重启后第一次进入后备时通知系统工程师，之后静默（避免每条消息都推通知）
+let _gatewayDownNotifiedAt = 0;
+const GATEWAY_DOWN_NOTIFY_INTERVAL_MS = 30 * 60 * 1000; // 每 30 分钟最多推一次
+
 let _lucasSoulCache = null;
 function getLucasSoul() {
   if (_lucasSoulCache) return _lucasSoulCache;
@@ -6084,21 +6088,41 @@ function startBotLongConnection() {
             clearTimeout(_ackTimer);
             logger.error('Bot 消息处理失败，启用 Claude 后备', { error: e?.message || String(e), fromUser });
             try {
+              // 第一次进入后备时通知系统工程师（每 30 分钟最多推一次）
+              const now = Date.now();
+              if (now - _gatewayDownNotifiedAt > GATEWAY_DOWN_NOTIFY_INTERVAL_MS) {
+                _gatewayDownNotifiedAt = now;
+                fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    type: 'error',
+                    fromAgent: 'wecom-entrance',
+                    message: `⚠️ **Gateway 不可用，系统进入应急模式**\n\nGateway (18789) 无响应，Lucas 已切换为无工具/无记忆的后备模型。\n\n**影响**：工具调用、记忆检索、ChromaDB/Kuzu 全部失效，Lucas 人格保留但能力为零。\n\n**恢复方式**：系统工程师手动执行\n\`\`\`\nlaunchctl enable gui/$(id -u)/ai.openclaw.gateway\nbash ~/.openclaw/start-gateway.sh\n\`\`\``,
+                  }),
+                }).catch(() => {});
+              }
+
               const fallbackReply = await callClaudeFallback(msg, fromUser, history).catch(fallbackErr => {
                 logger.error('Claude 后备也失败了', { error: fallbackErr.message });
                 return '我现在有点忙，稍后回你～';
               });
+
+              // 在回复前加应急声明，让用户知道当前是降级状态
+              const emergencyPrefix = '⚠️ **系统应急模式**：后台服务异常，我现在没有工具和记忆能力，需要系统工程师介入恢复。\n\n---\n\n';
+              const fullReply = emergencyPrefix + fallbackReply;
+
               appendChatHistory(_histKey, `${memberTag}${_text}`, fallbackReply);
               if (_isGroup) {
-                const now = Date.now();
+                const nowSend = Date.now();
                 const lastSend = groupBotLastSend.get(_chatId) || 0;
-                const wait = Math.max(0, GROUP_BOT_MIN_INTERVAL_MS - (now - lastSend));
+                const wait = Math.max(0, GROUP_BOT_MIN_INTERVAL_MS - (nowSend - lastSend));
                 if (wait > 0) await new Promise(r => setTimeout(r, wait));
-                await sendWithTimeout(() => wsClient.sendMessage(_chatId, { msgtype: 'markdown', markdown: { content: fallbackReply } }));
-                groupBotLastSend.set(_chatId, Date.now());
+                await sendWithTimeout(() => wsClient.sendMessage(_chatId, { msgtype: 'markdown', markdown: { content: fullReply } }));
+                groupBotLastSend.set(_chatId, nowSend);
               } else {
                 const errStreamId = crypto.randomUUID();
-                await sendWithTimeout(() => wsClient.replyStream(_frame, errStreamId, fallbackReply, true), 30000);
+                await sendWithTimeout(() => wsClient.replyStream(_frame, errStreamId, fullReply, true), 30000);
               }
               logger.info('Claude 后备回复已发送', { fromUser, isGroup: _isGroup });
             } catch (fallbackSendErr) {
