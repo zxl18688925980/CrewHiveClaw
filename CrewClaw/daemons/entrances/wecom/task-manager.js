@@ -52,7 +52,7 @@ class TaskManager {
    * @param {Function} ctx.appendChatHistory(key, userText, assistantText)
    * @param {Function} ctx.transcribeLocalVideo(videoPath)
    * @param {Function} ctx.describeImageWithLlava(imagePath)
-   * @param {Function} ctx.getFamilyMembers()
+   * @param {Function} ctx.getOrgMembers()
    * @param {Function} ctx.getBotClient()   → globalBotClient（主动推送用）
    */
   constructor(ctx) {

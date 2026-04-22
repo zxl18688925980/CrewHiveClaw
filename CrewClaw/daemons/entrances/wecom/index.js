@@ -196,7 +196,7 @@ function initLoops() {
     callGatewayAgent, callMainModel, executeMainTool,
     sendWeComMessage, sendLongWeComMessage,
     nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
-    getFamilyMembers: () => familyMembers,
+    getOrgMembers: () => orgMembers,
     MAIN_SYSTEM_PROMPT,
     readTaskRegistryRaw,
     markTaskLucasAcked,
@@ -257,7 +257,7 @@ function initBotConnection() {
     setGlobalBotClient: (v) => { globalBotClient = v; },
     getBotClient: () => globalBotClient,
     getBotReady:  () => globalBotReady,
-    getFamilyMembers: () => familyMembers,
+    getOrgMembers: () => orgMembers,
     getTaskManager:   () => taskManager,
     getDemoGroupConfig: () => demoGroupConfig,
     isDemoGroup,
@@ -293,10 +293,13 @@ const GATEWAY_TOKEN = (() => {
 // 注：Lucas 已迁移为 OpenClaw 嵌入式 agent，不再直连
 
 // 加载家庭成员信息
-let familyMembers = {};
+// 组织成员配置：ORG_MEMBERS_CONFIG env var 指定路径（不设则回退 .homeai/family-info.json 兼容 HomeAI）
+let orgMembers = {};
 try {
-  const familyInfo = require('/Users/xinbinanshan/.homeai/family-info.json');
-  familyMembers = familyInfo.wecomMembers || {};
+  const membersConfigPath = process.env.ORG_MEMBERS_CONFIG
+    || require('path').join(process.env.HOME, '.homeai', 'family-info.json');
+  const membersInfo = JSON.parse(require('fs').readFileSync(membersConfigPath, 'utf8'));
+  orgMembers = membersInfo.wecomMembers || membersInfo.members || {};
 } catch (e) {
   // 加载失败不影响运行
 }
@@ -585,7 +588,7 @@ app.post('/wecom/callback', async (req, res) => {
     }
 
     // 识别身份
-    const member  = familyMembers[fromUser];
+    const member  = orgMembers[fromUser];
     const isOwner = WECOM_OWNER_ID && fromUser === WECOM_OWNER_ID;
     const replyTo = { fromUser, chatId, isGroup };
 
@@ -771,7 +774,7 @@ const taskManager = new TaskManager({
   appendChatHistory,
   transcribeLocalVideo,
   describeImageWithLlava,
-  getFamilyMembers:     () => familyMembers,
+  getOrgMembers:     () => orgMembers,
   getBotClient:         () => globalBotClient,
 });
 // jaccardSimilarity / checkReplyRepetition → lib/msg-utils.js

@@ -28,7 +28,7 @@ module.exports = function createLoops(logger, deps) {
     callGatewayAgent, callMainModel, executeMainTool,
     sendWeComMessage, sendLongWeComMessage,
     nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
-    getFamilyMembers,
+    getOrgMembers,
     MAIN_SYSTEM_PROMPT,
     readTaskRegistryRaw,
     markTaskLucasAcked,
@@ -101,7 +101,7 @@ async function runLucasProactiveLoop() {
   try {
     // 构建大小写不敏感的成员 userId 反查表（覆盖所有组织成员，不只家人）
     const memberUserIdMap = {};
-    for (const realId of Object.keys(getFamilyMembers())) {
+    for (const realId of Object.keys(getOrgMembers())) {
       memberUserIdMap[realId.toLowerCase()] = realId;
     }
 

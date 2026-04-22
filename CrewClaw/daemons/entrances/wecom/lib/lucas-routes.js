@@ -175,7 +175,7 @@ app.post('/api/wecom/send-to-group', async (req, res) => {
   const { filePath, text, voiceText } = req.body || {};
   if (!filePath && !text) return res.status(400).json({ success: false, error: 'filePath or text required' });
 
-  const familyInfo = JSON.parse(fs.readFileSync(path.join(process.env.HOME, '.homeai/family-info.json'), 'utf8'));
+  const familyInfo = JSON.parse(fs.readFileSync(process.env.ORG_MEMBERS_CONFIG || path.join(process.env.HOME, '.homeai', 'family-info.json'), 'utf8'));
   const chatId = familyInfo.wecomFamilyChatId;
 
   try {
@@ -281,7 +281,7 @@ app.post('/api/wecom/send-voice', async (req, res) => {
   if (!target || !text) {
     return res.status(400).json({ success: false, error: 'target and text are required' });
   }
-  const familyInfo = JSON.parse(fs.readFileSync(path.join(process.env.HOME, '.homeai/family-info.json'), 'utf8'));
+  const familyInfo = JSON.parse(fs.readFileSync(process.env.ORG_MEMBERS_CONFIG || path.join(process.env.HOME, '.homeai', 'family-info.json'), 'utf8'));
   const chatId = target === 'group' ? familyInfo.wecomFamilyChatId : target;
   try {
     await sendVoiceChunks(chatId, text);

@@ -10,7 +10,7 @@
  *   WECOM_BOT_ID, WECOM_BOT_SECRET, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
  *   setGlobalBotReady, setGlobalBotClient,
  *   getBotClient, getBotReady,
- *   getFamilyMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
+ *   getOrgMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
  *   groupBotLastSend, GROUP_BOT_MIN_INTERVAL_MS,
  *   _gatewayDownNotifiedAt_ref, GATEWAY_DOWN_NOTIFY_INTERVAL_MS,
  *   callGatewayAgent, callAgentModel, callClaudeFallback,
@@ -34,7 +34,7 @@ module.exports = function createBotConnection(logger, deps) {
     WECOM_BOT_ID, WECOM_BOT_SECRET, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
     setGlobalBotReady, setGlobalBotClient,
     getBotClient, getBotReady,
-    getFamilyMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
+    getOrgMembers, getTaskManager, getDemoGroupConfig, isDemoGroup,
     groupBotLastSend, GROUP_BOT_MIN_INTERVAL_MS,
     _gatewayDownNotifiedAt_ref, GATEWAY_DOWN_NOTIFY_INTERVAL_MS,
     callGatewayAgent, callAgentModel, callClaudeFallback,
@@ -125,7 +125,7 @@ function startBotLongConnection() {
     }
 
     // 身份标签（让 Lucas 知道是谁发的，含渠道信息）
-    const member    = getFamilyMembers()[fromUser];
+    const member    = getOrgMembers()[fromUser];
     const channel   = isGroup ? '群聊' : '私聊';
     const memberTag = member
       ? `【${channel}·${member.role}${member.name}】`
@@ -473,7 +473,7 @@ function startBotLongConnection() {
       return;
     }
 
-    const member     = getFamilyMembers()[fromUser];
+    const member     = getOrgMembers()[fromUser];
     const channel    = isGroup ? '群聊' : '私聊';
     const memberTag  = member ? `【${channel}·${member.role}${member.name}】` : `【${channel}·${fromUser}】`;
     const memberName = member ? `${member.role}${member.name}` : fromUser;
@@ -568,7 +568,7 @@ function startBotLongConnection() {
     const isGroup  = !!chatId;
     const items    = frame.body?.mixed?.msg_item || [];
 
-    const member     = getFamilyMembers()[fromUser];
+    const member     = getOrgMembers()[fromUser];
     const channel    = isGroup ? '群聊' : '私聊';
     const memberTag  = member ? `【${channel}·${member.role}${member.name}】` : `【${channel}·${fromUser}】`;
     const memberName = member ? `${member.role}${member.name}` : fromUser;
@@ -683,7 +683,7 @@ function startBotLongConnection() {
       return;
     }
 
-    const member     = getFamilyMembers()[fromUser];
+    const member     = getOrgMembers()[fromUser];
     const channel    = isGroup ? '群聊' : '私聊';
     const memberTag  = member ? `【${channel}·${member.role}${member.name}】` : `【${channel}·${fromUser}】`;
     const histKey    = chatHistoryKey(isGroup, chatId, fromUser);
