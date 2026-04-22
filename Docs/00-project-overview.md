@@ -3636,6 +3636,20 @@ PM2：wecom-entrance（端口 3003）、cloudflared-tunnel、gateway-watchdog
 
 Main 日常维护操作详见三章"系统工程师与 Main"。
 
+### 任务中断自恢复
+
+wecom-entrance 进程崩溃时，正在执行的 catch 块不会运行，task-registry 中的任务会永远停留在 `running` 状态。三层保障确保孤儿任务被检测、标记并通知相关方：
+
+| 层级 | 触发时机 | 机制 |
+|------|---------|------|
+| **Layer 1** | Andy pipeline catch 块 | `markTaskStatus("failed")` — 代码层捕获的异常即时标记 |
+| **Layer 2** | wecom-entrance 启动时 | 扫描 running > 5min 的孤儿任务 → 标记 `interrupted`（写入 `interruptedAt` + `interruptReason: process-restart`）→ 通知 SE → 延迟 2min 等 Gateway 稳定后通知 Lucas 决定是否重触发 |
+| **Layer 3** | 每 30 分钟定时扫描 | running > 2h 的任务通知 SE（`stuckNotifiedAt` 防止每个任务每 2h 重复通知） |
+
+**task-registry 状态机**：`queued → running → completed / failed / cancelled / interrupted`
+
+Layer 2 延迟 2min 通知 Lucas 的原因：wecom-entrance 启动后 Gateway 可能尚未就绪，给两个进程留稳定时间窗口再发 Agent 调用。Andy/Lisa 无直接交互界面，依赖此机制确保任务中断可见、可恢复，而不是静默消失。
+
 ### 量化健康标准
 
 | 指标 | 警戒线 | 说明 |
