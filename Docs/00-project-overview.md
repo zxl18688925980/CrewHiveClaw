@@ -3625,7 +3625,7 @@ Andy 协作链串行执行，避免并发 DeepSeek R1 请求堆积超时导致 G
 
 #### 层三：per-message 独立 session
 
-每条消息使用唯一 session key（`group:fromUser:msgId` 或 `userId:timestamp`），单条消息卡死的 session 不影响其他消息。记忆通过 ChromaDB `before_prompt_build` 注入，不依赖 session 历史积累。
+每条消息使用唯一 session key（`group:chatId:fromUser:msgId` 或 `userId:timestamp`），单条消息卡死的 session 不影响其他消息。记忆通过 ChromaDB `before_prompt_build` 注入，不依赖 session 历史积累。
 
 ### 进程状态
 
