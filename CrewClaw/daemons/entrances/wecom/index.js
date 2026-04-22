@@ -787,7 +787,7 @@ const taskManager = new TaskManager({
 // verifySEToken / pipeline-tasks / submit-requirement → lib/se-dashboard.js
 
 
-const ORG_GROUP_CHAT_ID = process.env.WECOM_ORG_GROUP_CHAT_ID || process.env.WECOM_ORG_GROUP_CHAT_ID || '';
+const ORG_GROUP_CHAT_ID = process.env.WECOM_ORG_GROUP_CHAT_ID || process.env.WECOM_FAMILY_GROUP_CHAT_ID || '';
 
 app.post('/api/wecom/send-message', async (req, res) => {
   const { userId, text, voiceText } = req.body || {};
