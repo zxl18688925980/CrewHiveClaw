@@ -15,6 +15,7 @@
  *         sendVoiceChunks, stripMarkdownForWecom,
  *         appendChatHistory, chatHistoryKey, buildHistoryMessages,
  *         callGatewayAgent, executeMainTool, runMainMonitorLoop,
+ *         runLucasProactiveLoop, runAndyHeartbeatLoop,
  *         loadInvites, isInviteValid, visitorPendingMessages }
  */
 const express = require('express');
@@ -30,6 +31,7 @@ module.exports = function createLucasRoutes(logger, {
   sendVoiceChunks, stripMarkdownForWecom,
   appendChatHistory, chatHistoryKey, buildHistoryMessages,
   callGatewayAgent, executeMainTool, runMainMonitorLoop,
+  runLucasProactiveLoop, runAndyHeartbeatLoop,
   loadInvites, isInviteValid, visitorPendingMessages,
 }) {
   const router = express.Router();
@@ -386,6 +388,18 @@ app.post('/api/internal/trigger-monitor', async (req, res) => {
   res.json({ ok: true, message: '监控循环已触发，结果将推送至企业微信' });
   // 异步执行，不阻塞响应
   setImmediate(() => runMainMonitorLoop().catch(e => logger.error('手动触发监控循环失败', { error: e.message })));
+});
+
+// POST /api/internal/trigger-lucas-proactive — 手动触发 Lucas 主动循环（补跑/调试用）
+app.post('/api/internal/trigger-lucas-proactive', async (req, res) => {
+  res.json({ ok: true, message: 'Lucas 主动循环已触发，结果见日志' });
+  setImmediate(() => runLucasProactiveLoop().catch(e => logger.error('手动触发 Lucas 主动循环失败', { error: e.message })));
+});
+
+// POST /api/internal/trigger-andy-heartbeat — 手动触发 Andy HEARTBEAT（补跑/调试用）
+app.post('/api/internal/trigger-andy-heartbeat', async (req, res) => {
+  res.json({ ok: true, message: 'Andy HEARTBEAT 已触发，结果将写入 task-registry.json' });
+  setImmediate(() => runAndyHeartbeatLoop().catch(e => logger.error('手动触发 Andy HEARTBEAT 失败', { error: e.message })));
 });
 
 // GET /api/demo-proxy/pending — 前端轮询 Lucas 主动推送给访客的消息

@@ -198,6 +198,8 @@ function initLoops() {
     nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
     getFamilyMembers: () => familyMembers,
     MAIN_SYSTEM_PROMPT,
+    readTaskRegistryRaw,
+    markTaskLucasAcked,
   });
   ({ runLucasProactiveLoop, runMainMonitorLoop, runMainWeeklyEvaluation, runAndyHeartbeatLoop } = _loops);
 }
@@ -244,6 +246,7 @@ function initLucasRoutes() {
     sendVoiceChunks, stripMarkdownForWecom,
     appendChatHistory, chatHistoryKey, buildHistoryMessages,
     callGatewayAgent, executeMainTool, runMainMonitorLoop,
+    runLucasProactiveLoop, runAndyHeartbeatLoop,
     loadInvites, isInviteValid, visitorPendingMessages,
   }));
 }

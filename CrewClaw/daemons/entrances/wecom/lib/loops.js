@@ -18,6 +18,11 @@ const path    = require('path');
 const { execSync } = require('child_process');
 const axios   = require('axios');
 
+// 剥离 reasoning 模型 <think>...</think> 块（loops 内部本地函数，agent-client.js 同名函数的副本）
+function stripThink(text) {
+  return (text || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}
+
 module.exports = function createLoops(logger, deps) {
   const {
     callGatewayAgent, callMainModel, executeMainTool,
@@ -25,6 +30,8 @@ module.exports = function createLoops(logger, deps) {
     nowCST, HOMEAI_ROOT, PORT, WECOM_OWNER_ID,
     getFamilyMembers,
     MAIN_SYSTEM_PROMPT,
+    readTaskRegistryRaw,
+    markTaskLucasAcked,
   } = deps;
 
 // ─── Lucas 主动循环（Proactive Loop）────────────────────────────────────────
