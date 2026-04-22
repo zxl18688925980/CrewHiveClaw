@@ -6690,7 +6690,7 @@ function isDuplicateMsg(msgId) {
 class MessageAggregator {
   constructor() {
     this._buffers = new Map(); // key → { items: [], timer }
-    this.DEBOUNCE_MS = 2000;   // 首条消息等 2 秒
+    this.DEBOUNCE_MS = 3000;   // 等用户停止说话 3 秒（trailing-edge）
     this.MAX_ITEMS   = 10;     // 最多聚合 10 条
   }
 
@@ -6699,7 +6699,10 @@ class MessageAggregator {
     if (this._buffers.has(key)) {
       const buf = this._buffers.get(key);
       buf.items.push(item);
-      if (buf.items.length >= this.MAX_ITEMS) this._flush(key);
+      if (buf.items.length >= this.MAX_ITEMS) { this._flush(key); return; }
+      // trailing-edge debounce：每来一条新消息都重置计时器，等用户停止说话再处理
+      clearTimeout(buf.timer);
+      buf.timer = setTimeout(() => this._flush(key), this.DEBOUNCE_MS);
       return;
     }
     const buf = { items: [item], timer: setTimeout(() => this._flush(key), this.DEBOUNCE_MS) };
