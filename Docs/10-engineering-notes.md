@@ -1089,3 +1089,20 @@ if (lastIteratedMatch?.[1] === today) continue;  // 今天已迭代，跳过
 
 **状态**：已修复（index.ts + context-sources.ts，Gateway 重启验证通过，查询 {OWNER_ID} 返回 5 条 causal_relation）
 **确认日期**：2026-04-22
+
+### ecosystem.config.js 环境变量重命名后必须同步补全透传
+
+**场景**：`wecom/index.js` 重构将变量名从 `WECOM_FAMILY_GROUP_CHAT_ID` 改为 `WECOM_ORG_GROUP_CHAT_ID`，但 `ecosystem.config.js` 的 `commonEnv` 块未同步新增对应透传行。
+
+**现象**：PM2 进程拿不到 `WECOM_ORG_GROUP_CHAT_ID`，`ORG_GROUP_CHAT_ID` 为空字符串。Bot SDK 向空 chatid 发消息时返回 `errcode=93006, errmsg=invalid chatid`，群聊主动推送全部失败。`.env` 文件里有正确的值，但变量从未到达进程。
+
+**根因**：`ecosystem.config.js` 顶部 `require('dotenv').config()` 从 `.env` 加载变量，但只有写进 `commonEnv` 对象的变量才会被 PM2 注入进程 env。未列出的变量对进程不可见，即使 `.env` 里有值。
+
+**修复**：在 `ecosystem.config.js` 的 `commonEnv` 块中补加 `WECOM_ORG_GROUP_CHAT_ID: process.env.WECOM_ORG_GROUP_CHAT_ID`，然后 `pm2 restart wecom-entrance --update-env`（普通 `pm2 restart` 不重新加载 env，必须加 `--update-env`）。
+
+**规避原则**：
+- 重构改变量名时，必须同步检查 `ecosystem.config.js` 的 `commonEnv` 块，确保新名称已列入
+- 变更 ecosystem.config.js 的 env 块后，重启必须用 `pm2 restart <name> --update-env`，否则新变量不生效
+
+**状态**：已修复（ecosystem.config.js 补全透传，wecom-entrance 重启验证通过，93006 错误消失）
+**确认日期**：2026-04-23
