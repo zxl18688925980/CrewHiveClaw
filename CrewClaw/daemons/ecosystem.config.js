@@ -22,6 +22,7 @@ const envVars = {
   WECOM_ENCODING_AES_KEY:     process.env.WECOM_ENCODING_AES_KEY,
   WECOM_OWNER_ID:             process.env.WECOM_OWNER_ID,
   WECOM_FAMILY_CHAT_ID:       process.env.WECOM_FAMILY_CHAT_ID,
+  WECOM_ORG_GROUP_CHAT_ID:    process.env.WECOM_ORG_GROUP_CHAT_ID,
   WECOM_MOM_ID:               process.env.WECOM_MOM_ID,
   WECOM_AUNT_ID:              process.env.WECOM_AUNT_ID,
   WECOM_BOT_ID:               process.env.WECOM_BOT_ID,
