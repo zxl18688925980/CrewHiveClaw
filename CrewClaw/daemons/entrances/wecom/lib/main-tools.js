@@ -1210,6 +1210,18 @@ async function executeMainTool(toolName, toolInput) {
       } else if (downCount === 0) {
         results.push(`✅ 进程稳定性：全部 online，累计重启 ${totalRestarts} 次`);
       }
+      // 1b. wecom-entrance 关键 env var 验证（PM2 saved dump 重启后配置可能丢失）
+      const weEnvData = procs.find(x => x.name === 'wecom-entrance')?.pm2_env;
+      if (weEnvData) {
+        const CRITICAL_ENV = ['WECOM_ORG_GROUP_CHAT_ID', 'GATEWAY_URL', 'OPENCLAW_GATEWAY_TOKEN', 'WECOM_CORP_ID'];
+        const missingEnv = CRITICAL_ENV.filter(k => !weEnvData[k]);
+        if (missingEnv.length > 0) {
+          results.push(`⚠️ wecom-entrance env 缺失：${missingEnv.join(', ')}（需 pm2 restart ecosystem.config.js 重载配置）`);
+          if (score === '✅') score = '⚠️';
+        } else {
+          results.push(`✅ wecom-entrance env：关键配置完整（chatid/gateway/corp 均已注入）`);
+        }
+      }
     } catch (e) {
       results.push(`⚠️ PM2 检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
@@ -1315,6 +1327,125 @@ async function executeMainTool(toolName, toolInput) {
         }
       }
     } catch (_e) { /* vm_stat 非关键，静默跳过 */ }
+
+    // 7. wecom-entrance 健康端点 + aibot WebSocket 活性
+    try {
+      const weStart = Date.now();
+      const weResp = await fetch('http://localhost:3003/api/health', { signal: AbortSignal.timeout(5000) });
+      const weMs = Date.now() - weStart;
+      if (weResp.ok) {
+        const weData = await weResp.json();
+        const cfg = weData.configured || {};
+        const cfgOk = Object.values(cfg).every(v => v === true);
+        if (cfgOk) {
+          results.push(`✅ wecom-entrance /api/health：正常（${weMs}ms），配置完整`);
+        } else {
+          const missing = Object.entries(cfg).filter(([, v]) => !v).map(([k]) => k).join(', ');
+          results.push(`⚠️ wecom-entrance /api/health：配置缺失 [${missing}]`);
+          if (score === '✅') score = '⚠️';
+        }
+      } else {
+        results.push(`⚠️ wecom-entrance /api/health：响应 ${weResp.status}（${weMs}ms）`);
+        if (score === '✅') score = '⚠️';
+      }
+    } catch (e) {
+      results.push(`❌ wecom-entrance /api/health：不可达（${e.message.slice(0, 50)}）`);
+      score = '❌';
+    }
+    try {
+      const wsLog = execSync('pm2 logs wecom-entrance --lines 80 --nostream 2>&1', { timeout: 8000, encoding: 'utf8' });
+      const hasDisconn = /disconnect|connection\s+lost|ws\s+closed/i.test(wsLog);
+      const hasAiBot  = wsLog.includes('[AiBotSDK]');
+      if (hasDisconn) {
+        results.push(`⚠️ aibot WebSocket：近期有断线记录`);
+        if (score === '✅') score = '⚠️';
+      } else if (hasAiBot) {
+        results.push(`✅ aibot WebSocket：活跃（近期有 SDK 消息）`);
+      } else {
+        results.push(`⚠️ aibot WebSocket：近期无 SDK 活动（空闲或断连）`);
+        if (score === '✅') score = '⚠️';
+      }
+    } catch (_e) { /* 日志读取非关键，静默跳过 */ }
+
+    // 8. launchd 服务状态（Gateway + Ollama，不走 PM2）
+    try {
+      const ldRaw = execSync('launchctl list 2>&1', { timeout: 5000, encoding: 'utf8' });
+      const LAUNCHD_SVCS = ['ai.openclaw.gateway', 'com.ollama.ollama'];
+      for (const svc of LAUNCHD_SVCS) {
+        const line = ldRaw.split('\n').find(l => l.includes(svc));
+        if (!line) {
+          results.push(`⚠️ launchd ${svc}：未注册`);
+          if (score === '✅') score = '⚠️';
+        } else {
+          const pid = line.trim().split(/\s+/)[0];
+          if (pid === '-') {
+            results.push(`⚠️ launchd ${svc}：已注册但未运行`);
+            if (score === '✅') score = '⚠️';
+          } else {
+            results.push(`✅ launchd ${svc}：运行中 (PID ${pid})`);
+          }
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ launchd 检查失败：${e.message.slice(0, 50)}`);
+    }
+
+    // 9. 外部模型 API 可达性（Anthropic / OpenAI / DashScope）
+    // 用轻量探针：任何 HTTP 响应（含 401/403）= 网络可达，连接错误 = 不可达
+    const MODEL_APIS = [
+      { name: 'Anthropic (Andy/Main)', url: 'https://api.anthropic.com/v1/models',
+        headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY || 'probe', 'anthropic-version': '2023-06-01' } },
+      { name: 'OpenAI (Lucas)',        url: 'https://api.openai.com/v1/models',
+        headers: { 'Authorization': 'Bearer probe' } },
+      { name: 'DashScope (Lisa)',       url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/models',
+        headers: { 'Authorization': 'Bearer probe' } },
+    ];
+    for (const api of MODEL_APIS) {
+      try {
+        const t0 = Date.now();
+        const resp = await fetch(api.url, { headers: api.headers, signal: AbortSignal.timeout(8000) });
+        const ms = Date.now() - t0;
+        const reachable = [200, 400, 401, 403, 429].includes(resp.status);
+        if (reachable) {
+          const latLabel = ms > 3000 ? `⚠️延迟${ms}ms` : `延迟${ms}ms`;
+          results.push(`✅ ${api.name}：可达（HTTP ${resp.status}，${latLabel}）`);
+          if (ms > 3000 && score === '✅') score = '⚠️';
+        } else {
+          results.push(`⚠️ ${api.name}：响应异常 HTTP ${resp.status}（${ms}ms）`);
+          if (score === '✅') score = '⚠️';
+        }
+      } catch (e) {
+        results.push(`❌ ${api.name}：不可达（${e.message.slice(0, 50)}）`);
+        score = '❌';
+      }
+    }
+
+    // 10. 最近 1h 错误日志扫描（wecom-entrance）
+    // 主动捕获运行异常，不等业务出问题才发现
+    try {
+      const errLog = execSync('pm2 logs wecom-entrance --lines 400 --nostream 2>&1', { timeout: 12000, encoding: 'utf8' });
+      const nowMs = Date.now();
+      let criticals = 0, chatidErrors = 0, connErrors = 0;
+      for (const line of errLog.split('\n')) {
+        const tsMatch = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+        if (tsMatch && (nowMs - new Date(tsMatch[1]).getTime()) > 3600000) continue;
+        if (/uncaughtException|unhandledRejection|process\.+exit/i.test(line)) criticals++;
+        else if (/93006|invalid\s+chatid/i.test(line)) chatidErrors++;
+        else if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND/i.test(line)) connErrors++;
+      }
+      if (criticals > 0) {
+        results.push(`❌ 错误日志：${criticals} 条崩溃/未捕获异常（近1h）`);
+        score = '❌';
+      } else {
+        const parts = [];
+        if (chatidErrors > 0) parts.push(`93006×${chatidErrors}`);
+        if (connErrors > 0)   parts.push(`连接错误×${connErrors}`);
+        results.push(parts.length > 0
+          ? `⚠️ 错误日志：${parts.join('，')}（近1h）`
+          : `✅ 错误日志：无关键错误（近1h）`);
+        if (parts.length > 0 && score === '✅') score = '⚠️';
+      }
+    } catch (_e) { /* 日志扫描失败，静默跳过 */ }
 
     const out = results.join('\n');
     return `## L0 基础设施稳定性 ${score}\n\n${out}`;
