@@ -207,7 +207,9 @@ PM2 日志目录：${INSTANCE_ROOT}/logs/pm2/
 - scan_lucas_quality：扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空回复等质量问题
 - recall_se_history：召回最近 N 天的 SE 通知历史（ChromaDB agent_interactions），了解上次发现了什么问题/现在是否改善——建立跨对话记忆连续性（limit / days 可选）
 
-流水线任务看板（SE 专属，直接操作 task-registry.json，无需手动读文件）：
+流水线任务看板（SE 专属）：
+- 可视化界面：https://wecom.homeai-wecom-zxl.top/app/pipeline-dashboard/（浏览器打开，直接看任务列表和状态）
+- 业主想查看流水线时，优先发这个链接；需要文字汇报时再用下方工具
 - query_pipeline_tasks：查全量流水线任务（含用户提交 + 系统自动生成）。status_filter 可选 all / pending-review / queued / running / active（默认）
 - approve_pipeline_task：批准 pending-review 任务进队列执行（仅 requires_approval=true 的任务会进 pending-review，如认知文件修改）
 - cancel_pipeline_task：叫停任意任务（不受 submittedBy 限制），可叫停 pending-review / queued / running 状态的任何任务
@@ -2619,6 +2621,38 @@ os._exit(0)
       results.push(`⚪ 逾期需求检测跳过：${e.message.slice(0, 60)}`);
     }
 
+    // ── 外循环教师：已交付任务 outcome 说明质量 ──
+    // 教师视角：有 outcome 不等于有质量——outcome_note 是否真正说清楚"交付了什么"
+    try {
+      const decColR = await fetch(`${CHROMA_API_BASE}/decisions`);
+      if (decColR.ok) {
+        const { id: decColId } = await decColR.json();
+        const decGetR = await fetch(`${CHROMA_API_BASE}/${decColId}/get`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ include: ['metadatas'], limit: 100 }),
+        });
+        if (decGetR.ok) {
+          const decData = await decGetR.json();
+          const decMetas = decData.metadatas || [];
+          const completedDecs = decMetas.filter(m => ['success', 'failure', 'partial'].includes((m?.outcome || '').trim()));
+          if (completedDecs.length > 0) {
+            const withNote = completedDecs.filter(m => (m?.outcome_note || '').trim().length > 20);
+            const noteQualRate = Math.round(withNote.length / completedDecs.length * 100);
+            const noteOk = noteQualRate >= 70;
+            results.push(`${noteOk ? '✅' : '⚠️'} 已交付 outcome 说明质量（抽样${completedDecs.length}条）：${noteQualRate}% 有实质说明${!noteOk ? ' — outcome_note 偏空，交付质量不可追溯' : ''}`);
+            if (!noteOk && score === '✅') score = '⚠️';
+            if (!noteOk) {
+              const bad = completedDecs.find(m => (m?.outcome_note || '').trim().length <= 20);
+              if (bad) results.push(`    ↳ 差样本：outcome="${bad.outcome}" note="${(bad.outcome_note || '（空）').slice(0, 60)}"`);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      results.push(`⚪ 交付质量检测跳过：${e.message.slice(0, 60)}`);
+    }
+
     // ── 数值评分 ──
     const _rub3 = loadRubric();
     const _L3I = _rub3?.layers?.L3?.items;
@@ -2895,6 +2929,40 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // S3b. Archive Skill 使用价值（教师视角：积累了多少≠用了多少）
+    try {
+      const autoSkillsRoot = path.join(INSTANCE_ROOT, 'Data', 'learning', 'auto-skills');
+      let totalArchiveSkills = 0, usedArchiveSkills = 0;
+      for (const agent of ['lucas', 'andy', 'lisa']) {
+        const archiveDir = path.join(autoSkillsRoot, agent);
+        if (!fs.existsSync(archiveDir)) continue;
+        const skillDirs = fs.readdirSync(archiveDir).filter(f => {
+          try { return fs.statSync(path.join(archiveDir, f)).isDirectory(); } catch { return false; }
+        });
+        for (const skillDir of skillDirs) {
+          const skillFile = path.join(archiveDir, skillDir, 'SKILL.md');
+          if (!fs.existsSync(skillFile)) continue;
+          totalArchiveSkills++;
+          try {
+            const content = fs.readFileSync(skillFile, 'utf8');
+            const fm = content.match(/^---\n([\s\S]*?)\n---/);
+            if (fm) {
+              const usedMatch = fm[1].match(/^used:\s*(\d+)/m);
+              if (usedMatch && parseInt(usedMatch[1]) > 0) usedArchiveSkills++;
+            }
+          } catch (_) {}
+        }
+      }
+      if (totalArchiveSkills > 0) {
+        const useRate = Math.round(usedArchiveSkills / totalArchiveSkills * 100);
+        const useOk = useRate >= 30 || totalArchiveSkills < 5;
+        sysLayerResults.push(`${useOk ? '✅' : '⚠️'} Archive Skill 使用价值：${usedArchiveSkills}/${totalArchiveSkills} 个（${useRate}%）被实际调用${!useOk ? ' — 大量 Skill 零调用，沉淀质量存疑' : ''}`);
+        if (!useOk && score === '✅') score = '⚠️';
+      }
+    } catch (e) {
+      sysLayerResults.push(`⚪ Skill 使用价值检查跳过：${e.message.slice(0, 60)}`);
+    }
+
     // S4. Andy HEARTBEAT 巡检时效
     let andyHbHours = 9999;
     try {
@@ -3032,6 +3100,31 @@ os._exit(0)
     } catch (e) {
       mdlLayerResults.push(`⚠️ DPO 信号读取失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
+    }
+
+    // M1b. DPO good_response 内容质量（教师视角：有 good_response ≠ 是好的训练样本）
+    try {
+      const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
+      if (fs.existsSync(dpoCandPath)) {
+        const lines = fs.readFileSync(dpoCandPath, 'utf8').split('\n').filter(l => l.trim());
+        const goodResps = [];
+        for (const line of lines) {
+          try { const e = JSON.parse(line); if (e.good_response) goodResps.push(e.good_response); } catch (_) {}
+        }
+        if (goodResps.length > 0) {
+          const substantial = goodResps.filter(r => r.trim().length > 50);
+          const dpoQualRate = Math.round(substantial.length / goodResps.length * 100);
+          const dpoQualOk = dpoQualRate >= 80;
+          mdlLayerResults.push(`${dpoQualOk ? '✅' : '⚠️'} DPO good_response 质量（${goodResps.length}条）：${dpoQualRate}% 有实质改进内容${!dpoQualOk ? ' — 含空/过短 good_response，训练信号质量不足' : ''}`);
+          if (!dpoQualOk && score === '✅') score = '⚠️';
+          if (!dpoQualOk) {
+            const bad = goodResps.find(r => r.trim().length <= 50);
+            if (bad !== undefined) mdlLayerResults.push(`    ↳ 差样本：「${String(bad || '').trim().slice(0, 80)}」`);
+          }
+        }
+      }
+    } catch (e) {
+      mdlLayerResults.push(`⚪ DPO 质量检查跳过：${e.message.slice(0, 60)}`);
     }
 
     // M2. 本地模型就绪检查（双路：Ollama API + MLX 文件目录）
