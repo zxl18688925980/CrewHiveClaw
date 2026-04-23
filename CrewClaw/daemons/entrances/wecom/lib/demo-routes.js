@@ -11,13 +11,24 @@
 const express      = require('express');
 const fs           = require('fs');
 const path         = require('path');
-const { spawn, exec, execSync } = require('child_process');
+const { spawn, exec, execSync, execFile } = require('child_process');
 
 const TTS_PYTHON    = '/opt/homebrew/opt/python@3.11/bin/python3.11';
 const TTS_VOICE     = 'zh-CN-YunxiNeural';
 const LOCAL_TTS_URL = 'http://127.0.0.1:8082/tts';
+const WHISPER_CLI   = '/opt/homebrew/bin/whisper-cli';
 
 module.exports = function createDemoRoutes(logger, { INSTANCE_ROOT, GATEWAY_URL, APP_GENERATED_DIR }) {
+  const WHISPER_MODEL = path.join(INSTANCE_ROOT, 'Models/whisper/ggml-base.bin');
+
+  function execFileAsync(cmd, args, opts = {}) {
+    return new Promise((resolve, reject) => {
+      execFile(cmd, args, opts, (err, stdout) => {
+        if (err) reject(err);
+        else resolve(stdout);
+      });
+    });
+  }
   const router = express.Router();
   const app = router;  // block uses app.get/app.post — aliased to router
 
