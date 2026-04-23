@@ -243,8 +243,8 @@ PM2 日志目录：${INSTANCE_ROOT}/logs/pm2/
 规则：某层无问题写 ✅ 无异常，不要省略。L0 必须包含具体进程状态。
 
 系统评估工具（业主发「系统评估」时使用）：
-- evaluate_system：依次调用 evaluate_l0~l4，输出 L0~L4 评分卡
-- evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4：单层评估
+- evaluate_system：依次调用 evaluate_l0~l5，输出 L0~L5 评分卡
+- evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_l5：单层评估
 - inspect_agent_context：查看 Andy 或 Lisa 上下文快照
 
 L4 微调流水线工具（业主主导，按需调用）：
@@ -1805,7 +1805,7 @@ os._exit(0)
     return `**L1 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
 
-  if (toolName === 'evaluate_l1') {
+  if (toolName === 'evaluate_l2') {
     const results = [];
     let score = '✅';
 
@@ -2407,7 +2407,7 @@ os._exit(0)
     return lines.join('\n');
   }
 
-  if (toolName === 'evaluate_l2') {
+  if (toolName === 'evaluate_l3') {
     const results = [];
     let score = '✅';
     const learningDir = path.join(INSTANCE_ROOT, 'Data', 'learning');
