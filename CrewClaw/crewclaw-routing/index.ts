@@ -8169,6 +8169,47 @@ ${toolDescriptions}
                     .replace(/success_count: \d+/, `success_count: ${newSuccess}`)
                     .replace(/last_used: .*/, `last_used: ${today}`);
                   writeFileSync(skillMd, skillContent.replace(fmMatch[1], updatedFm), "utf8");
+
+                  // ── 机制2：archive Skill 自动晋升 native ─────────────────────
+                  // 条件：success_count >= 3 且失败率 < 30% 且 native Skill 数量 < 15
+                  // 触发：Phase 2 每次更新 frontmatter 后检查晋升条件
+                  if (action === "completed" && parseInt(newSuccess) >= 3) {
+                    try {
+                      const archiveDir = join(PROJECT_ROOT, `data/learning/auto-skills/${ctx.agentId}`);
+                      const skillNameFromPath = skillMd.split("/").slice(-2, -1)[0];
+                      const archiveSkillPath = join(archiveDir, skillNameFromPath, "SKILL.md");
+                      if (existsSync(archiveSkillPath)) {
+                        const archiveFmContent = readFileSync(archiveSkillPath, "utf8");
+                        const archiveFmMatch = archiveFmContent.match(/^---
+([\s\S]*?)
+---/);
+                        if (archiveFmMatch) {
+                          const archiveFm = archiveFmMatch[1];
+                          const aUsage = parseInt(archiveFm.match(/usage_count: (\d+)/)?.[1] ?? "0");
+                          const aSuccess = parseInt(archiveFm.match(/success_count: (\d+)/)?.[1] ?? "0");
+                          const failRate = aUsage > 0 ? (aUsage - aSuccess) / aUsage : 0;
+                          // 检查 native 数量（≤ 15 才晋升）
+                          const nativeSkillsDir = join(homedir(), `.openclaw/workspace-${ctx.agentId}/skills`);
+                          const nativeCount = existsSync(nativeSkillsDir)
+                            ? readdirSync(nativeSkillsDir, { withFileTypes: true }).filter(e => e.isDirectory()).length
+                            : 0;
+                          if (aSuccess >= 3 && failRate < 0.3 && nativeCount < 15) {
+                            // 晋升：将 archive Skill 复制到 native，更新状态
+                            const nativeSkillPath = join(nativeSkillsDir, skillNameFromPath, "SKILL.md");
+                            mkdirSync(join(nativeSkillsDir, skillNameFromPath), { recursive: true });
+                            const promotedContent = archiveFmContent.replace(/status: \w+/, "status: active");
+                            writeFileSync(nativeSkillPath, promotedContent, "utf8");
+                            // archive 保留，标记已晋升
+                            const updatedArchiveFm = archiveFm.replace(/status: \w+/, "status: promoted");
+                            writeFileSync(archiveSkillPath, archiveFmContent.replace(archiveFmMatch[1], updatedArchiveFm), "utf8");
+                            logger.info(`[skill-promote] ${skillNameFromPath} promoted from archive to native for ${ctx.agentId} (success=${aSuccess}, failRate=${failRate.toFixed(2)}, nativeCount=${nativeCount})`);
+                          }
+                        }
+                      }
+                    } catch (_pe) {
+                      logger.warn(`[skill-promote] failed for ${ctx.agentId}: ${(_pe as Error).message}`);
+                    }
+                  }
                 }
               }
             }
@@ -8401,6 +8442,47 @@ last_used: null
           } catch (_e) { /* 静默 */ }
         }
       }
+      // ── 机制1：AGENTS.md 溢出检测 → skill-candidates 信号 ───────────────────
+      // 当 AGENTS.md 超过软阈值（10000 chars）时，写入 skill-candidates.jsonl
+      // 供 HEARTBEAT 时 Agent 主动将场景触发型内容迁移到 archive Skill
+      if (SKILL_AGENT_IDS.has(ctx.agentId) && !isTestSession) {
+        try {
+          const AGENTS_MD_SOFT_LIMIT = 10_000; // chars（OpenClaw 截断上限 12000 chars）
+          const agentsMdPath = join(homedir(), `.openclaw/workspace-${ctx.agentId}/AGENTS.md`);
+          if (existsSync(agentsMdPath)) {
+            const agentsMdContent = readFileSync(agentsMdPath, "utf8");
+            const charCount = agentsMdContent.length;
+            if (charCount > AGENTS_MD_SOFT_LIMIT) {
+              const scPath = join(PROJECT_ROOT, "data/learning/skill-candidates.jsonl");
+              // 7 天去重：防止每次 agent_end 都写同一条溢出信号
+              const existing = readJsonlEntries(scPath);
+              const cutoff = Date.now() - 7 * 24 * 3_600_000;
+              const recentDup = existing.some((e: Record<string, unknown>) =>
+                e.source === "agents_overflow" &&
+                e.agentId === ctx.agentId &&
+                typeof e.timestamp === "string" &&
+                new Date(e.timestamp).getTime() > cutoff
+              );
+              if (!recentDup) {
+                appendJsonl(scPath, {
+                  timestamp: nowCST(),
+                  source: "agents_overflow",
+                  agentId: ctx.agentId,
+                  pattern_name: `AGENTS.md 超限：${charCount} chars`,
+                  description: `${ctx.agentId} 的 AGENTS.md 已达 ${charCount} chars（软阈值 ${AGENTS_MD_SOFT_LIMIT}，OpenClaw 截断上限 12000）。建议在 HEARTBEAT 时将场景触发型内容（详细示例/操作步骤/参考模板）提取为 archive Skill，保持 AGENTS.md 精简。`,
+                  suggested_form: "agents_to_skill_migration",
+                  char_count: charCount,
+                  status: "pending",
+                });
+                logger.info(`[agents-overflow] ${ctx.agentId} AGENTS.md ${charCount} chars > ${AGENTS_MD_SOFT_LIMIT}, wrote skill-candidates signal`);
+              }
+            }
+          }
+        } catch (_e) {
+          logger.warn(`[agents-overflow] check failed for ${ctx.agentId}: ${(_e as Error).message}`);
+        }
+      }
+
       // ── Lisa edit-tool 路径 codebase_observation ──────────────────────────────
       // Lisa 直接编码工具（read/edit/write/bash/grep/find/ls）路径：
       // run_opencode 路径由 proc.on("close") 写入；直接编码路径没有此钩子，在 agent_end 补写。
@@ -14012,6 +14094,33 @@ last_used: null
             }
             fmLines.push("---", "", p.content.trim(), "");
             const fullContent = fmLines.join("\n");
+            // ── 机制3：层级分类校验 ─────────────────────────────────────────
+            // 检测 description 是否含触发条件词（场景触发型 → archive，通用规则 → AGENTS.md 或 native）
+            // 目的：引导 Agent 正确判断内容归属，而非靠文字规则自述
+            if (!isArchive) {
+              const triggerPatterns = ["当.*时", "需要.*时", "场景.*：", "遇到.*时", "触发条件", "适用.*场景", "使用.*时机"];
+              const hasTriggerPattern = triggerPatterns.some(p => new RegExp(p).test(p.description ?? ""));
+              if (hasTriggerPattern) {
+                // 场景触发型内容写到 native 会每轮注入浪费 token，警告并强制改 archive
+                logger.warn(`[skill-classify] ${agentId} tried to write trigger-type Skill "${p.skill_name}" to native, auto-redirecting to archive`);
+                const archivePath = join(PROJECT_ROOT, `data/learning/auto-skills/${agentId}`, p.skill_name, "SKILL.md");
+                const archiveFmLines = ["---", `name: ${p.skill_name}`, `description: ${(p.description ?? "").trim()}`,
+                  "status: draft", "created_from: self-crystallized", `agent: ${agentId}`,
+                  `first_seen: ${new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" }).slice(0, 10)}`,
+                  `last_seen: ${new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" }).slice(0, 10)}`,
+                  "trigger_count: 1", "usage_count: 0", "success_count: 0", "last_used: null", "---", "", (p.content ?? "").trim(), ""];
+                atomicWrite(archivePath, archiveFmLines.join("
+"));
+                const archiveDisplay = archivePath.startsWith(HOME) ? `~/${archivePath.slice(HOME.length + 1)}` : archivePath;
+                return {
+                  content: [{ type: "text", text: `⚡ 检测到场景触发型 Skill，已自动写入 archive 层（而非 native）：${p.skill_name}
+路径：${archiveDisplay}
+
+原因：description 含触发条件词，此类 Skill 按需召回比全量注入更高效。经 3+ 次使用验证后自动晋升 native。` }],
+                  details: { action: "create", name: p.skill_name, path: archivePath, layer: "archive", auto_redirected: true },
+                };
+              }
+            }
             atomicWrite(targetPath, fullContent);
             const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
             const layerLabel = isArchive ? "（归档层·draft）" : `${p.category ? `（分类：${p.category}）` : ""}`;

@@ -1106,3 +1106,47 @@ if (lastIteratedMatch?.[1] === today) continue;  // 今天已迭代，跳过
 
 **状态**：已修复（ecosystem.config.js 补全透传，wecom-entrance 重启验证通过，93006 错误消失）
 **确认日期**：2026-04-23
+
+## 2026-04-23
+
+### AGENTS.md 字符数 vs 字节数：OpenClaw 截断上限的单位陷阱
+
+**场景**：Andy AGENTS.md 瘦身，需要验证文件是否超过 OpenClaw 12000 字符上限。
+
+**现象**：`wc -c` 给出的字节数（如 16554 bytes）远大于字符数（9814 chars）。如果直接用字节数判断，会误认为文件仍然超限（16554 > 12000），实际上字符数已达标（9814 < 12000）。
+
+**根因**：OpenClaw AGENTS.md 截断上限的单位是**字符数**，不是字节数。中文 UTF-8 编码每个汉字 3 字节，混合中英文文档的字节数/字符数比例约在 1.5x~3x 之间。`wc -c` 统计字节，`wc -m` 统计字符（locale 依赖），最可靠的方式是用 Python：
+
+```bash
+python3 -c "content=open('/path/to/AGENTS.md').read(); print(f'chars: {len(content)}, bytes: {len(content.encode())}')"
+```
+
+**规避原则**：
+- 检查 AGENTS.md 是否超过 OpenClaw 截断上限，必须用 Python `len(content)`（字符数），不能用 `wc -c`（字节数）
+- OpenClaw soft limit 建议设 10000 chars（实际上限 12000 chars），保留 2000 chars 余量供注入内容使用
+- 同样原则适用于所有 OpenClaw 有字符数限制的文件（SOUL.md / TOOLS.md / MEMORY.md 等）
+
+**状态**：活跃（OpenClaw 截断行为确认，2026-04-23 验证）
+**确认日期**：2026-04-23
+
+### Skill 层级分类规则：native vs archive 的判断标准
+
+**场景**：Andy AGENTS.md 瘦身时，场景触发型内容（Coordinator 示例、consult_lisa vs trigger_lisa 对照）被提取为 Skill，需要决定放 native 还是 archive。
+
+**现象**：若所有 Skill 都放 native，OpenClaw 全量注入后 system prompt 再次膨胀（历史上 49 个 auto-skill 导致 49971 chars 全量注入，引发 Lucas 时间线幻觉）。若 Skill 触发条件不明确，Agent 不知道何时加载 archive Skill。
+
+**根因**：Skill 内容有两种本质不同的使用模式：
+1. **通用型**：每次都可能用到，适合 native 全量注入（≤15 个）
+2. **场景触发型**：只在特定条件触发时用到，适合 archive 按需召回
+
+**判断规则**（已编码进 index.ts 机制3）：
+- description 含 `["当.*时", "需要.*时", "场景.*：", "遇到.*时", "触发条件", "适用.*场景", "使用.*时机"]` → archive
+- 否则 → 可以放 native（但总数不超过 15）
+
+**规避原则**：
+- 创建 Skill 时先问：「这个 Skill 是每次都会用，还是只有某种场景才用？」→ 场景触发型一律 archive
+- native Skill 上限 15 个是 OpenClaw 的约定上限，超过后 system prompt 注入量不可控
+- archive Skill 通过 `recallAutoSkills`（`auto-skill-recall` context source，tier-3）按 prompt 关键词召回 top-3
+
+**状态**：活跃（index.ts 机制3 已实装，2026-04-23 编译验证通过）
+**确认日期**：2026-04-23

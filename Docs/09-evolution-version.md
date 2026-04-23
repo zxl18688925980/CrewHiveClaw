@@ -3985,3 +3985,69 @@ SE 超然观测者原则落地：移除所有 Bot 降级逻辑 + 移除 Andy 审
 ### 越界干预记录
 
 `request_andy_evaluation` 和 `cancel_task` 可观测性修复属于基础设施层面的架构修正（SE 超然观测者原则），由系统工程师主导介入，记录于此。
+
+---
+
+## v715 · Andy AGENTS.md 瘦身 + Skill 分层 + L1 运行时管控（2026-04-23）
+
+**干预类型**：架构变更（L1 写入侧质量管控 + Andy 认知文件优化）
+
+**背景**：Andy AGENTS.md 膨胀至 43277 chars（689行），远超 OpenClaw 12000 char 截断上限，后半内容实际上从未被读到。大量「正确/错误对照示例」、Coordinator 完整 JSON、调研代码片段等场景触发型内容占据大量篇幅，属于「不适合压缩、应按需加载」的 Skill 内容。
+
+**改造内容**：
+
+### 1. Andy AGENTS.md 瘦身
+
+- 43277 chars → 9814 chars（-77%）
+- 删除内容：所有正确/错误做法示例段落、Coordinator 完整 sub-spec JSON 示例（2个）、三维主动性哲学叙事、小弟使用策略详细场景步骤、外部调研代码片段
+- 保留内容：全部 18 个 section 标题、行为规则步骤 1~8、spec JSON 字段规范、工具调用铁律、检查13执行路径
+
+**关键陷阱（AGENTS.md 字符 vs 字节）**：
+OpenClaw 截断上限是 **字符数**（12000 chars），不是字节数。中文每字 3 字节，`wc -c` 给字节数，必须用 `python3 -c "len(open(...).read())"` 获取字符数。9814 chars = 16554 bytes，如果看字节数会误认为仍然超限。
+
+### 2. 4 个 archive Skill 创建
+
+存放路径：`~/HomeAI/Data/learning/auto-skills/andy/{skill-name}/SKILL.md`
+
+| Skill | 内容 |
+|-------|------|
+| coordinator-spec | 大特性 Coordinator 模式：C1 接口契约前置 / C2 拆分自验清单 / C3 完整 JSON 格式 / C4 触发方式 |
+| spec-examples | consult_lisa vs trigger_lisa 区分 / Lucas交付简报格式 / bug_fix original_symptom / 验收阶段判断 |
+| research-workflow | git clone --depth=1 / Kuzu 临时图谱 source='research' / 生命周期清理 / 蒸馏边界 |
+| sub-agent-strategy | 场景1（调研并行）/ 场景2（验收并行）/ 工作分配格式 / create/evict 命令 |
+
+**层级分工**：native（≤15，OpenClaw 全量注入）vs archive（无上限，`recallAutoSkills` 按关键词召回 top-3）。场景触发型内容一律放 archive。
+
+### 3. index.ts 三机制实装
+
+**机制1：AGENTS.md 溢出检测**（`agent_end` hook）
+- 检测 `AGENTS.md > 10000 chars`（soft limit，低于 OpenClaw 12000 上限保留余量）
+- 7 天去重：防止每次 `agent_end` 重复写同一信号
+- 写入 `skill-candidates.jsonl`：`source: "agents_overflow", suggested_form: "agents_to_skill_migration"`
+
+**机制2：archive Skill 自动晋升 native**（Phase 2 末尾）
+- 条件：`success_count ≥ 3` + `fail_rate < 30%` + `native Skill < 15`
+- 动作：复制 archive Skill 到 native，`status: active`；archive 保留，`status: promoted`
+- 效果：经过验证的 Skill 自动上升，无需手动操作
+
+**机制3：skill_manage create 层级分类校验**（`atomicWrite` 前）
+- 触发词检测：`["当.*时", "需要.*时", "场景.*：", "遇到.*时", "触发条件", "适用.*场景", "使用.*时机"]`
+- 检测到触发型 Skill → 强制重定向到 archive 层，返回提示
+- L1 运行时管控：将「什么内容适合放 Skill」从文字规则提升为代码级强制
+
+编译验证：`bash ~/HomeAI/CrewHiveClaw/HomeAILocal/Scripts/check-plugin.sh` → exit 0
+
+### 文件变更清单
+
+| 文件 | 变更内容 |
+|------|---------|
+| `~/.openclaw/workspace-andy/AGENTS.md` | 43277 chars → 9814 chars（-77%，全 18 节保留）|
+| `~/HomeAI/Data/learning/auto-skills/andy/coordinator-spec/SKILL.md` | 新建 archive Skill |
+| `~/HomeAI/Data/learning/auto-skills/andy/spec-examples/SKILL.md` | 新建 archive Skill |
+| `~/HomeAI/Data/learning/auto-skills/andy/research-workflow/SKILL.md` | 新建 archive Skill |
+| `~/HomeAI/Data/learning/auto-skills/andy/sub-agent-strategy/SKILL.md` | 新建 archive Skill |
+| `CrewClaw/crewclaw-routing/index.ts` | +109行：三机制实装（溢出检测/自动晋升/层级校验）|
+
+### 越界干预记录
+
+index.ts 三机制将 L1 写入侧质量管控从 AGENTS.md 文字规则提升为运行时代码强制，属于框架层架构演进，由系统工程师主导介入，记录于此。
