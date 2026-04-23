@@ -3000,6 +3000,18 @@ async function callGatewayAgent(
   return reply;
 }
 
+// ── Pipeline timeout 分级常量（按任务复杂度，与模型无关）─────────────────
+//
+// 设计原则：timeout 基于任务复杂度，不假设模型响应速度。
+// 任何合理模型（快/慢）的 pipeline 稳定性都不应受 timeout 影响。
+// QUICK=3min / MEDIUM=5min / LONG=10min / FULL=30min
+const PIPELINE_TIMEOUT = {
+  QUICK: 180_000,    // 简单决策/路由（Lucas 人话包装、Andy 快速判断）
+  MEDIUM: 300_000,   // 中等响应（Andy 代码验收、评估）
+  LONG: 600_000,     // 复杂任务（Lisa 实现、Andy 完整 spec）
+  FULL: 1_800_000,   // 完整 Andy 流水线
+} as const;
+
 // ── callGatewayAgent 重试包装 ─────────────────────────────────────────
 //
 // 借鉴 ClaudeCode withRetry.ts 模式：指数退避 + jitter，区分前台（重试）和后台（不重试）。
@@ -3416,7 +3428,7 @@ async function runLucasPipelineFallback(
       `2. 如果你也不确定，需要家人提供更多信息 → 用人话问爸爸一个最关键的问题`,
       `3. 如果你判断是技术问题（不是信息问题）→ 调用 notify_engineer 上报，并口语告知爸爸稍等`,
     ].join("\n");
-    const lucasDecision = await callGatewayAgent(FRONTEND_AGENT_ID, lucasDecisionPrompt, 60_000, undefined, FRONTEND_AGENT_ID);
+    const lucasDecision = await callGatewayAgent(FRONTEND_AGENT_ID, lucasDecisionPrompt, PIPELINE_TIMEOUT.QUICK, undefined, FRONTEND_AGENT_ID);
     if (lucasDecision) {
       await pushToChannel(lucasDecision, params.userId, true, FRONTEND_AGENT_ID);
     }
@@ -3600,7 +3612,7 @@ async function runAndyPipeline(params: {
             `用户 ID：${params.userId}`,
             `你现在知道开发进展了，根据用户状态决定是否、何时告知。`,
           ].join("\n"),
-          60_000,
+          PIPELINE_TIMEOUT.QUICK,
           undefined,
           DESIGNER_AGENT_ID,
         );
@@ -3704,7 +3716,7 @@ async function runAndyPipeline(params: {
           `请用一两句人话告诉爸爸：什么失败了、大概是什么原因（不说技术细节）、他现在能做什么（比如稍后重发、或者等我排查）。`,
           `口气自然随意，不要用 ❌ 开头。`,
         ].join("\n");
-        const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 30_000, undefined, FRONTEND_AGENT_ID);
+        const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, PIPELINE_TIMEOUT.QUICK, undefined, FRONTEND_AGENT_ID);
         await pushToChannel(lucasVerdict, params.userId, true, FRONTEND_AGENT_ID);
       } catch (_e) {
         await pushToChannel(
@@ -4101,7 +4113,7 @@ async function launchOpenCodeBackground(
               `3. 如果有值得记住的判断，用 exec 写入 decisions（type=spec_reflection）。`,
               `无显著偏差时回复 OK 即可。`,
             ].filter(Boolean).join("\n");
-            void callGatewayAgent(DESIGNER_AGENT_ID, reflectPrompt, 60_000, undefined, IMPLEMENTOR_AGENT_ID)
+            void callGatewayAgent(DESIGNER_AGENT_ID, reflectPrompt, PIPELINE_TIMEOUT.MEDIUM, undefined, IMPLEMENTOR_AGENT_ID)
               .catch(() => {});
           }
         }
@@ -4151,7 +4163,7 @@ async function launchOpenCodeBackground(
 
     if (code === 0) {
       void (async () => {
-        const andyVerdict = await callGatewayAgent(
+        const andyVerdict = await callGatewayAgentWithRetry(
           DESIGNER_AGENT_ID,
           [
             `【系统通知】opencode 实现任务已完成（sessionId: ${sessionId}，exit 0）。`,
@@ -4162,7 +4174,7 @@ async function launchOpenCodeBackground(
             `2. 用固定格式输出 Lucas 交付简报（家人语言）：`,
             `   Lucas交付：[做完了什么（家人能感知的变化）。注意事项：xxx（如无则省略）。下次这样说：xxx]`,
           ].join("\n"),
-          120_000,
+          PIPELINE_TIMEOUT.MEDIUM,
           undefined,
           FRONTEND_AGENT_ID,
         );
@@ -4219,7 +4231,7 @@ async function launchOpenCodeBackground(
                 `用户 ID：${_taskRequesterUserId}`,
                 `修复/功能已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知。`,
               ].join("\n"),
-              60_000,
+              PIPELINE_TIMEOUT.QUICK,
               undefined,
               FRONTEND_AGENT_ID,
             );
@@ -5142,7 +5154,7 @@ async function runDiagnostic(): Promise<void> {
       void callGatewayAgent(
         DESIGNER_AGENT_ID,
         `【三维诊断告警·Capability 层】${cfg.agentId} 过去7天工具成功率 ${(successRate * 100).toFixed(0)}%（低于阈值60%）。高频失败工具：${failedTools.join("、")}。请分析根因，设计替代方案或改进策略，输出 Implementation Spec。`,
-        120_000,
+        PIPELINE_TIMEOUT.MEDIUM,
       ).catch(() => {});
     }
   }
@@ -5160,7 +5172,7 @@ async function runDiagnostic(): Promise<void> {
     void callGatewayAgent(
       DESIGNER_AGENT_ID,
       `【三维诊断告警·Knowledge 层】Skill 审查信号：领域「${oldest.topic as string}」（${oldest.note as string}）。请检查并更新对应 Skill 文件（输出更新后的 Skill markdown 内容）。`,
-      120_000,
+      PIPELINE_TIMEOUT.MEDIUM,
     ).catch(() => {});
 
     // 将该信号标记为 processing，防止重复触发
@@ -5462,7 +5474,7 @@ async function runReflectionEngine(): Promise<void> {
     void callGatewayAgent(
       DESIGNER_AGENT_ID,
       `【Axis 2 反思引擎告警】协作信号近30天出现偏差：\n${issues.map(i => `- ${i}`).join("\n")}\n\n请分析根因（可能是 Lucas prompt 设计、记忆策略、或 Skill 文件），提出具体改进假设（可输出 Implementation Spec 或修改建议）。`,
-      120_000,
+      PIPELINE_TIMEOUT.MEDIUM,
     ).catch(() => {});
   }
 }
@@ -9254,7 +9266,7 @@ last_used: null
               "   格式固定：「Lucas知情：xxx」",
             ].join("\n");
 
-            const andyDecision = await callGatewayAgent(DESIGNER_AGENT_ID, andyReviewPrompt, 120_000, undefined, FRONTEND_AGENT_ID);
+            const andyDecision = await callGatewayAgentWithRetry(DESIGNER_AGENT_ID, andyReviewPrompt, PIPELINE_TIMEOUT.MEDIUM, undefined, FRONTEND_AGENT_ID);
 
             // ── 监控通知：Phase 2 完成 ───────────────────────────────────────────
             void notifyEngineer([
@@ -9278,7 +9290,7 @@ last_used: null
                 `用户 ID：${requestorId}`,
                 "你现在知道这件事了。根据你对用户当前状态的判断，自主决定是否主动告知用户进展。如果用户之前问过这个任务或说过「做好了告诉我」，请主动告知。",
               ].join("\n"),
-              60_000,
+              PIPELINE_TIMEOUT.QUICK,
               undefined,
               FRONTEND_AGENT_ID,
             );
@@ -9348,7 +9360,7 @@ last_used: null
                   "   格式固定：「Lucas交付：xxx」",
                 ].join("\n");
 
-                const andyVerdict = await callGatewayAgent(DESIGNER_AGENT_ID, andyVerifyPrompt, 120_000, undefined, FRONTEND_AGENT_ID);
+                const andyVerdict = await callGatewayAgentWithRetry(DESIGNER_AGENT_ID, andyVerifyPrompt, PIPELINE_TIMEOUT.MEDIUM, undefined, FRONTEND_AGENT_ID);
 
                 // 提取 Andy 给 Lucas 的交付简报
                 const deliveryBriefMatch = (andyVerdict ?? "").match(/Lucas交付[：:]\s*([\s\S]+?)(?:\n\n|$)/);
@@ -9373,7 +9385,7 @@ last_used: null
                     `用户 ID：${requestorId}`,
                     "修复已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知用户。",
                   ].join("\n"),
-                  60_000,
+                  PIPELINE_TIMEOUT.QUICK,
                   undefined,
                   FRONTEND_AGENT_ID,
                 );
@@ -9505,7 +9517,7 @@ last_used: null
         ].filter(Boolean).join("\n");
 
         try {
-          const andyReply = await callGatewayAgent(DESIGNER_AGENT_ID, prompt, 120_000, undefined, FRONTEND_AGENT_ID);
+          const andyReply = await callGatewayAgentWithRetry(DESIGNER_AGENT_ID, prompt, PIPELINE_TIMEOUT.MEDIUM, undefined, FRONTEND_AGENT_ID);
           if (!andyReply) {
             return {
               content: [{ type: "text", text: "Andy 暂无回复，可能正在处理其他任务，请稍后再试。" }],
@@ -9563,7 +9575,7 @@ last_used: null
         ].filter(Boolean).join("\n");
 
         try {
-          const lisaReply = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, prompt, 120_000, undefined, FRONTEND_AGENT_ID);
+          const lisaReply = await callGatewayAgentWithRetry(IMPLEMENTOR_AGENT_ID, prompt, PIPELINE_TIMEOUT.MEDIUM, undefined, FRONTEND_AGENT_ID);
           if (!lisaReply) {
             return {
               content: [{ type: "text", text: "Lisa 暂无回复，可能正在处理其他任务，请稍后再试。" }],
@@ -9671,7 +9683,7 @@ last_used: null
                       `用户 ID：${requestorId}`,
                       `根据用户当前状态，决定是否告知进展（不是必须推送）。`,
                     ].join("\n"),
-                    60_000,
+                    PIPELINE_TIMEOUT.QUICK,
                     undefined,
                     DESIGNER_AGENT_ID,
                   );
@@ -9736,7 +9748,7 @@ last_used: null
                           `用户 ID：${requestorId}`,
                           `修复/功能已完成，根据你对用户当前状态的判断，选择合适的时机和方式告知用户。`,
                         ].join("\n"),
-                        60_000,
+                        PIPELINE_TIMEOUT.QUICK,
                         undefined,
                         DESIGNER_AGENT_ID,
                       );
@@ -9798,7 +9810,7 @@ last_used: null
                         `用户 ID：${requestorId}`,
                         `根据用户当前状态，决定是否告知进展（不是必须推送）。`,
                       ].join("\n"),
-                      60_000,
+                      PIPELINE_TIMEOUT.QUICK,
                       undefined,
                       DESIGNER_AGENT_ID,
                     );
@@ -9854,7 +9866,7 @@ last_used: null
                             `用户 ID：${requestorId}`,
                             `根据用户当前状态，选择合适的时机告知用户。`,
                           ].join("\n"),
-                          60_000,
+                          PIPELINE_TIMEOUT.QUICK,
                           undefined,
                           DESIGNER_AGENT_ID,
                         );
@@ -10133,7 +10145,7 @@ last_used: null
                       `用户 ID：${requestorId}`,
                       `如果用户问起方案，可以解释上面的选择逻辑。如果用户明确想换方案，你可以调用 select_spec_approach 工具切换（传入 requirement_id 和方案 ID）。`,
                     ].filter(s => s !== "").join("\n"),
-                    30_000, undefined, DESIGNER_AGENT_ID,
+                    PIPELINE_TIMEOUT.QUICK, undefined, DESIGNER_AGENT_ID,
                   ).catch(() => {});
                 }
                 // 方案审批 gate：推送用户 + 等待选择（超时默认推荐方案）
@@ -10330,7 +10342,7 @@ last_used: null
               `用户 ID：${requestorId}`,
               `根据你对用户当前状态的判断，决定是否告知进展（不是必须推送）。如果用户之前问过这个任务或说过「做好了告诉我」，请主动告知。`,
             ].join("\n"),
-            60_000,
+            PIPELINE_TIMEOUT.QUICK,
             undefined,
             DESIGNER_AGENT_ID,
           );
@@ -10576,7 +10588,7 @@ last_used: null
                   "④ 建议下一步（如果有明显的后续动作，提一句；没有就不说）",
                   requestorId.startsWith("visitor:") ? "语气专业友好，不要技术术语。" : "语气像家人说话，不要技术术语。",
                 ].join("\n\n");
-                const lucasAcceptance = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 120_000, undefined, DESIGNER_AGENT_ID);
+                const lucasAcceptance = await callGatewayAgentWithRetry(FRONTEND_AGENT_ID, lucasPrompt, PIPELINE_TIMEOUT.QUICK, undefined, DESIGNER_AGENT_ID);
                 if (lucasAcceptance) {
                   appendJsonl(join(PROJECT_ROOT, "data/corpus/lucas-corpus.jsonl"), {
                     timestamp: nowCST(),
@@ -10700,7 +10712,7 @@ last_used: null
                   ``,
                   `请用一两句人话告知用户失败了、大概为什么、他能做什么（稍后重试或等我排查）。口气自然，不要 ❌ 开头。`,
                 ].join("\n"),
-                30_000,
+                PIPELINE_TIMEOUT.QUICK,
                 undefined,
                 DESIGNER_AGENT_ID,
               );
@@ -10806,7 +10818,7 @@ last_used: null
         ].filter(Boolean).join("\n");
 
         try {
-          const lucasReply = await callGatewayAgent(FRONTEND_AGENT_ID, lucasMessage, 60_000, undefined, DESIGNER_AGENT_ID);
+          const lucasReply = await callGatewayAgentWithRetry(FRONTEND_AGENT_ID, lucasMessage, PIPELINE_TIMEOUT.QUICK, undefined, DESIGNER_AGENT_ID);
 
           void addDecisionMemory({
             decision_id: `andy_query_${Date.now()}`,
@@ -11189,7 +11201,7 @@ last_used: null
                     `3. 如果判断值得行动，用 exec 写入 decisions（type=capability_gap_proposal），包含建议。`,
                     `无明确模式时回复 OK 即可。`,
                   ].join("\n");
-                  void callGatewayAgent(DESIGNER_AGENT_ID, gapPrompt, 60_000, undefined, IMPLEMENTOR_AGENT_ID)
+                  void callGatewayAgent(DESIGNER_AGENT_ID, gapPrompt, PIPELINE_TIMEOUT.MEDIUM, undefined, IMPLEMENTOR_AGENT_ID)
                     .catch(() => {});
                 }
               } catch (_e) { /* 反思不影响主流程 */ }
@@ -11398,7 +11410,7 @@ last_used: null
                 `你是 Lucas，家庭 AI 助手。Lisa 刚完成了一个大型功能的集成：\n${lisaResponse}`,
                 "请用一两句人话告诉家人：做好了什么功能、怎么用。语气自然，不要技术术语。",
               ].join("\n\n");
-              const lucasVerdict = await callGatewayAgent(FRONTEND_AGENT_ID, lucasPrompt, 60_000, undefined, DESIGNER_AGENT_ID);
+              const lucasVerdict = await callGatewayAgentWithRetry(FRONTEND_AGENT_ID, lucasPrompt, PIPELINE_TIMEOUT.QUICK, undefined, DESIGNER_AGENT_ID);
               void pushToChannel(lucasVerdict ?? lisaResponse, requestorId, true, FRONTEND_AGENT_ID);
             }
           } catch (e) {
@@ -11925,7 +11937,7 @@ last_used: null
               `【评估反馈摘要】`,
               evalReply.slice(0, 500),
             ].filter(Boolean).join("\n");
-            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, 60_000, undefined, IMPLEMENTOR_AGENT_ID);
+            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, PIPELINE_TIMEOUT.QUICK, undefined, IMPLEMENTOR_AGENT_ID);
           }
           void addDecisionMemory({
             decision_id: `lisa-eval-${Date.now()}`,
@@ -12026,7 +12038,7 @@ last_used: null
               `【评估反馈摘要】`,
               evalReply.slice(0, 500),
             ].filter(Boolean).join("\n");
-            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, 60_000, undefined, DESIGNER_AGENT_ID);
+            void callGatewayAgent(FRONTEND_AGENT_ID, lucasNotifyPrompt, PIPELINE_TIMEOUT.QUICK, undefined, DESIGNER_AGENT_ID);
           }
           void addDecisionMemory({
             decision_id: `andy-eval-${Date.now()}`,
