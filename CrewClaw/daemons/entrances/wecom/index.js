@@ -729,7 +729,7 @@ function mountGeneratedTools() {
           logger.warn('Tool server.js must export a factory function', { name: entry.name });
           continue;
         }
-        const router = factory({ express, INSTANCE_ROOT, logger, Anthropic });
+        const router = factory({ express, INSTANCE_ROOT, HOMEAI_ROOT: INSTANCE_ROOT, logger, Anthropic });
         app.use(`/api/${entry.name}`, router);
         logger.info('Tool API mounted', { name: entry.name, path: `/api/${entry.name}` });
       } catch (e) {
