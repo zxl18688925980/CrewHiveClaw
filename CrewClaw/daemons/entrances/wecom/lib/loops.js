@@ -826,12 +826,67 @@ ${precomputedTechDebtSignals}
           logger.warn('Andy HEARTBEAT：解析计划 JSON 失败', { error: e.message });
         }
 
-        // 通知 SE：推送计划摘要（无论是否有任务都通知，让 SE 知道规划完成了）
+        // ── P0：补触发——扫描 approaches.json 存在但无 result.json 的 pipeline 任务 ──
+        // Andy 设计完成后必须调 trigger_lisa_implementation；此处在 HEARTBEAT 兜底检测断链
+        let p0StuckCount = 0;
+        try {
+          const pipelineDir = path.join(INSTANCE_ROOT, 'Data', 'pipeline');
+          if (fs.existsSync(pipelineDir)) {
+            const reqDirs = fs.readdirSync(pipelineDir).filter(d => d.startsWith('req_'));
+            for (const reqId of reqDirs) {
+              const reqPath = path.join(pipelineDir, reqId);
+              const hasApproaches = fs.existsSync(path.join(reqPath, 'approaches.json'));
+              const hasResult     = fs.existsSync(path.join(reqPath, 'result.json'));
+              let hasCollab = false;
+              try { hasCollab = fs.readdirSync(reqPath).some(f => f.includes('_collab') && f.endsWith('.json')); } catch {}
+              if (hasApproaches && !hasResult && !hasCollab) {
+                p0StuckCount++;
+                logger.warn('HEARTBEAT P0：发现设计完成但未触发 Lisa 的任务，自动补触发', { reqId });
+                callGatewayAgent(
+                  'andy',
+                  `你之前完成了需求 ${reqId} 的方案设计（approaches.json 已存在），但尚未调用 trigger_lisa_implementation 将 spec 交给 Lisa 实现。请立即调用 trigger_lisa_implementation。只需完成这一步，不需重新设计方案。`,
+                  `heartbeat-p0-${reqId}`,
+                  300000
+                ).catch(e => logger.warn('HEARTBEAT P0：补触发失败', { reqId, error: e.message }));
+              }
+            }
+          }
+        } catch (e) {
+          logger.warn('HEARTBEAT P0：pipeline 扫描失败', { error: e.message });
+        }
+
+        // ── P2：主动上报——扫描 task-registry 中卡住 >2h 的任务，随规划报告一起推送 SE ──
+        // 目的：SE 不需要手动询问 Lucas 巡检，HEARTBEAT 夜间主动汇报阻塞情况
+        let p2StuckNote = '';
+        try {
+          const taskRegPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'task-registry.json');
+          if (fs.existsSync(taskRegPath)) {
+            const allTasks = JSON.parse(fs.readFileSync(taskRegPath, 'utf8'));
+            const twoHoursAgo = Date.now() - 2 * 3600 * 1000;
+            const stuckTasks = allTasks.filter(t =>
+              ['in_progress', 'blocked'].includes(t.status) &&
+              (t.updatedAt || t.submittedAt) &&
+              new Date(t.updatedAt || t.submittedAt).getTime() < twoHoursAgo
+            );
+            if (stuckTasks.length > 0) {
+              const lines = stuckTasks.map(t => {
+                const h = Math.round((Date.now() - new Date(t.updatedAt || t.submittedAt).getTime()) / 3600000);
+                return `  · [${t.id}] ${t.status} 已${h}h：${(t.title || t.requirement || '').slice(0, 50)}`;
+              });
+              p2StuckNote = `\n\n卡住任务（${stuckTasks.length} 条）：\n${lines.join('\n')}`;
+              if (p0StuckCount > 0) p2StuckNote += `\n（已自动补触发 ${p0StuckCount} 条设计→实现断链）`;
+            }
+          }
+        } catch (e) {
+          logger.warn('HEARTBEAT P2：stuck-task 扫描失败', { error: e.message });
+        }
+
+        // 通知 SE：推送计划摘要 + 卡住任务（无论是否有任务都通知，让 SE 知道规划完成了）
         if (WECOM_OWNER_ID) {
           const taskNote = submittedCount + pendingReviewCount > 0
             ? `\n自动进队：${submittedCount} 条 | 待批准：${pendingReviewCount} 条`
             : '\n无改进任务（各项指标正常）';
-          sendLongWeComMessage(WECOM_OWNER_ID, `[Andy 夜间规划完成] ${now}${taskNote}\n\n${(reply || '').slice(0, 500)}`)
+          sendLongWeComMessage(WECOM_OWNER_ID, `[Andy 夜间规划完成] ${now}${taskNote}${p2StuckNote}\n\n${(reply || '').slice(0, 500)}`)
             .then(() => logger.info('Andy HEARTBEAT：规划报告已推送 SE'))
             .catch(e => logger.warn('Andy HEARTBEAT：推送 SE 失败', { error: e.message }));
         }

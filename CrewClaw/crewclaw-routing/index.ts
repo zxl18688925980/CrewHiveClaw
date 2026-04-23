@@ -1924,21 +1924,41 @@ async function queryPendingCommitments(userId: string): Promise<string> {
   try {
     // 主动循环（system-scheduler-*）：查所有待办，不限 userId
     const isProactiveLoop = userId.startsWith("system-scheduler");
+    // 48 小时过期：超过 48 小时未确认的承诺不再注入，避免过期事项被当成新鲜信息
+    const cutoff48h = agoCST(48 * 3600 * 1000);
     const where = isProactiveLoop
-      ? { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { outcome: { $eq: "" } }] }
-      : { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { userId: { $eq: userId } }, { outcome: { $eq: "" } }] };
+      ? { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { outcome: { $eq: "" } }, { timestamp: { $gt: cutoff48h } }] }
+      : { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { userId: { $eq: userId } }, { outcome: { $eq: "" } }, { timestamp: { $gt: cutoff48h } }] };
 
     const results = await chromaGet("decisions", where);
     if (results.length === 0) return "";
+
+    // 异步标记超过 48 小时的过期承诺（fire-and-forget，不阻塞主流程）
+    void (async () => {
+      try {
+        const expiredWhere = isProactiveLoop
+          ? { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { outcome: { $eq: "" } }, { timestamp: { $lte: cutoff48h } }] }
+          : { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { userId: { $eq: userId } }, { outcome: { $eq: "" } }, { timestamp: { $lte: cutoff48h } }] };
+        const expired = await chromaGet("decisions", expiredWhere);
+        for (const r of expired) {
+          await chromaUpdate("decisions", r.id, { outcome: "expired", outcome_at: nowCST(), outcome_note: "超过48小时未确认，自动过期" });
+        }
+      } catch { /* 静默 */ }
+    })();
+
+    const now = Date.now();
     const lines = results.map(r => {
       const meta = r.metadata as { timestamp?: string; context?: string; userId?: string };
       const date = toCST(meta.timestamp);
       const forUser = isProactiveLoop ? `（来自 ${meta.userId ?? "?"})` : "";
-      return `- [${date}]${forUser} ${meta.context ?? ""}（⏳ 还没交付）`;
+      // 带时间戳让 Lucas 区分"今天的事项"和"较旧的事项"
+      const ageMs = meta.timestamp ? now - new Date(meta.timestamp).getTime() : 0;
+      const ageTag = ageMs < 6 * 3600 * 1000 ? "今天" : ageMs < 24 * 3600 * 1000 ? "昨天" : `${Math.floor(ageMs / (24 * 3600 * 1000))}天前`;
+      return `- [${date}]${forUser} ${meta.context ?? ""}（⏳ ${ageTag}，还没交付）`;
     });
     return isProactiveLoop
-      ? `【所有待办承诺】\n${lines.join("\n")}`
-      : `【对你的待办事项】\n${lines.join("\n")}`;
+      ? `【所有待办承诺（48小时内）】\n${lines.join("\n")}`
+      : `【对你的待办事项（48小时内）】\n${lines.join("\n")}`;
   } catch (_e) {
     return "";
   }
@@ -11111,20 +11131,20 @@ last_used: null
     // 不调这个工具 = 遇阻了还是闷头猜，猜错了 spec 浪费一次完整实现周期
 
     api.registerTool((toolCtx) => ({
-      label: "向 Andy 反馈实现阻塞",
+      label: "向 Andy 反馈（遇阻 / 分析完成）",
       name: "report_implementation_issue",
       description: [
-        "Lisa 专属工具：实现过程遇到阻塞时向 Andy 反馈。",
-        "触发场景：① spec 描述的接口/文件不存在 ② 依赖缺失且无法自行确定替代方案 ③ spec 有歧义导致实现方向不确定 ④ 技术约束与 spec 冲突。",
-        "不要在小问题上频繁调用——能自己解决的就解决；只有真正需要 Andy 重新决策才调用。",
-        "调用后继续完成 spec 中能确定的部分，不要完全停下来等待。",
+        "Lisa 专属工具：① 实现遇到阻塞时向 Andy 反馈；② Bug 分析完成后请 Andy 出 fix spec（phase=analysis_done）。",
+        "阻塞场景（默认，不传 phase）：spec 描述的接口/文件不存在 / 依赖缺失 / spec 有歧义 / 技术约束与 spec 冲突。能自己解决的就解决，不要频繁调用。",
+        "分析完成场景（phase=analysis_done）：Bug 分析完成后，将分析结论传给 Andy，Andy 会出 fix spec 并通过 trigger_lisa_implementation 交回 Lisa 实现。不要自己直接动手改，等 Andy 的 spec。",
       ].join("\n"),
       parameters: Type.Object({
-        issue: Type.String({ description: "阻塞描述：遇到了什么问题，尝试了什么，卡在哪里" }),
-        spec_section: Type.Optional(Type.String({ description: "spec 里哪个部分有问题（引用原文片段）" })),
-        options: Type.Optional(Type.String({ description: "Lisa 自己看到的备选方案，帮 Andy 做决策" })),
+        issue: Type.String({ description: "阻塞描述（默认）或 Bug 分析结论（phase=analysis_done 时：根因 + 修复方案 + 风险）" }),
+        spec_section: Type.Optional(Type.String({ description: "spec 里哪个部分有问题（引用原文），或相关代码片段（分析完成时）" })),
+        options: Type.Optional(Type.String({ description: "Lisa 自己看到的备选方案（遇阻时）或建议修复方向（分析完成时）" })),
         requirement_id: Type.Optional(Type.String({ description: "需求 ID（req_xxx），来自 spec 头部" })),
         thread_id: Type.Optional(Type.String({ description: "协作线程 ID（来自 trigger_lisa_implementation 的 andy-to-lisa:{reqId}_collab），传入后 Andy 能看到完整上下文" })),
+        phase: Type.Optional(Type.String({ description: "不传 = 实现遇阻（Andy 决策后 Lisa 继续）；analysis_done = Bug 分析完成（请 Andy 出 fix spec）" })),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== IMPLEMENTOR_AGENT_ID) {
@@ -11133,31 +11153,34 @@ last_used: null
             details: { error: "wrong_agent" },
           };
         }
-        const p = params as { issue: string; spec_section?: string; options?: string; requirement_id?: string; thread_id?: string };
+        const p = params as { issue: string; spec_section?: string; options?: string; requirement_id?: string; thread_id?: string; phase?: string };
+        const isAnalysisDone = p.phase === "analysis_done";
 
         // 优先用传入的 thread_id，否则从 requirement_id 推导
         const threadId = p.thread_id ?? (p.requirement_id ? `andy-to-lisa:${p.requirement_id}_collab` : undefined);
 
-        // 轮次保护：最多 3 轮，超限让 Lisa 自行决策，不再打扰 Andy
-        if (threadId && agentThreadRounds(threadId) >= 3) {
+        // 轮次保护：最多 3 轮，超限让 Lisa 自行决策（分析完成交棒不受此限制）
+        if (!isAnalysisDone && threadId && agentThreadRounds(threadId) >= 3) {
           return {
             content: [{ type: "text", text: "协作轮次已达上限（3轮），Andy 无法继续响应。请根据现有信息自行决策，或将不确定部分留注释标记后继续。" }],
             details: { reported: false, reason: "max_rounds_reached" },
           };
         }
 
-        // 通知工程师：Lisa 主动上报阻塞，可能需要介入
+        // 通知工程师
         void notifyEngineer(
           [
-            `【Lisa 遇阻·上报 Andy】${p.requirement_id ? `[${p.requirement_id}]` : ""}`,
-            `问题：${p.issue.slice(0, 200)}`,
-            p.options ? `Lisa 备选方案：${p.options.slice(0, 100)}` : "",
+            isAnalysisDone
+              ? `【Lisa Bug分析完成·待 Andy 出Fix Spec】${p.requirement_id ? `[${p.requirement_id}]` : ""}`
+              : `【Lisa 遇阻·上报 Andy】${p.requirement_id ? `[${p.requirement_id}]` : ""}`,
+            `${isAnalysisDone ? "分析结论" : "问题"}：${p.issue.slice(0, 200)}`,
+            p.options ? `Lisa ${isAnalysisDone ? "建议修复方向" : "备选方案"}：${p.options.slice(0, 100)}` : "",
           ].filter(Boolean).join("\n"),
           "pipeline", IMPLEMENTOR_AGENT_ID,
         );
 
-        // 写入阻塞信号到任务注册表，Lucas 注入块会显示「⚠️阻塞中」
-        if (p.requirement_id) {
+        // 写入阻塞信号到任务注册表（遇阻时才标记），Lucas 注入块会显示「⚠️阻塞中」
+        if (p.requirement_id && !isAnalysisDone) {
           const taskEntries = readTaskRegistry();
           const blockedTask = taskEntries.find(e => e.id === p.requirement_id);
           if (blockedTask) {
@@ -11167,19 +11190,26 @@ last_used: null
           }
         }
 
-        // Lucas 知情：Lisa 遇到实现阻塞，Andy 在决策（用户可能在等，Lucas 可告知"正在处理"）
+        // Lucas 知情（两条路径各自措辞）
         if (p.requirement_id) {
           const issueTask = readTaskRegistry().find(t => t.id === p.requirement_id);
           if (issueTask?.submittedBy) {
             void callGatewayAgent(
               FRONTEND_AGENT_ID,
-              [
-                `【实现遇到阻塞，团队处理中 · ${p.requirement_id}】`,
-                `Lisa 在实现代码时遇到了技术阻塞，已向 Andy 反馈，Andy 正在决策下一步方向后 Lisa 继续实现。`,
-                ``,
-                `用户 ID：${issueTask.submittedBy}`,
-                `如果用户在问进展，可以说"正在处理一个技术细节，快好了"，不需要说具体是什么阻塞问题。`,
-              ].join("\n"),
+              isAnalysisDone
+                ? [
+                    `【Bug 分析完成，正在出修复方案 · ${p.requirement_id}】`,
+                    `Lisa 已完成 Bug 分析，Andy 正在根据分析结果出修复 spec，完成后 Lisa 继续实现。`,
+                    `用户 ID：${issueTask.submittedBy}`,
+                    `如果用户在问进展，可以说"已经找到问题根因，正在出修复方案"。`,
+                  ].join("\n")
+                : [
+                    `【实现遇到阻塞，团队处理中 · ${p.requirement_id}】`,
+                    `Lisa 在实现代码时遇到了技术阻塞，已向 Andy 反馈，Andy 正在决策下一步方向后 Lisa 继续实现。`,
+                    ``,
+                    `用户 ID：${issueTask.submittedBy}`,
+                    `如果用户在问进展，可以说"正在处理一个技术细节，快好了"，不需要说具体是什么阻塞问题。`,
+                  ].join("\n"),
               15_000,
               undefined,
               IMPLEMENTOR_AGENT_ID,
@@ -11187,16 +11217,28 @@ last_used: null
           }
         }
 
-        const parts = [
-          `【来自Lisa·实现阻塞反馈】`,
-          p.requirement_id ? `需求 ID：${p.requirement_id}` : "",
-          ``,
-          `问题描述：${p.issue}`,
-          p.spec_section ? `\nSpec 原文：${p.spec_section}` : "",
-          p.options ? `\nLisa 的备选方案：${p.options}` : "",
-          ``,
-          `Lisa 在等你决策后继续推进被阻塞的部分。`,
-        ].filter(Boolean).join("\n");
+        const parts = isAnalysisDone
+          ? [
+              `【来自Lisa·Bug分析完成，请出Fix Spec】`,
+              p.requirement_id ? `需求 ID：${p.requirement_id}` : "",
+              ``,
+              `Lisa 已完成 Bug 分析，结论如下：`,
+              p.issue,
+              p.spec_section ? `\n相关代码片段：${p.spec_section}` : "",
+              p.options ? `\nLisa 建议的修复方向：${p.options}` : "",
+              ``,
+              `请据此出 fix spec，然后调用 trigger_lisa_implementation 交给 Lisa 实现。不要让 Lisa 自己直接改，需要你的 spec 作为交付依据。`,
+            ].filter(Boolean).join("\n")
+          : [
+              `【来自Lisa·实现阻塞反馈】`,
+              p.requirement_id ? `需求 ID：${p.requirement_id}` : "",
+              ``,
+              `问题描述：${p.issue}`,
+              p.spec_section ? `\nSpec 原文：${p.spec_section}` : "",
+              p.options ? `\nLisa 的备选方案：${p.options}` : "",
+              ``,
+              `Lisa 在等你决策后继续推进被阻塞的部分。`,
+            ].filter(Boolean).join("\n");
 
         try {
           // 300s：DeepSeek-R1 CoT 推理需要时间，60s 几乎必超时
@@ -14170,8 +14212,7 @@ last_used: null
                   `first_seen: ${new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" }).slice(0, 10)}`,
                   `last_seen: ${new Date().toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" }).slice(0, 10)}`,
                   "trigger_count: 1", "usage_count: 0", "success_count: 0", "last_used: null", "---", "", (p.content ?? "").trim(), ""];
-                atomicWrite(archivePath, archiveFmLines.join("
-"));
+                atomicWrite(archivePath, archiveFmLines.join("\n"));
                 const archiveDisplay = archivePath.startsWith(HOME) ? `~/${archivePath.slice(HOME.length + 1)}` : archivePath;
                 return {
                   content: [{ type: "text", text: `⚡ 检测到场景触发型 Skill，已自动写入 archive 层（而非 native）：${p.skill_name}

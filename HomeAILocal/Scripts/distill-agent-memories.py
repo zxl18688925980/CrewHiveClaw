@@ -397,20 +397,27 @@ def save_meta(agent_id: str, record_count: int):
 # ── LLM 调用 ──────────────────────────────────────────────────────────────────
 
 def read_agent_model_config() -> dict:
-    """从 openclaw.json 读取 Andy 或 lisa 的配置（用于调 LLM）。默认用 lucas 配置。"""
+    """从 openclaw.json 读取蒸馏任务用的 LLM 配置。
+    优先选 DashScope（Lisa 配置），因为 DashScope 兼容 OpenAI 格式且直接可达。
+    备选：lisa → lucas（按顺序，跳过无法直接调用的路由模型如 gpt-5.4）。
+    """
     cfg_path = OPENCLAW_DIR / "openclaw.json"
     cfg = json.loads(cfg_path.read_text())
-    # 蒸馏任务用 lucas 配置（DeepSeek），避免引入对角色自身模型的依赖
-    agent = next((a for a in cfg["agents"]["list"] if a["id"] == "lucas"), None)
-    if not agent:
-        raise RuntimeError("openclaw.json 中找不到 lucas agent 配置")
-    provider_key, model_id = agent["model"].split("/", 1)
-    provider = cfg.get("models", {}).get("providers", {}).get(provider_key, {})
-    return {
-        "base_url": provider["baseUrl"],
-        "api_key":  provider["apiKey"],
-        "model":    model_id,
-    }
+    # 按优先级尝试：lisa（DashScope）→ andy（Anthropic）→ lucas（可能 gpt-5.4 不可达）
+    for agent_id in ["lisa", "andy", "lucas"]:
+        agent = next((a for a in cfg["agents"]["list"] if a["id"] == agent_id), None)
+        if not agent:
+            continue
+        provider_key, model_id = agent["model"].split("/", 1)
+        provider = cfg.get("models", {}).get("providers", {}).get(provider_key, {})
+        if provider.get("baseUrl") and provider.get("apiKey"):
+            return {
+                "base_url": provider["baseUrl"],
+                "api_key":  provider["apiKey"],
+                "model":    model_id,
+                "_agent":   agent_id,
+            }
+    raise RuntimeError("openclaw.json 中找不到可用的 LLM 配置")
 
 
 def call_llm(prompt: str) -> str:
