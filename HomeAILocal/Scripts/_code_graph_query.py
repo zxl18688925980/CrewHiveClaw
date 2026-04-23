@@ -1,5 +1,5 @@
 import kuzu, os, json, sys
-sym = "wecom"
+sym = "req_1776850633539"
 db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))
 conn = kuzu.Connection(db)
 # 定义位置
