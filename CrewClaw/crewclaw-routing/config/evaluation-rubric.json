@@ -5,8 +5,72 @@
 
   "layers": {
     "L0": {
+      "label": "基础设施稳定性",
+      "_doc": "进程稳定性与关键服务可达性。L0 是一切的前提——进程挂了，上面的 L1~L5 全是空转。重点评估：PM2 进程全部 online + 重启频率低、Gateway/ChromaDB/Ollama 可达且延迟正常、磁盘/内存未超限。",
+      "pass_threshold": 3.5,
+      "items": {
+        "pm2_processes": {
+          "name": "PM2 关键进程全部 online（wecom-entrance / chromadb / gateway-watchdog / cloudflared-tunnel）",
+          "weight": 2.0,
+          "_type": "core",
+          "direction": "enum",
+          "map": { "all_online": 5, "partial": 2, "critical_down": 0 }
+        },
+        "process_stability": {
+          "name": "进程稳定性（关键进程累计重启次数，越低越好）",
+          "weight": 1.5,
+          "_type": "core",
+          "direction": "lower_better",
+          "thresholds": [[5, 5], [15, 4], [30, 3], [60, 2], [9999, 1]]
+        },
+        "gateway_health": {
+          "name": "Gateway 可达且响应延迟（ms）",
+          "weight": 1.5,
+          "_type": "core",
+          "direction": "lower_better",
+          "thresholds": [[500, 5], [1000, 4], [2000, 3], [3000, 2], [99999, 0]]
+        },
+        "chromadb_health": {
+          "name": "ChromaDB 可达且响应延迟（ms）",
+          "weight": 1.2,
+          "_type": "core",
+          "direction": "lower_better",
+          "thresholds": [[200, 5], [500, 4], [1000, 3], [2000, 2], [99999, 0]]
+        },
+        "aibot_ws": {
+          "name": "企业微信 aibot WebSocket 连接状态",
+          "weight": 1.2,
+          "_type": "core",
+          "direction": "enum",
+          "map": { "authenticated": 5, "connected": 3, "disconnected": 0 }
+        },
+        "ollama_health": {
+          "name": "Ollama 本地模型服务可达",
+          "weight": 0.8,
+          "_type": "core",
+          "direction": "enum",
+          "map": { "reachable": 5, "unreachable": 2 }
+        },
+        "disk_space": {
+          "name": "磁盘使用率（%）",
+          "weight": 0.8,
+          "_type": "core",
+          "direction": "lower_better",
+          "thresholds": [[70, 5], [85, 4], [90, 3], [95, 2], [101, 0]]
+        },
+        "memory_usage": {
+          "name": "内存活跃使用率（%）",
+          "weight": 0.5,
+          "_type": "core",
+          "direction": "lower_better",
+          "thresholds": [[60, 5], [75, 4], [85, 3], [90, 2], [101, 1]]
+        }
+      }
+    },
+
+    "L1": {
       "label": "Agent记忆与认知质量",
-      "_doc": "写入侧质量：四维度记忆写入健康（语义/时间/实体/因果）× 三角色；蒸馏管道产出（design_learning/impl_learning/Kuzu facts/inject.md）。基础设施项（Gateway/磁盘/内存）是L0正常工作的前提条件，不是L0的核心定义。",
+      "_doc": "写入侧质量：四维度记忆写入健康（语义/时间/实体/因果）× 三角色；蒸馏管道产出（design_learning/impl_learning/Kuzu facts/inject.md）。L0 基础设施健康是 L1 正常工作的前提。",
       "pass_threshold": 3.0,
       "items": {
         "memory_write_health": {
@@ -38,61 +102,12 @@
           "direction": "higher_better",
           "thresholds": [[100, 5], [50, 4], [10, 3], [1, 2], [0, 0]]
         },
-        "process_alive": {
-          "name": "Watchdog 进程存活",
-          "weight": 0.5,
-          "_type": "prerequisite",
-          "direction": "enum",
-          "map": { "online": 5, "stopped": 2, "missing": 0 }
-        },
-        "chromadb_conversations": {
-          "name": "ChromaDB 对话记忆可达",
-          "weight": 0.5,
-          "_type": "prerequisite",
-          "direction": "enum",
-          "map": { "reachable": 5, "unreachable": 0 }
-        },
         "data_freshness": {
           "name": "家人档案新鲜度（小时）",
-          "weight": 0.5,
-          "_type": "prerequisite",
+          "weight": 0.8,
+          "_type": "core",
           "direction": "lower_better",
           "thresholds": [[24, 5], [48, 4], [72, 2], [168, 1], [9999, 0]]
-        },
-        "chromadb_decisions": {
-          "name": "ChromaDB 决策记忆可达",
-          "weight": 0.5,
-          "_type": "prerequisite",
-          "direction": "enum",
-          "map": { "reachable": 5, "unreachable": 0 }
-        },
-        "disk_space": {
-          "name": "磁盘使用率（%）",
-          "weight": 0.3,
-          "_type": "prerequisite",
-          "direction": "lower_better",
-          "thresholds": [[70, 5], [85, 4], [90, 3], [95, 2], [101, 0]]
-        },
-        "gateway_latency": {
-          "name": "Gateway 响应延迟（ms）",
-          "weight": 0.3,
-          "_type": "prerequisite",
-          "direction": "lower_better",
-          "thresholds": [[500, 5], [1000, 4], [2000, 3], [3000, 2], [99999, 0]]
-        },
-        "chromadb_latency": {
-          "name": "ChromaDB 响应延迟（ms）",
-          "weight": 0.2,
-          "_type": "prerequisite",
-          "direction": "lower_better",
-          "thresholds": [[200, 5], [500, 4], [1000, 3], [2000, 2], [99999, 0]]
-        },
-        "memory_usage": {
-          "name": "内存活跃使用率（%）",
-          "weight": 0.2,
-          "_type": "prerequisite",
-          "direction": "lower_better",
-          "thresholds": [[60, 5], [75, 4], [85, 3], [90, 2], [101, 1]]
         },
         "temporal_degradation": {
           "name": "时间分层退化检测（历史期 vs 近期 embedding 有效率差值 pp，越小越好）",
@@ -105,9 +120,9 @@
       }
     },
 
-    "L1": {
+    "L2": {
       "label": "Agent人格完整度",
-      "_doc": "召回侧质量：记忆召回语义相关性；上下文工程形成人格连续性（家人档案注入在L0写入，L1消费）；Skill 自动沉淀与积累；行为模式结晶（Kuzu has_pattern）。",
+      "_doc": "召回侧质量：记忆召回语义相关性；上下文工程形成人格连续性（家人档案注入在L1写入，L2消费）；Skill 自动沉淀与积累；行为模式结晶（Kuzu has_pattern）。",
       "pass_threshold": 3.0,
       "items": {
         "memory_recall_quality": {
@@ -174,7 +189,7 @@
       }
     },
 
-    "L2": {
+    "L3": {
       "label": "Engineering Anything",
       "pass_threshold": 2.5,
       "_doc": "三角色闭环交付力。Frontend Agent感知需求→Designer设计→Implementor实现，基础设施层保证可靠性。",
@@ -207,7 +222,7 @@
       }
     },
 
-    "L3": {
+    "L4": {
       "label": "组织协作进化",
       "pass_threshold": 2.0,
       "_doc": "四层机制：①成员画像（从交互蒸馏）②关系图谱（Kuzu协作边）③影子Agent（演进环+访客）④跨成员感知（协作蒸馏）",
@@ -257,10 +272,10 @@
       }
     },
 
-    "L4": {
+    "L5": {
       "label": "系统自进化",
       "pass_threshold": 2.0,
-      "_doc": "两层：①系统层自我改进（Andy主力：蒸馏/结晶/DPO/巡检）②模型层内化（DPO+SFT/本地路由比例上升）。完成标志：同类错误趋势下降，AGENTS.md规则条数持续减少，本地路由比例持续上升",
+      "_doc": "两层：①系统层自我改进（Andy主力：蒸馏/结晶/DPO/巡检）②模型层内化（DPO+SFT/本地路由比例上升）。完成标志：同类错误趋势下降，AGENTS.md规则条数持续减少，本地路由比例持续上升。",
       "items": {
         "dpo_accumulation": {
           "name": "DPO 模式距内化阈值进度（%）",
@@ -273,7 +288,7 @@
           "name": "AGENTS.md 规则收敛度（规则总条数，越少越成熟）",
           "weight": 1.0,
           "_layer": "system",
-          "_doc": "规则条数少 = 更多行为内化到权重，不靠外部注入。lower_better。基线~180条（L1完成期），目标随L4深化持续下降",
+          "_doc": "规则条数少 = 更多行为内化到权重，不靠外部注入。lower_better。基线~180条（L2完成期），目标随L5深化持续下降",
           "direction": "lower_better",
           "thresholds": [[100, 5], [150, 4], [200, 3], [250, 2], [9999, 1]]
         },

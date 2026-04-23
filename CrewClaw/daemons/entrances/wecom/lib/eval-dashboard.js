@@ -66,9 +66,9 @@ h1{font-size:18px;text-align:center;margin-bottom:8px;color:#fff}
 <div class="card"><h2>关键卡点</h2><div id="bottlenecks"></div></div>
 <button class="refresh-btn" onclick="loadData()" title="刷新">&#x21bb;</button>
 <script>
-const LAYER_COLORS={L0:'#2ecc71',L1:'#3498db',L2:'#e67e22',L3:'#9b59b6',L4:'#e74c3c'};
-const LAYER_NAMES={L0:'L0 Agents基础设施',L1:'L1 Agents行为质量',L2:'L2 Engineering Anything',L3:'L3 组织协作进化',L4:'L4 系统自进化'};
-const PASS_TH={L0:3.0,L1:3.0,L2:2.5,L3:2.0,L4:2.0};
+const LAYER_COLORS={L0:'#e74c3c',L1:'#2ecc71',L2:'#3498db',L3:'#e67e22',L4:'#9b59b6',L5:'#8e44ad'};
+const LAYER_NAMES={L0:'L0 基础设施稳定性',L1:'L1 Agent记忆与认知质量',L2:'L2 Agent人格完整度',L3:'L3 Engineering Anything',L4:'L4 组织协作进化',L5:'L5 系统自进化'};
+const PASS_TH={L0:3.5,L1:3.0,L2:3.0,L3:2.5,L4:2.0,L5:2.0};
 let trendChart=null,barChart=null;
 async function loadData(){
   try{
@@ -84,7 +84,7 @@ async function loadData(){
 }
 function renderScoreGrid(data){
   const latest=data[data.length-1];
-  const keys=['L0','L1','L2','L3','L4'];
+  const keys=['L0','L1','L2','L3','L4','L5'];
   const avg=latest.overall||0;
   let html='<div class="score-item"><div class="label">整体均值</div><div class="value '+(avg>=3?'pass':avg>=2?'warn':'fail')+'">'+avg.toFixed(1)+'</div></div>';
   for(const k of keys){
@@ -96,7 +96,7 @@ function renderScoreGrid(data){
   document.getElementById('scoreGrid').innerHTML=html;
 }
 function renderTrend(data){
-  const keys=['L0','L1','L2','L3','L4'];
+  const keys=['L0','L1','L2','L3','L4','L5'];
   const labels=data.map(e=>{try{return new Date(e.ts).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}catch{return'?';}});
   const datasets=keys.map(k=>({label:LAYER_NAMES[k],data:data.map(e=>e[k]?.w??null),borderColor:LAYER_COLORS[k],backgroundColor:LAYER_COLORS[k]+'33',tension:.3,pointRadius:2,borderWidth:2,spanGaps:true}));
   datasets.push({label:'整体均值',data:data.map(e=>e.overall??null),borderColor:'#fff',backgroundColor:'#ffffff22',tension:.3,pointRadius:3,borderWidth:2.5,borderDash:[6,3],spanGaps:true});
@@ -106,7 +106,7 @@ function renderTrend(data){
 }
 function renderBar(data){
   const latest=data[data.length-1];
-  const keys=['L0','L1','L2','L3','L4'];
+  const keys=['L0','L1','L2','L3','L4','L5'];
   const names=[],scores=[],colors=[];
   for(const k of keys){
     const items=latest[k]?.items||{};
@@ -123,7 +123,7 @@ function renderBar(data){
 }
 function renderBottlenecks(data){
   const latest=data[data.length-1];
-  const keys=['L0','L1','L2','L3','L4'];
+  const keys=['L0','L1','L2','L3','L4','L5'];
   const items=[];
   for(const k of keys){
     const its=latest[k]?.items||{};

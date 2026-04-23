@@ -262,7 +262,7 @@ async function runMainMonitorLoop() {
     } catch {}
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n**三层监控协议（严格执行，禁止混层）**：\n\n【告警级别 3 · 紧急故障探测】\n调用 scan_pipeline_health。\n- 任何进程不在线 / Gateway 不可达 → 立即调用 notify_engineer 推送，一句话说清楚问题，然后回复 HEARTBEAT_OK 结束。\n- 一切正常 → 不推送，继续告警级别 2 判断。\n\n【告警级别 2 · 每日巡检日报】\n仅当「上次日报发送」距今超过 20 小时时才执行，否则跳过直接回复 HEARTBEAT_OK。\n执行时：\n1. 依次调用 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4\n2. 汇总为一条日报（按 L0~L4 分层），包含：各层状态、DPO 积累进度（审核待办）、待处理改进点\n3. 调用 notify_engineer 发送日报\n4. 更新「上次日报发送」时间\n\n【告警级别 1 · 正常静默】\n以上两层均无需推送时 → 直接回复 HEARTBEAT_OK，不生成任何其他内容。\n\n**铁律：除 notify_engineer 推送和日报发送外，禁止生成面向工程师的文字内容。OK 就是 OK。**`;
+    const heartbeatPrompt = `[HEARTBEAT ${now}]\n\nHEARTBEAT.md 当前内容：\n${heartbeatContent}\n\n**三层监控协议（严格执行，禁止混层）**：\n\n【告警级别 3 · 紧急故障探测】\n调用 scan_pipeline_health。\n- 任何进程不在线 / Gateway 不可达 → 立即调用 notify_engineer 推送，一句话说清楚问题，然后回复 HEARTBEAT_OK 结束。\n- 一切正常 → 不推送，继续告警级别 2 判断。\n\n【告警级别 2 · 每日巡检日报】\n仅当「上次日报发送」距今超过 20 小时时才执行，否则跳过直接回复 HEARTBEAT_OK。\n执行时：\n1. 依次调用 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_l5\n2. 汇总为一条日报（按 L0~L5 分层），包含：各层状态、DPO 积累进度（审核待办）、待处理改进点\n3. 调用 notify_engineer 发送日报\n4. 更新「上次日报发送」时间\n\n【告警级别 1 · 正常静默】\n以上两层均无需推送时 → 直接回复 HEARTBEAT_OK，不生成任何其他内容。\n\n**铁律：除 notify_engineer 推送和日报发送外，禁止生成面向工程师的文字内容。OK 就是 OK。**`;
 
     // 使用独立消息历史，不污染业主会话
     const messages = [{ role: 'user', content: heartbeatPrompt }];
@@ -324,8 +324,8 @@ async function runMainMonitorLoop() {
         hb = hb.replace(/- 上次质量扫描：.*/, `- 上次质量扫描：${nowIso}`);
         hb = hb.replace(/  - 上次扫描：.*/,   `  - 上次扫描：${nowIso}`);
       }
-      if (toolsCalled.includes('evaluate_l2') || toolsCalled.includes('evaluate_l3') || toolsCalled.includes('evaluate_l4')) {
-        hb = hb.replace(/- 上次L2~L4巡检：.*/, `- 上次L2~L4巡检：${nowIso}`);
+      if (toolsCalled.includes('evaluate_l2') || toolsCalled.includes('evaluate_l3') || toolsCalled.includes('evaluate_l4') || toolsCalled.includes('evaluate_l5')) {
+        hb = hb.replace(/- 上次L2~L5巡检：.*/, `- 上次L2~L5巡检：${nowIso}`);
       }
       fs.writeFileSync(heartbeatPath, hb, 'utf8');
     } catch (e) {

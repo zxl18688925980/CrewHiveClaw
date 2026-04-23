@@ -404,12 +404,17 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l0',
-    description: '评估 L0（Agent记忆与认知质量·写入侧）：四维度蒸馏管道健康（语义/时间/实体/因果 × 三角色 embedding 有效率）、蒸馏产出（Andy design_learning / Lisa impl_learning）、家人档案注入完整性（Kuzu→inject.md）、Kuzu 知识图谱数据量；基础设施前提条件（进程存活/磁盘/内存/Gateway延迟/ChromaDB延迟/数据新鲜度）作为写入侧的运行保障。',
+    description: '评估 L0（基础设施稳定性）：PM2 关键进程全部 online 状态（wecom-entrance/chromadb/gateway-watchdog/cloudflared-tunnel）+ 进程重启次数（稳定性信号）+ Gateway/ChromaDB/Ollama 可达性与延迟 + 企业微信 aibot WebSocket 连接状态 + 磁盘/内存使用率。L0 是一切的前提，不稳则上层全是空转。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_l1',
-    description: '评估 L1（Agent人格完整度·召回侧）：记忆语义召回质量（avg cosine distance，越低越好）、Skill 自动沉淀积累（native + archive 数量）、行为模式结晶（Kuzu has_pattern）、Lucas 输出合规率（问题率）、Andy/Lisa 交互活跃度、Main HEARTBEAT 状态、子 Agent 活跃度。',
+    description: '评估 L1（Agent记忆与认知质量·写入侧）：四维度蒸馏管道健康（语义/时间/实体/因果 × 三角色 embedding 有效率）、蒸馏产出（Andy design_learning / Lisa impl_learning）、家人档案注入完整性（Kuzu→inject.md）、Kuzu 知识图谱数据量、数据新鲜度、时间分层退化检测。',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'evaluate_l2',
+    description: '评估 L2（Agent人格完整度·召回侧）：记忆语义召回质量（avg cosine distance，越低越好）、Skill 自动沉淀积累（native + archive 数量）、行为模式结晶（Kuzu has_pattern）、Lucas 输出合规率（问题率）、Andy/Lisa 交互活跃度、Main HEARTBEAT 状态、子 Agent 活跃度。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -424,18 +429,18 @@ const MAIN_TOOLS = [
     },
   },
   {
-    name: 'evaluate_l2',
-    description: '评估 L2（Engineering Anything · 开发即交付）：三角色闭环交付力——任务类型覆盖度 + 端到端交付成功率 + 交付物多样性 + 三角色流水线健康（task-registry 状态分布）。',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
     name: 'evaluate_l3',
-    description: '评估 L3（组织协作进化）：四层机制——①成员画像（从交互蒸馏，inject.md质量）②关系图谱（Kuzu协作边）③影子Agent（演进环+访客Registry）④跨成员感知（关系蒸馏运行状态）。',
+    description: '评估 L3（Engineering Anything · 开发即交付）：三角色闭环交付力——任务类型覆盖度 + 端到端交付成功率 + 交付物多样性 + 三角色流水线健康（task-registry 状态分布）。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'evaluate_l4',
-    description: '评估 L4（系统自我演化·让 L0~L3 越来越好）两层：【系统层·Andy 主力】进化信号积累 + 知识内化 + Skill 积累 + Andy 巡检时效；【模型层】DPO 信号积累+趋势、本地模型就绪状态、模型能力评估（调用 evaluate_local_model 获取量化评分）。',
+    description: '评估 L4（组织协作进化）：四层机制——①成员画像（从交互蒸馏，inject.md质量）②关系图谱（Kuzu协作边）③影子Agent（演进环+访客Registry）④跨成员感知（关系蒸馏运行状态）。',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'evaluate_l5',
+    description: '评估 L5（系统自我演化·让 L1~L4 越来越好）两层：【系统层·Andy 主力】进化信号积累 + 知识内化 + Skill 积累 + Andy 巡检时效；【模型层】DPO 信号积累+趋势、本地模型就绪状态、模型能力评估（调用 evaluate_local_model 获取量化评分）。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -475,7 +480,7 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_system',
-    description: '系统全面评估（L0~L4）：依次运行 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4，汇总为一张评分卡。业主发「系统评估」时调用此工具。',
+    description: '系统全面评估（L0~L5）：依次运行 evaluate_l0 / evaluate_l1 / evaluate_l2 / evaluate_l3 / evaluate_l4 / evaluate_l5，汇总为一张评分卡。业主发「系统评估」时调用此工具。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -1169,31 +1174,155 @@ async function executeMainTool(toolName, toolInput) {
     }
   }
 
-  // ─── L0~L2 系统评估工具 ──────────────────────────────────────────────────────
+  // ─── L0~L5 系统评估工具 ──────────────────────────────────────────────────────
 
   if (toolName === 'evaluate_l0') {
+    // L0：基础设施稳定性——进程/服务/资源全面检查
     const results = [];
     let score = '✅';
+    const CRITICAL_PROCS = ['wecom-entrance', 'chromadb', 'gateway-watchdog', 'cloudflared-tunnel'];
 
-    // 1. gateway-watchdog 是否在 PM2
+    // 1. PM2 关键进程全量检查（状态 + 重启次数）
     try {
       const pmRaw = execSync('pm2 jlist', { encoding: 'utf8', timeout: 8000 });
       const procs = JSON.parse(pmRaw);
-      const wdog  = procs.find(p => p.name === 'gateway-watchdog');
-      if (!wdog) {
-        results.push('❌ gateway-watchdog：不在 PM2，蒸馏定时触发缺失');
-        score = '❌';
-      } else if (wdog.pm2_env?.status !== 'online') {
-        results.push(`⚠️ gateway-watchdog：状态 ${wdog.pm2_env?.status}（非 online）`);
+      let totalRestarts = 0;
+      let downCount = 0;
+      for (const name of CRITICAL_PROCS) {
+        const p = procs.find(x => x.name === name);
+        if (!p) {
+          results.push(`❌ ${name}：不在 PM2`);
+          score = '❌'; downCount++;
+        } else if (p.pm2_env?.status !== 'online') {
+          results.push(`⚠️ ${name}：状态 ${p.pm2_env?.status}`);
+          if (score === '✅') score = '⚠️'; downCount++;
+        } else {
+          const r = p.pm2_env?.restart_time ?? 0;
+          totalRestarts += r;
+          const uptime = p.pm2_env?.pm_uptime ? Math.round((Date.now() - p.pm2_env.pm_uptime) / 60000) : '?';
+          const rLabel = r > 10 ? `⚠️重启${r}次` : `重启${r}次`;
+          results.push(`✅ ${name}：online，运行 ${uptime}min，${rLabel}`);
+        }
+      }
+      if (downCount === 0 && totalRestarts > 30) {
+        results.push(`⚠️ 进程稳定性：累计重启 ${totalRestarts} 次（偏高，系统不稳定）`);
         if (score === '✅') score = '⚠️';
-      } else {
-        const restarts = wdog.pm2_env?.restart_time ?? 0;
-        results.push(`✅ gateway-watchdog：online（重启 ${restarts} 次）`);
+      } else if (downCount === 0) {
+        results.push(`✅ 进程稳定性：全部 online，累计重启 ${totalRestarts} 次`);
       }
     } catch (e) {
-      results.push(`⚠️ gateway-watchdog：检查失败（${e.message.slice(0, 60)}）`);
+      results.push(`⚠️ PM2 检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
+
+    // 2. Gateway 可达性 + 延迟
+    try {
+      const gwStart = Date.now();
+      const gwResp = await fetch('http://localhost:18789/health', { signal: AbortSignal.timeout(10000) });
+      const gwMs = Date.now() - gwStart;
+      if (!gwResp.ok) {
+        results.push(`❌ Gateway：响应 ${gwResp.status}（${gwMs}ms）`);
+        score = '❌';
+      } else if (gwMs > 3000) {
+        results.push(`⚠️ Gateway：可达但延迟 ${gwMs}ms（偏慢）`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        results.push(`✅ Gateway：可达，延迟 ${gwMs}ms`);
+      }
+    } catch (e) {
+      results.push(`❌ Gateway：不可达（${e.message.slice(0, 50)}）`);
+      score = '❌';
+    }
+
+    // 3. ChromaDB 可达性 + 延迟
+    try {
+      const chrStart = Date.now();
+      const chrResp = await fetch(`${CHROMA_API_BASE}/heartbeat`, { signal: AbortSignal.timeout(10000) });
+      const chrMs = Date.now() - chrStart;
+      if (!chrResp.ok) {
+        results.push(`❌ ChromaDB：响应 ${chrResp.status}（${chrMs}ms）`);
+        score = '❌';
+      } else if (chrMs > 2000) {
+        results.push(`⚠️ ChromaDB：可达但延迟 ${chrMs}ms（偏慢）`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        results.push(`✅ ChromaDB：可达，延迟 ${chrMs}ms`);
+      }
+    } catch (e) {
+      results.push(`❌ ChromaDB：不可达（${e.message.slice(0, 50)}）`);
+      score = '❌';
+    }
+
+    // 4. Ollama 本地模型服务可达性
+    try {
+      const olStart = Date.now();
+      const olResp = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(6000) });
+      const olMs = Date.now() - olStart;
+      if (olResp.ok) {
+        const olData = await olResp.json();
+        const modelCount = (olData.models || []).length;
+        results.push(`✅ Ollama：可达（${modelCount} 个模型），延迟 ${olMs}ms`);
+      } else {
+        results.push(`⚠️ Ollama：响应 ${olResp.status}（${olMs}ms）`);
+        if (score === '✅') score = '⚠️';
+      }
+    } catch (e) {
+      results.push(`⚠️ Ollama：不可达（本地模型服务未启动）`);
+      if (score === '✅') score = '⚠️';
+    }
+
+    // 5. 磁盘空间
+    try {
+      const dfRaw = execSync(`df -h "${INSTANCE_ROOT}"`, { encoding: 'utf8', timeout: 5000 });
+      const dfLine = dfRaw.split('\n').find(l => l.includes('/'));
+      if (dfLine) {
+        const parts = dfLine.trim().split(/\s+/);
+        const usePct = parts[parts.length - 1];
+        const avail = parts[parts.length - 2];
+        const pct = parseInt(usePct);
+        if (pct > 95) {
+          results.push(`❌ 磁盘：已用 ${usePct}，仅剩 ${avail}（严重不足）`);
+          score = '❌';
+        } else if (pct > 85) {
+          results.push(`⚠️ 磁盘：已用 ${usePct}，剩余 ${avail}`);
+          if (score === '✅') score = '⚠️';
+        } else {
+          results.push(`✅ 磁盘：已用 ${usePct}，剩余 ${avail}`);
+        }
+      }
+    } catch (e) {
+      results.push(`⚠️ 磁盘检查失败：${e.message.slice(0, 40)}`);
+    }
+
+    // 6. 内存使用（macOS vm_stat）
+    try {
+      const vmRaw = execSync('vm_stat', { encoding: 'utf8', timeout: 5000 });
+      const freeMatch = vmRaw.match(/Pages free:\s+(\d+)/);
+      const activeMatch = vmRaw.match(/Pages active:\s+(\d+)/);
+      const inactiveMatch = vmRaw.match(/Pages inactive:\s+(\d+)/);
+      if (freeMatch && activeMatch) {
+        const pageSize = 16384;
+        const free = parseInt(freeMatch[1]) * pageSize;
+        const active = parseInt(activeMatch[1]) * pageSize;
+        const total = free + active + (inactiveMatch ? parseInt(inactiveMatch[1]) * pageSize : 0);
+        const usedPct = Math.round(active / total * 100);
+        const freeGB = (free / 1073741824).toFixed(1);
+        if (usedPct > 90) {
+          results.push(`⚠️ 内存：活跃 ${usedPct}%，空闲 ${freeGB}GB（偏高）`);
+          if (score === '✅') score = '⚠️';
+        } else {
+          results.push(`✅ 内存：活跃 ${usedPct}%，空闲 ${freeGB}GB`);
+        }
+      }
+    } catch (_e) { /* vm_stat 非关键，静默跳过 */ }
+
+    const out = results.join('\n');
+    return `## L0 基础设施稳定性 ${score}\n\n${out}`;
+  }
+
+  if (toolName === 'evaluate_l1') {
+    const results = [];
+    let score = '✅';
 
     // 2. Kuzu 知识图谱 Fact 数量（Python 查询，os._exit(0) 防 SIGBUS）
     const kuzuPath  = path.join(INSTANCE_ROOT, 'Data', 'kuzu');
@@ -1296,92 +1425,7 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // 6. 软硬件性能指标
-    try {
-      // 6a. 磁盘空间
-      const dfRaw = execSync(`df -h "${INSTANCE_ROOT}"`, { encoding: 'utf8', timeout: 5000 });
-      const dfLine = dfRaw.split('\n').find(l => l.includes('/'));
-      if (dfLine) {
-        const parts = dfLine.trim().split(/\s+/);
-        const usePct = parts[parts.length - 1]; // e.g. 85%
-        const avail = parts[parts.length - 2]; // e.g. 50Gi
-        const pct = parseInt(usePct);
-        if (pct > 95) {
-          results.push(`❌ 磁盘空间：已用 ${usePct}，仅剩 ${avail}（严重不足）`);
-          score = '❌';
-        } else if (pct > 85) {
-          results.push(`⚠️ 磁盘空间：已用 ${usePct}，剩余 ${avail}`);
-          if (score === '✅') score = '⚠️';
-        } else {
-          results.push(`✅ 磁盘空间：已用 ${usePct}，剩余 ${avail}`);
-        }
-      }
-    } catch (e) {
-      results.push(`⚠️ 磁盘空间检查失败：${e.message.slice(0, 40)}`);
-      if (score === '✅') score = '⚠️';
-    }
-
-    try {
-      // 6b. 内存使用（macOS vm_stat）
-      const vmRaw = execSync('vm_stat', { encoding: 'utf8', timeout: 5000 });
-      const freeMatch = vmRaw.match(/Pages free:\s+(\d+)/);
-      const activeMatch = vmRaw.match(/Pages active:\s+(\d+)/);
-      const inactiveMatch = vmRaw.match(/Pages inactive:\s+(\d+)/);
-      if (freeMatch && activeMatch) {
-        const pageSize = 16384; // macOS ARM64
-        const free = parseInt(freeMatch[1]) * pageSize;
-        const active = parseInt(activeMatch[1]) * pageSize;
-        const total = free + active + (inactiveMatch ? parseInt(inactiveMatch[1]) * pageSize : 0);
-        const usedPct = Math.round(active / total * 100);
-        const freeGB = (free / 1073741824).toFixed(1);
-        if (usedPct > 90) {
-          results.push(`⚠️ 内存：活跃 ${usedPct}%，空闲 ${freeGB}GB（偏高）`);
-          if (score === '✅') score = '⚠️';
-        } else {
-          results.push(`✅ 内存：活跃 ${usedPct}%，空闲 ${freeGB}GB`);
-        }
-      }
-    } catch (e) {
-      // vm_stat 非关键，静默跳过
-    }
-
-    try {
-      // 6c. Gateway 响应延迟
-      const gwStart = Date.now();
-      const gwResp = await fetch('http://localhost:18789/health', { signal: AbortSignal.timeout(10000) });
-      const gwMs = Date.now() - gwStart;
-      if (!gwResp.ok) {
-        results.push(`❌ Gateway 延迟：响应 ${gwResp.status}（${gwMs}ms）`);
-        score = '❌';
-      } else if (gwMs > 3000) {
-        results.push(`⚠️ Gateway 延迟：${gwMs}ms（偏慢）`);
-        if (score === '✅') score = '⚠️';
-      } else {
-        results.push(`✅ Gateway 延迟：${gwMs}ms`);
-      }
-    } catch (e) {
-      // Gateway 不可达已在 scan_pipeline_health 检查，此处不重复计分
-    }
-
-    try {
-      // 6d. ChromaDB 响应延迟
-      const chrStart = Date.now();
-      const chrResp = await fetch(`${CHROMA_API_BASE}/heartbeat`, { signal: AbortSignal.timeout(10000) });
-      const chrMs = Date.now() - chrStart;
-      if (!chrResp.ok) {
-        results.push(`⚠️ ChromaDB 延迟：响应 ${chrResp.status}（${chrMs}ms）`);
-        if (score === '✅') score = '⚠️';
-      } else if (chrMs > 2000) {
-        results.push(`⚠️ ChromaDB 延迟：${chrMs}ms（偏慢）`);
-        if (score === '✅') score = '⚠️';
-      } else {
-        results.push(`✅ ChromaDB 延迟：${chrMs}ms`);
-      }
-    } catch (e) {
-      // ChromaDB 不可达已在其他检查覆盖
-    }
-
-    // 7. Kuzu 协作边数量（L3 数据就绪信号，co_discusses/requests_from/supports/role_in_context）
+    // 6. Kuzu 协作边数量（L4 数据就绪信号，co_discusses/requests_from/supports/role_in_context）
     const collabScript = `
 import sys, json, os
 sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
@@ -1600,23 +1644,16 @@ os._exit(0)
     }
 
     // 数值评分：从 results 文本提取原始值，对照 rubric 计算 0-5 分
-    const _rub0 = loadRubric();
-    const _L0I = _rub0?.layers?.L0?.items;
-    const _l0s = [];
-    if (_L0I) {
+    const _rub1 = loadRubric();
+    const _L1I = _rub1?.layers?.L1?.items;
+    const _l1s = [];
+    if (_L1I) {
       for (const r of results) {
-        if (r.includes('gateway-watchdog')) trackScore(_l0s, _L0I, 'process_alive', r.includes('online') ? 'online' : (r.includes('不在') ? 'missing' : 'stopped'));
-        if (r.includes('Kuzu 知识图谱')) { const m = r.match(/(\d+) 条 Fact/); if (m) trackScore(_l0s, _L0I, 'kuzu_data', +m[1]); }
-        if (r.includes('ChromaDB conversations')) trackScore(_l0s, _L0I, 'chromadb_conversations', r.trim().startsWith('✅') ? 'reachable' : 'unreachable');
-        if (r.includes('家人档案最后更新')) { const m = r.match(/([\d.]+) 小时前/); if (m) trackScore(_l0s, _L0I, 'data_freshness', +m[1]); }
-        else if (r.includes('家人档案新鲜度') || (r.includes('家人档案') && !r.includes('注入文件'))) trackScore(_l0s, _L0I, 'data_freshness', 9999);
-        if (r.includes('ChromaDB decisions') && !r.includes('延迟') && !r.includes('蒸馏')) trackScore(_l0s, _L0I, 'chromadb_decisions', r.trim().startsWith('✅') ? 'reachable' : 'unreachable');
-        if (r.includes('磁盘空间')) { const m = r.match(/已用 (\d+)%/); if (m) trackScore(_l0s, _L0I, 'disk_space', +m[1]); }
-        if (r.includes('Gateway 延迟')) { const m = r.match(/(\d+)ms/); if (m) trackScore(_l0s, _L0I, 'gateway_latency', +m[1]); }
-        if (r.includes('ChromaDB 延迟')) { const m = r.match(/(\d+)ms/); if (m) trackScore(_l0s, _L0I, 'chromadb_latency', +m[1]); }
-        if (r.includes('内存') && r.includes('活跃')) { const m = r.match(/活跃 (\d+)%/); if (m) trackScore(_l0s, _L0I, 'memory_usage', +m[1]); }
-        if (r.includes('家人档案注入文件')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l0s, _L0I, 'family_inject', +m[1]); }
-        if (r.includes('Andy/Lisa 蒸馏产出')) { const ac = (+((r.match(/design_learning (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/impl_learning (\d+)/)?.[1] || '0')) > 0); trackScore(_l0s, _L0I, 'distillation_output', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Kuzu 知识图谱')) { const m = r.match(/(\d+) 条 Fact/); if (m) trackScore(_l1s, _L1I, 'kuzu_data', +m[1]); }
+        if (r.includes('家人档案最后更新')) { const m = r.match(/([\d.]+) 小时前/); if (m) trackScore(_l1s, _L1I, 'data_freshness', +m[1]); }
+        else if (r.includes('家人档案新鲜度') || (r.includes('家人档案') && !r.includes('注入文件'))) trackScore(_l1s, _L1I, 'data_freshness', 9999);
+        if (r.includes('家人档案注入文件')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l1s, _L1I, 'family_inject', +m[1]); }
+        if (r.includes('Andy/Lisa 蒸馏产出')) { const ac = (+((r.match(/design_learning (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/impl_learning (\d+)/)?.[1] || '0')) > 0); trackScore(_l1s, _L1I, 'distillation_output', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
       }
       // 记忆写入健康：取三角色 embedding 有效率最低值
       let _minEmbRate = null;
@@ -1626,15 +1663,15 @@ os._exit(0)
           if (m) { const rate = +m[1]; if (_minEmbRate === null || rate < _minEmbRate) _minEmbRate = rate; }
         }
       }
-      if (_minEmbRate !== null) trackScore(_l0s, _L0I, 'memory_write_health', _minEmbRate);
-      if (_temporalDegradationDiff !== null) trackScore(_l0s, _L0I, 'temporal_degradation', _temporalDegradationDiff);
-      if (_l0s.length > 0) {
-        const _wa = calcWeightedAvg(_l0s);
-        _evalScores.L0 = { items: _l0s, weighted: _wa };
+      if (_minEmbRate !== null) trackScore(_l1s, _L1I, 'memory_write_health', _minEmbRate);
+      if (_temporalDegradationDiff !== null) trackScore(_l1s, _L1I, 'temporal_degradation', _temporalDegradationDiff);
+      if (_l1s.length > 0) {
+        const _wa = calcWeightedAvg(_l1s);
+        _evalScores.L1 = { items: _l1s, weighted: _wa };
         score += ` · ${_wa.toFixed(1)}/5.0`;
       }
     }
-    return `**L0 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
+    return `**L1 评估 ${score}**\n${results.map(r => `  ${r}`).join('\n')}`;
   }
 
   if (toolName === 'evaluate_l1') {
@@ -2031,18 +2068,16 @@ os._exit(0)
     }
 
     // 数值评分
-    const _rub1 = loadRubric();
-    const _L1I = _rub1?.layers?.L1?.items;
-    const _l1s = [];
-    if (_L1I) {
+    const _rub2 = loadRubric();
+    const _L2I = _rub2?.layers?.L2?.items;
+    const _l2s = [];
+    if (_L2I) {
       for (const r of results) {
-        if (r.includes('Lucas 质量')) { const m = r.match(/问题率 (\d+)%/); if (m) trackScore(_l1s, _L1I, 'lucas_output_quality', +m[1]); }
-        if (r.includes('Andy/Lisa 活跃') || r.includes('Andy/Lisa：')) { const ac = (+((r.match(/Andy (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/Lisa (\d+)/)?.[1] || '0')) > 0); trackScore(_l1s, _L1I, 'agent_interactions', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
-        if (r.includes('Kuzu 模式积累')) { const ac = (+((r.match(/Andy (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/Lisa (\d+)/)?.[1] || '0')) > 0); trackScore(_l1s, _L1I, 'pattern_accumulation', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
-        if (r.includes('Main') && r.includes('HEARTBEAT')) trackScore(_l1s, _L1I, 'main_heartbeat', r.trim().startsWith('✅') ? 'ok' : 'missing');
-        if (r.includes('Skill 自动沉淀')) { const m = r.match(/native (\d+) 个/); if (m) trackScore(_l1s, _L1I, 'skill_accumulation', +m[1]); }
-        if (r.includes('子 Agent') || r.includes('andy-evaluator') || r.includes('lisa-evaluator')) { /* scored separately below */ }
-        if (r.includes('召回质量') && r.includes('avg_dist=')) { /* aggregated below */ }
+        if (r.includes('Lucas 质量')) { const m = r.match(/问题率 (\d+)%/); if (m) trackScore(_l2s, _L2I, 'lucas_output_quality', +m[1]); }
+        if (r.includes('Andy/Lisa 活跃') || r.includes('Andy/Lisa：')) { const ac = (+((r.match(/Andy (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/Lisa (\d+)/)?.[1] || '0')) > 0); trackScore(_l2s, _L2I, 'agent_interactions', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Kuzu 模式积累')) { const ac = (+((r.match(/Andy (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/Lisa (\d+)/)?.[1] || '0')) > 0); trackScore(_l2s, _L2I, 'pattern_accumulation', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Main') && r.includes('HEARTBEAT')) trackScore(_l2s, _L2I, 'main_heartbeat', r.trim().startsWith('✅') ? 'ok' : 'missing');
+        if (r.includes('Skill 自动沉淀')) { const m = r.match(/native (\d+) 个/); if (m) trackScore(_l2s, _L2I, 'skill_accumulation', +m[1]); }
       }
       // 子 Agent 活跃度（汇总 evaluator + shadow 计数）
       let subCount = 0;
@@ -2051,7 +2086,7 @@ os._exit(0)
         if (r.includes('lisa-evaluator') && r.trim().startsWith('✅')) subCount++;
         if (r.includes('访客影子语料') && !r.includes('0 个')) subCount++;
       }
-      trackScore(_l1s, _L1I, 'sub_agent_activity', subCount);
+      trackScore(_l2s, _L2I, 'sub_agent_activity', subCount);
       // 记忆召回质量：取三角色 avg_dist 均值
       let _recDistSum = 0, _recDistCnt = 0;
       for (const r of results) {
@@ -2059,18 +2094,18 @@ os._exit(0)
           const m = r.match(/avg_dist=([\d.]+)/); if (m) { _recDistSum += parseFloat(m[1]); _recDistCnt++; }
         }
       }
-      if (_recDistCnt > 0) trackScore(_l1s, _L1I, 'memory_recall_quality', _recDistSum / _recDistCnt);
+      if (_recDistCnt > 0) trackScore(_l2s, _L2I, 'memory_recall_quality', _recDistSum / _recDistCnt);
       // 外循环教师测试指标
-      if (_teacherTestCount > 0) trackScore(_l1s, _L1I, 'teacher_hit_rate', Math.round(_teacherHitCount / _teacherTestCount * 100));
-      trackScore(_l1s, _L1I, 'unresolved_requirements', _unresolvedReqCount);
-      if (_l1s.length > 0) {
-        const _wa = calcWeightedAvg(_l1s);
-        _evalScores.L1 = { items: _l1s, weighted: _wa };
+      if (_teacherTestCount > 0) trackScore(_l2s, _L2I, 'teacher_hit_rate', Math.round(_teacherHitCount / _teacherTestCount * 100));
+      trackScore(_l2s, _L2I, 'unresolved_requirements', _unresolvedReqCount);
+      if (_l2s.length > 0) {
+        const _wa = calcWeightedAvg(_l2s);
+        _evalScores.L2 = { items: _l2s, weighted: _wa };
         score += ` · ${_wa.toFixed(1)}/5.0`;
       }
     }
 
-    return `**L1 评估 ${score}**\n` +
+    return `**L2 评估 ${score}**\n` +
       `【模式沉淀】\n` + results.filter(r => r.includes('模式积累') || r.includes('Skill 自动沉淀')).map(r => `  ${r}`).join('\n') + '\n' +
       `【召回质量】\n` + results.filter(r => r.includes('召回质量')).map(r => `  ${r}`).join('\n') + '\n' +
       `【表达质量】\n` + results.filter(r => !r.includes('模式积累') && !r.includes('Skill 自动沉淀') && !r.includes('召回质量')).map(r => `  ${r}`).join('\n');
@@ -2376,31 +2411,31 @@ os._exit(0)
     }
 
     // ── 数值评分 ──
-    const _rub2 = loadRubric();
-    const _L2I = _rub2?.layers?.L2?.items;
-    const _l2s = [];
-    if (_L2I) {
+    const _rub3 = loadRubric();
+    const _L3I = _rub3?.layers?.L3?.items;
+    const _l3s = [];
+    if (_L3I) {
       for (const r of results) {
-        if (r.includes('任务类型覆盖度')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l2s, _L2I, 'task_type_coverage', +m[1]); }
-        if (r.includes('端到端交付成功率') && r.includes('=')) { const m = r.match(/= (\d+)%/); if (m) trackScore(_l2s, _L2I, 'delivery_success_rate', +m[1]); }
-        if (r.includes('交付物多样性')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l2s, _L2I, 'deliverable_diversity', +m[1]); }
+        if (r.includes('任务类型覆盖度')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l3s, _L3I, 'task_type_coverage', +m[1]); }
+        if (r.includes('端到端交付成功率') && r.includes('=')) { const m = r.match(/= (\d+)%/); if (m) trackScore(_l3s, _L3I, 'delivery_success_rate', +m[1]); }
+        if (r.includes('交付物多样性')) { const m = r.match(/(\d+) 种/); if (m) trackScore(_l3s, _L3I, 'deliverable_diversity', +m[1]); }
         if (r.includes('三角色流水线健康')) {
           const m = r.match(/健康：(\d+)%/);
-          trackScore(_l2s, _L2I, 'pipeline_health', m ? +m[1] : 0);
+          trackScore(_l3s, _L3I, 'pipeline_health', m ? +m[1] : 0);
         }
       }
-      if (_l2s.length > 0) {
-        const _wa = calcWeightedAvg(_l2s);
-        _evalScores.L2 = { items: _l2s, weighted: _wa };
+      if (_l3s.length > 0) {
+        const _wa = calcWeightedAvg(_l3s);
+        _evalScores.L3 = { items: _l3s, weighted: _wa };
         score += ` · ${_wa.toFixed(1)}/5.0`;
       }
     }
 
-    return `**L2 评估 ${score}**\n` +
+    return `**L3 评估 ${score}**\n` +
       `【Engineering Anything · 三角色闭环交付力】\n` + (results.length ? results.map(r => `  ${r}`).join('\n') : '  ⚪ 暂无数据');
   }
 
-  if (toolName === 'evaluate_l3') {
+  if (toolName === 'evaluate_l4') {
     // 四维度输出结构：D1成员画像 / D2关系图谱 / D3影子Agent / D4跨成员感知
     const d1Results = [];  // ①成员画像
     const d2Results = [];  // ②关系图谱
@@ -2454,12 +2489,12 @@ sys.stdout.flush()
 os._exit(0)
 `.trim();
     try {
-      const tmpL3 = path.join(INSTANCE_ROOT, 'temp', `eval-l3-${Date.now()}.py`);
+      const tmpL4 = path.join(INSTANCE_ROOT, 'temp', `eval-l4-${Date.now()}.py`);
       fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
-      fs.writeFileSync(tmpL3, l3KuzuScript);
-      const l3Out = execSync(`${PYTHON311} ${tmpL3}`, { encoding: 'utf8', timeout: 20000 }).trim();
-      try { fs.unlinkSync(tmpL3); } catch (_) {}
-      const ld = JSON.parse(l3Out);
+      fs.writeFileSync(tmpL4, l3KuzuScript);
+      const l4Out = execSync(`${PYTHON311} ${tmpL4}`, { encoding: 'utf8', timeout: 20000 }).trim();
+      try { fs.unlinkSync(tmpL4); } catch (_) {}
+      const ld = JSON.parse(l4Out);
       if (ld.error) {
         d2Results.push(`⚠️ Kuzu 协作边查询失败：${ld.error.slice(0, 80)}`);
         if (score === '✅') score = '⚠️';
@@ -2527,51 +2562,51 @@ os._exit(0)
     }
 
     // ── 数值评分 ──
-    const allL3Results = [...d1Results, ...d2Results, ...d3Results, ...d4Results];
-    const _rub3 = loadRubric();
-    const _L3I = _rub3?.layers?.L3?.items;
-    const _l3s = [];
-    if (_L3I) {
+    const allL4Results = [...d1Results, ...d2Results, ...d3Results, ...d4Results];
+    const _rub4 = loadRubric();
+    const _L4I = _rub4?.layers?.L4?.items;
+    const _l4s = [];
+    if (_L4I) {
       // D1 成员画像
       for (const r of d1Results) {
         if (r.includes('成员画像') && r.includes('%')) {
-          const m = r.match(/\((\d+)%\)/); if (m) trackScore(_l3s, _L3I, 'member_profile', +m[1]);
+          const m = r.match(/\((\d+)%\)/); if (m) trackScore(_l4s, _L4I, 'member_profile', +m[1]);
         }
       }
       // D2 关系图谱
       for (const r of d2Results) {
-        if (r.includes('协作关系图谱边')) { const m = r.match(/：(\d+) 条/); if (m) trackScore(_l3s, _L3I, 'collab_edges', +m[1]); }
+        if (r.includes('协作关系图谱边')) { const m = r.match(/：(\d+) 条/); if (m) trackScore(_l4s, _L4I, 'collab_edges', +m[1]); }
       }
       // D3 影子Agent
       for (const r of d3Results) {
-        if (r.includes('shadow_interactions') || r.includes('演进环')) { const m = r.match(/(\d+) 条演进/); if (m) trackScore(_l3s, _L3I, 'shadow_interactions', +m[1]); }
+        if (r.includes('shadow_interactions') || r.includes('演进环')) { const m = r.match(/(\d+) 条演进/); if (m) trackScore(_l4s, _L4I, 'shadow_interactions', +m[1]); }
         if (r.includes('访客影子') && r.includes('active')) {
           const m = r.match(/active:(\d+)/);
-          trackScore(_l3s, _L3I, 'visitor_registry', (m && +m[1] > 0) ? 'active' : (r.includes('dormant') ? 'dormant_only' : 'none'));
+          trackScore(_l4s, _L4I, 'visitor_registry', (m && +m[1] > 0) ? 'active' : (r.includes('dormant') ? 'dormant_only' : 'none'));
         }
       }
       // D4 跨成员感知
       for (const r of d4Results) {
-        if (r.includes('关系蒸馏')) trackScore(_l3s, _L3I, 'relationship_distill', r.trim().startsWith('✅') ? 'recent' : (r.includes('尚无') ? 'never' : 'exists'));
-        if (r.includes('成员增强效果')) { const m = r.match(/\((\d+)%\)/); if (m) trackScore(_l3s, _L3I, 'member_enhancement', +m[1]); }
+        if (r.includes('关系蒸馏')) trackScore(_l4s, _L4I, 'relationship_distill', r.trim().startsWith('✅') ? 'recent' : (r.includes('尚无') ? 'never' : 'exists'));
+        if (r.includes('成员增强效果')) { const m = r.match(/\((\d+)%\)/); if (m) trackScore(_l4s, _L4I, 'member_enhancement', +m[1]); }
       }
-      if (_l3s.length > 0) {
-        const _wa = calcWeightedAvg(_l3s);
-        _evalScores.L3 = { items: _l3s, weighted: _wa };
+      if (_l4s.length > 0) {
+        const _wa = calcWeightedAvg(_l4s);
+        _evalScores.L4 = { items: _l4s, weighted: _wa };
         score += ` · ${_wa.toFixed(1)}/5.0`;
       }
     }
 
     // 分段输出
-    const l3Output = [];
-    if (d1Results.length > 0) { l3Output.push('── 【①成员画像·从交互蒸馏】 ──'); d1Results.forEach(r => l3Output.push(`  ${r}`)); }
-    if (d2Results.length > 0) { l3Output.push('── 【②关系图谱·Kuzu协作边】 ──'); d2Results.forEach(r => l3Output.push(`  ${r}`)); }
-    if (d3Results.length > 0) { l3Output.push('── 【③影子Agent·演进环+访客】 ──'); d3Results.forEach(r => l3Output.push(`  ${r}`)); }
-    if (d4Results.length > 0) { l3Output.push('── 【④跨成员感知·协作蒸馏】 ──'); d4Results.forEach(r => l3Output.push(`  ${r}`)); }
-    return `**L3 评估 ${score}**\n${l3Output.join('\n')}`;
+    const l4Output = [];
+    if (d1Results.length > 0) { l4Output.push('── 【①成员画像·从交互蒸馏】 ──'); d1Results.forEach(r => l4Output.push(`  ${r}`)); }
+    if (d2Results.length > 0) { l4Output.push('── 【②关系图谱·Kuzu协作边】 ──'); d2Results.forEach(r => l4Output.push(`  ${r}`)); }
+    if (d3Results.length > 0) { l4Output.push('── 【③影子Agent·演进环+访客】 ──'); d3Results.forEach(r => l4Output.push(`  ${r}`)); }
+    if (d4Results.length > 0) { l4Output.push('── 【④跨成员感知·协作蒸馏】 ──'); d4Results.forEach(r => l4Output.push(`  ${r}`)); }
+    return `**L4 评估 ${score}**\n${l4Output.join('\n')}`;
   }
 
-  if (toolName === 'evaluate_l4') {
+  if (toolName === 'evaluate_l5') {
     const sysLayerResults = [];  // 系统层自我改进指标
     const mdlLayerResults = [];  // 模型层内化指标
     let score = '✅';
@@ -2737,7 +2772,7 @@ os._exit(0)
     try {
       const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
       if (!fs.existsSync(dpoCandPath)) {
-        mdlLayerResults.push('⚪ dpo-candidates.jsonl：文件不存在（尚无 L4 模型层训练信号）');
+        mdlLayerResults.push('⚪ dpo-candidates.jsonl：文件不存在（尚无 L5 模型层训练信号）');
       } else {
         const lines = fs.readFileSync(dpoCandPath, 'utf8').split('\n').filter(l => l.trim());
         const patternCounts = {};
@@ -2774,9 +2809,9 @@ os._exit(0)
         mdlLayerResults.push(`✅ DPO 信号总计：${lines.length} 条`);
         patternLines.forEach(l => mdlLayerResults.push(`   ${l}`));
 
-        // 近 7 天趋势（判断 L4 系统层干预是否在收敛问题）
+        // 近 7 天趋势（判断 L5 系统层干预是否在收敛问题）
         const trendIcon = recentCount < prevWeekCount ? '📉' : recentCount > prevWeekCount ? '📈' : '➡️';
-        const trendMsg  = recentCount < prevWeekCount ? 'L4 系统层干预有效，问题在收敛' : recentCount > prevWeekCount ? '问题在增加，L4 系统层干预需加强' : '持平';
+        const trendMsg  = recentCount < prevWeekCount ? 'L5 系统层干预有效，问题在收敛' : recentCount > prevWeekCount ? '问题在增加，L5 系统层干预需加强' : '持平';
         mdlLayerResults.push(`${trendIcon} 近 7 天新增 ${recentCount} 条 vs 前 7 天 ${prevWeekCount} 条（${trendMsg}）`);
 
         const ripePatterns = Object.entries(patternCounts).filter(([, n]) => n >= THRESHOLD);
@@ -2820,12 +2855,12 @@ os._exit(0)
       } else {
         if (ollamaModels.length > 0) mdlLayerResults.push(`✅ Ollama 模型（${ollamaModels.length}）：${ollamaModels.slice(0, 3).join('、')}${ollamaModels.length > 3 ? '…' : ''}`);
         if (mlxModels.length > 0)   mdlLayerResults.push(`✅ MLX 模型（${mlxModels.length}）：${mlxModels.slice(0, 3).join('、')}${mlxModels.length > 3 ? '…' : ''}`);
-        // Qwen2.5-Coder-32B 特别标注（L4 模型层 SFT 微调基础模型）
+        // Qwen2.5-Coder-32B 特别标注（L5 模型层 SFT 微调基础模型）
         const hasQwen = mlxModels.some(m => /Qwen2\.5.*Coder.*32B/i.test(m)) || ollamaModels.some(m => /qwen2\.5.*coder/i.test(m));
         if (hasQwen) mdlLayerResults.push('✅ Qwen2.5-Coder-32B-4bit 就绪（L4 模型层微调基础模型可用）');
         // Gemma 4 终态检查（非阻塞）
         const hasGemma4 = mlxModels.some(m => /gemma.*4/i.test(m)) || ollamaModels.some(m => /gemma.*4/i.test(m));
-        mdlLayerResults.push(hasGemma4 ? '✅ Gemma 4 就绪（L4 模型层进化终态已达）' : '⏳ Gemma 4 尚未就绪（L4 模型层进化终态，不阻塞当前微调）');
+        mdlLayerResults.push(hasGemma4 ? '✅ Gemma 4 就绪（L5 模型层进化终态已达）' : '⏳ Gemma 4 尚未就绪（L5 模型层进化终态，不阻塞当前微调）');
       }
     } catch (e) {
       mdlLayerResults.push(`⚠️ 本地模型检查异常：${e.message.slice(0, 60)}`);
@@ -2836,43 +2871,43 @@ os._exit(0)
     mdlLayerResults.push('💡 模型能力评估：调用 evaluate_local_model 运行 8 条测试用例 × 4 维度（行为合规/人格一致性/中文质量/指令遵从），获取本地模型量化评分');
 
     // 数值评分（扫描系统层 + 模型层结果）
-    const _rub4 = loadRubric();
-    const _L4I = _rub4?.layers?.L4?.items;
-    const _l4s = [];
-    if (_L4I) {
+    const _rub5 = loadRubric();
+    const _L5I = _rub5?.layers?.L5?.items;
+    const _l5s = [];
+    if (_L5I) {
       // 系统层评分
       for (const r of sysLayerResults) {
         if (r.includes('AGENTS.md 规则收敛') && r.includes('条规则行')) {
-          const m = r.match(/合计 (\d+) 条/); if (m) trackScore(_l4s, _L4I, 'agents_md_maturity', +m[1]);
+          const m = r.match(/合计 (\d+) 条/); if (m) trackScore(_l5s, _L5I, 'agents_md_maturity', +m[1]);
         }
         if (r.includes('路由阈值进化') && r.includes('本地路由占')) {
-          const m = r.match(/占 (\d+)%/); if (m) trackScore(_l4s, _L4I, 'routing_evolution', +m[1]);
+          const m = r.match(/占 (\d+)%/); if (m) trackScore(_l5s, _L5I, 'routing_evolution', +m[1]);
         }
       }
       // 模型层评分
       for (const r of mdlLayerResults) {
-        if (r.includes('已达内化阈值')) { const m = r.match(/(\d+) 个模式/); if (m) trackScore(_l4s, _L4I, 'dpo_accumulation', 100); }
+        if (r.includes('已达内化阈值')) { const m = r.match(/(\d+) 个模式/); if (m) trackScore(_l5s, _L5I, 'dpo_accumulation', 100); }
         if (r.includes('本地模型') || r.includes('Ollama') || r.includes('MLX')) {
           const hasOllama = mdlLayerResults.some(x => x.includes('Ollama 模型'));
           const hasMlx = mdlLayerResults.some(x => x.includes('MLX 模型'));
-          if (r.includes('未检测到')) trackScore(_l4s, _L4I, 'local_model_ready', 'none');
-          else if (hasOllama && hasMlx) trackScore(_l4s, _L4I, 'local_model_ready', 'ready');
-          else if (hasOllama || hasMlx) trackScore(_l4s, _L4I, 'local_model_ready', 'partial');
+          if (r.includes('未检测到')) trackScore(_l5s, _L5I, 'local_model_ready', 'none');
+          else if (hasOllama && hasMlx) trackScore(_l5s, _L5I, 'local_model_ready', 'ready');
+          else if (hasOllama || hasMlx) trackScore(_l5s, _L5I, 'local_model_ready', 'partial');
         }
       }
       // DPO 进度：从 pattern 行提取最高进度百分比
-      if (!_l4s.some(s => s.key === 'dpo_accumulation')) {
+      if (!_l5s.some(s => s.key === 'dpo_accumulation')) {
         for (const r of mdlLayerResults) {
-          if (r.includes('距阈值还差')) { const m = r.match(/还差 (\d+)/); if (m) { const pct = Math.max(0, Math.round((1 - +m[1] / 50) * 100)); trackScore(_l4s, _L4I, 'dpo_accumulation', pct); break; } }
+          if (r.includes('距阈值还差')) { const m = r.match(/还差 (\d+)/); if (m) { const pct = Math.max(0, Math.round((1 - +m[1] / 50) * 100)); trackScore(_l5s, _L5I, 'dpo_accumulation', pct); break; } }
         }
-        if (!_l4s.some(s => s.key === 'dpo_accumulation')) {
+        if (!_l5s.some(s => s.key === 'dpo_accumulation')) {
           const totalLine = mdlLayerResults.find(x => x.includes('DPO 信号总计'));
-          if (totalLine) { const m = totalLine.match(/(\d+) 条/); if (m) trackScore(_l4s, _L4I, 'dpo_accumulation', Math.min(+m[1], 50) > 0 ? Math.round(+m[1] / 50 * 100) : 0); }
+          if (totalLine) { const m = totalLine.match(/(\d+) 条/); if (m) trackScore(_l5s, _L5I, 'dpo_accumulation', Math.min(+m[1], 50) > 0 ? Math.round(+m[1] / 50 * 100) : 0); }
         }
       }
-      if (_l4s.length > 0) {
-        const _wa = calcWeightedAvg(_l4s);
-        _evalScores.L4 = { items: _l4s, weighted: _wa };
+      if (_l5s.length > 0) {
+        const _wa = calcWeightedAvg(_l5s);
+        _evalScores.L5 = { items: _l5s, weighted: _wa };
         score += ` · ${_wa.toFixed(1)}/5.0`;
       }
     }
@@ -2886,7 +2921,7 @@ os._exit(0)
       allResults.push('── 【模型层·行为内化】 ──');
       mdlLayerResults.forEach(r => allResults.push(`  ${r}`));
     }
-    return `**L4 评估 ${score}**\n${allResults.join('\n')}`;
+    return `**L5 评估 ${score}**\n${allResults.join('\n')}`;
   }
 
   // ─── evaluate_local_model ────────────────────────────────────────────────────
@@ -3282,12 +3317,13 @@ ${factsDesc}`;
     // 清空上次评分缓存
     for (const k of Object.keys(_evalScores)) delete _evalScores[k];
 
-    // 依次调用 L0~L4 子评估，汇总为评分卡
+    // 依次调用 L0~L5 子评估，汇总为评分卡
     const l0 = await executeMainTool('evaluate_l0', {});
     const l1 = await executeMainTool('evaluate_l1', {});
     const l2 = await executeMainTool('evaluate_l2', {});
     const l3 = await executeMainTool('evaluate_l3', {});
     const l4 = await executeMainTool('evaluate_l4', {});
+    const l5 = await executeMainTool('evaluate_l5', {});
 
     // 从各层结果提取评分符号
     const extractScore = (text) => {
@@ -3305,7 +3341,7 @@ ${factsDesc}`;
     const rubric = loadRubric();
     const numCard = [];
     let totalWeight = 0, totalScore = 0;
-    for (const [lk, text] of [['L0', l0], ['L1', l1], ['L2', l2], ['L3', l3], ['L4', l4]]) {
+    for (const [lk, text] of [['L0', l0], ['L1', l1], ['L2', l2], ['L3', l3], ['L4', l4], ['L5', l5]]) {
       const emoji = extractScore(text);
       const num = extractNum(text);
       const label = rubric?.layers?.[lk]?.label || lk;
@@ -3327,7 +3363,7 @@ ${factsDesc}`;
         trigger: toolInput._trigger || 'manual',
         overall: totalWeight > 0 ? totalScore / totalWeight : null,
       };
-      for (const lk of ['L0', 'L1', 'L2', 'L3', 'L4']) {
+      for (const lk of ['L0', 'L1', 'L2', 'L3', 'L4', 'L5']) {
         if (_evalScores[lk]) historyEntry[lk] = { w: +_evalScores[lk].weighted.toFixed(2), items: Object.fromEntries(_evalScores[lk].items.map(s => [s.key, { s: s.score, r: s.raw }])) };
       }
       fs.appendFileSync(path.join(historyDir, 'evaluation-history.jsonl'), JSON.stringify(historyEntry) + '\n');
@@ -3374,31 +3410,31 @@ ${factsDesc}`;
         }
       }
 
-      // L4：DPO 模式达内化阈值
-      const ripePatterns = (l4.match(/🔴[^\n]+已达阈值[^\n]*/g) || []);
+      // L5：DPO 模式达内化阈值
+      const ripePatterns = (l5.match(/🔴[^\n]+已达阈值[^\n]*/g) || []);
       if (ripePatterns.length > 0) {
-        advice.push(`🔴 L4：${ripePatterns.length} 个 DPO 模式达内化阈值，应触发微调训练`);
+        advice.push(`🔴 L5：${ripePatterns.length} 个 DPO 模式达内化阈值，应触发微调训练`);
         // 微调训练 → 直接进队列
         autoTasks.push({ priority: 'high', action_type: 'code_fix', requires_approval: false,
           title: `DPO ${ripePatterns.length} 个模式达内化阈值，待触发微调`,
-          description: `evaluate_l4 检测到模式达 50 条阈值：${ripePatterns.slice(0, 3).map(m => m.trim()).join('；')}。建议运行 run-finetune.sh 启动微调训练。` });
+          description: `evaluate_l5 检测到模式达 50 条阈值：${ripePatterns.slice(0, 3).map(m => m.trim()).join('；')}。建议运行 run-finetune.sh 启动微调训练。` });
       }
 
-      // L4：进化信号待处理积压（DPO pending + skill pending 合计 > 30）
-      const dpoPendM   = l4.match(/DPO \d+ 条（待处理 (\d+)）/);
-      const skillPendM = l4.match(/Skill候选 \d+ 条（待处理 (\d+)）/);
+      // L5：进化信号待处理积压（DPO pending + skill pending 合计 > 30）
+      const dpoPendM   = l5.match(/DPO \d+ 条（待处理 (\d+)）/);
+      const skillPendM = l5.match(/Skill候选 \d+ 条（待处理 (\d+)）/);
       const totalPend  = (dpoPendM ? parseInt(dpoPendM[1]) : 0) + (skillPendM ? parseInt(skillPendM[1]) : 0);
       if (totalPend > 30) {
-        advice.push(`⚠️ L4：进化信号积压 ${totalPend} 条待处理，建议 Andy HEARTBEAT 加速结晶`);
+        advice.push(`⚠️ L5：进化信号积压 ${totalPend} 条待处理，建议 Andy HEARTBEAT 加速结晶`);
       }
 
-      // L4：Andy HEARTBEAT 超时
-      const andyHbM = l4.match(/Andy HEARTBEAT 上次巡检[^（]*（([\d.]+)h 前）/);
+      // L5：Andy HEARTBEAT 超时
+      const andyHbM = l5.match(/Andy HEARTBEAT 上次巡检[^（]*（([\d.]+)h 前）/);
       if (andyHbM && parseFloat(andyHbM[1]) > 48) {
-        advice.push(`⚠️ L4：Andy HEARTBEAT 已 ${andyHbM[1]}h 未触发，L4 自进化停滞`);
+        advice.push(`⚠️ L5：Andy HEARTBEAT 已 ${andyHbM[1]}h 未触发，L5 自进化停滞`);
         autoTasks.push({ priority: 'medium', action_type: 'code_fix', requires_approval: false,
           title: `Andy HEARTBEAT 停滞（${andyHbM[1]}h 未运行）`,
-          description: `Andy HEARTBEAT 已 ${andyHbM[1]}h 未巡检，L4 系统层自进化停滞。建议检查 runAndyHeartbeatLoop 是否正常调度。` });
+          description: `Andy HEARTBEAT 已 ${andyHbM[1]}h 未巡检，L5 系统层自进化停滞。建议检查 runAndyHeartbeatLoop 是否正常调度。` });
       }
 
       // 最弱层（得分 < 2.5）
@@ -3448,7 +3484,7 @@ ${factsDesc}`;
       return `\n\n**▶ 进化意见（${advice.length} 条）**\n${advice.join('\n')}${taskSummary}`;
     })();
 
-    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}${evolutionAdvice}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}\n\n---\n📊 [交互式仪表盘](${EVAL_DASHBOARD_URL})`;
+    return `**HomeAI 系统评估 · ${now}**\n\n**评分卡（均值 ${overall}/5.0）**\n${numCard.join('\n')}${evolutionAdvice}\n\n---\n\n${l0}\n\n${l1}\n\n${l2}\n\n${l3}\n\n${l4}\n\n${l5}\n\n---\n📊 [交互式仪表盘](${EVAL_DASHBOARD_URL})`;
   }
 
   if (toolName === 'evaluate_trend') {
@@ -3462,8 +3498,8 @@ ${factsDesc}`;
       return `评估历史为空。请先运行 evaluate_system。\n\n📊 仪表盘：${EVAL_DASHBOARD_URL}`;
     }
     const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).slice(-count);
-    const layerKeys = ['L0', 'L1', 'L2', 'L3', 'L4'];
-    const layerLabels = { L0: 'L0 Agents基础设施', L1: 'L1 Agents行为质量', L2: 'L2 Engineering Anything', L3: 'L3 组织协作进化', L4: 'L4 系统自进化' };
+    const layerKeys = ['L0', 'L1', 'L2', 'L3', 'L4', 'L5'];
+    const layerLabels = { L0: 'L0 基础设施稳定性', L1: 'L1 Agent记忆与认知质量', L2: 'L2 Agent人格完整度', L3: 'L3 Engineering Anything', L4: 'L4 组织协作进化', L5: 'L5 系统自进化' };
     const layerScores = {};
     for (const lk of layerKeys) layerScores[lk] = entries.map(e => e[lk]?.w ?? null);
     const overallScores = entries.map(e => e.overall);
