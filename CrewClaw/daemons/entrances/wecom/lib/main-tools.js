@@ -1433,7 +1433,18 @@ try:
     persons = r2.get_next()[0]
     r3   = conn.execute('MATCH (e:Entity) RETURN count(e)')
     entities = r3.get_next()[0]
-    print(json.dumps({'facts': facts, 'persons': persons, 'entities': entities}))
+    # 抽样检查 Fact context 字段内容质量
+    try:
+        r4 = conn.execute('MATCH (s)-[f:Fact]->(o) WHERE f.context IS NOT NULL RETURN f.context LIMIT 20')
+        ctx_sample = []
+        while r4.has_next():
+            v = r4.get_next()[0]
+            if v: ctx_sample.append(v)
+        good_ctx = [c for c in ctx_sample if c and len(c.strip()) > 15]
+        fact_quality = round(len(good_ctx) / len(ctx_sample) * 100) if ctx_sample else None
+    except:
+        fact_quality = None
+    print(json.dumps({'facts': facts, 'persons': persons, 'entities': entities, 'fact_quality': fact_quality, 'fact_sample_size': len(ctx_sample) if 'ctx_sample' in dir() else 0}))
 except Exception as e:
     print(json.dumps({'error': str(e)}))
 sys.stdout.flush()
@@ -1453,6 +1464,13 @@ os._exit(0)
         const factsOk = kd.facts > 0;
         results.push(`${factsOk ? '✅' : '⚠️'} Kuzu 知识图谱：${kd.facts} 条 Fact，${kd.entities} 个 Entity（其中 ${kd.persons} 个 Person）`);
         if (!factsOk && score === '✅') score = '⚠️';
+        // Fact context 内容质量（教师视角）
+        if (kd.fact_quality !== null && kd.fact_quality !== undefined) {
+          const fqOk = kd.fact_quality >= 80;
+          const sampleN = kd.fact_sample_size || 0;
+          results.push(`${fqOk ? '✅' : '⚠️'} Kuzu Fact context 质量（抽样${sampleN}条）：${kd.fact_quality}% 有实质描述${!fqOk ? '（含过短/空 context）' : ''}`);
+          if (!fqOk && score === '✅') score = '⚠️';
+        }
       }
     } catch (e) {
       try { } catch (_) {}
@@ -1648,36 +1666,74 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // 10. Andy/Lisa 蒸馏产出（L0 蒸馏管道：design_learning / impl_learning）
+    // 10. Andy/Lisa 蒸馏产出（教师视角：内容质量 > 仅计数）
+    const _checkDocQuality = (doc) => {
+      if (!doc || typeof doc !== 'string') return false;
+      const t = doc.trim();
+      if (t.length < 30) return false;
+      const badWords = ['待补充', 'todo', '暂无', '（无）', 'n/a', 'placeholder', '无内容'];
+      if (badWords.some(p => t.toLowerCase() === p)) return false;
+      return true;
+    };
     try {
       const colResp = await fetch(`${CHROMA_API_BASE}/decisions`);
       if (colResp.ok) {
         const { id: colId } = await colResp.json();
-        // Andy design_learning
+        // Andy design_learning — 计数 + 内容质量
         const andyResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             where: { '$and': [{ agent: { '$eq': 'andy' } }, { type: { '$eq': 'design_learning' } }] },
-            include: ['metadatas'], limit: 50,
+            include: ['documents', 'metadatas'], limit: 20,
           }),
         });
-        const andyData = andyResp.ok ? await andyResp.json() : { ids: [] };
+        const andyData = andyResp.ok ? await andyResp.json() : { ids: [], documents: [] };
         const andyDistillCount = (andyData.ids || []).length;
-        // Lisa impl_learning
+        const andyDocs = andyData.documents || [];
+        const andyGoodDocs = andyDocs.filter(_checkDocQuality);
+        const andyQualRate = andyDocs.length > 0 ? Math.round(andyGoodDocs.length / andyDocs.length * 100) : null;
+        // Lisa impl_learning — 计数 + 内容质量
         const lisaResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             where: { '$and': [{ agent: { '$eq': 'lisa' } }, { type: { '$eq': 'impl_learning' } }] },
-            include: ['metadatas'], limit: 50,
+            include: ['documents', 'metadatas'], limit: 20,
           }),
         });
-        const lisaData = lisaResp.ok ? await lisaResp.json() : { ids: [] };
+        const lisaData = lisaResp.ok ? await lisaResp.json() : { ids: [], documents: [] };
         const lisaDistillCount = (lisaData.ids || []).length;
+        const lisaDocs = lisaData.documents || [];
+        const lisaGoodDocs = lisaDocs.filter(_checkDocQuality);
+        const lisaQualRate = lisaDocs.length > 0 ? Math.round(lisaGoodDocs.length / lisaDocs.length * 100) : null;
         const hasLearnings = andyDistillCount > 0 || lisaDistillCount > 0;
-        results.push(`${hasLearnings ? '✅' : '⚠️'} Andy/Lisa 蒸馏产出：design_learning ${andyDistillCount} 条，impl_learning ${lisaDistillCount} 条${!hasLearnings ? '（尚未运行，每日凌晨 1 点触发）' : ''}`);
-        if (!hasLearnings && score === '✅') score = '⚠️';
+        if (!hasLearnings) {
+          results.push('⚠️ Andy/Lisa 蒸馏产出：无记录（每日凌晨 1 点触发）');
+          if (score === '✅') score = '⚠️';
+        } else {
+          results.push(`✅ Andy/Lisa 蒸馏产出数量：design_learning ${andyDistillCount} 条，impl_learning ${lisaDistillCount} 条`);
+          // Andy 内容质量
+          if (andyQualRate !== null) {
+            const andyQualOk = andyQualRate >= 80;
+            results.push(`${andyQualOk ? '✅' : '⚠️'} Andy design_learning 内容质量（抽样${andyDocs.length}条）：${andyQualRate}% 有实质洞察${!andyQualOk ? ' — 含空/过短/占位符内容' : ''}`);
+            if (!andyQualOk && score === '✅') score = '⚠️';
+            if (!andyQualOk) {
+              const badDoc = andyDocs.find(d => !_checkDocQuality(d));
+              if (badDoc !== undefined) results.push(`    ↳ 差样本：「${String(badDoc || '').trim().slice(0, 80)}」`);
+            }
+          }
+          // Lisa 内容质量
+          if (lisaQualRate !== null) {
+            const lisaQualOk = lisaQualRate >= 80;
+            results.push(`${lisaQualOk ? '✅' : '⚠️'} Lisa impl_learning 内容质量（抽样${lisaDocs.length}条）：${lisaQualRate}% 有实质洞察${!lisaQualOk ? ' — 含空/过短/占位符内容' : ''}`);
+            if (!lisaQualOk && score === '✅') score = '⚠️';
+            if (!lisaQualOk) {
+              const badDoc = lisaDocs.find(d => !_checkDocQuality(d));
+              if (badDoc !== undefined) results.push(`    ↳ 差样本：「${String(badDoc || '').trim().slice(0, 80)}」`);
+            }
+          }
+        }
       }
     } catch (e) {
       results.push(`⚠️ Andy/Lisa 蒸馏产出检查失败：${e.message.slice(0, 60)}`);
