@@ -2009,6 +2009,65 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+    // 6b. AGENTS.md 大小监控（溢出 > 10k = Skill 待提取信号，已触发机制1写 skill-candidates）
+    try {
+      const agentsMdStats = {};
+      let agentsMdOverflow = false;
+      for (const agent of ['lucas', 'andy', 'lisa']) {
+        const agentsMdPath = path.join(process.env.HOME, '.openclaw', `workspace-${agent}`, 'AGENTS.md');
+        if (fs.existsSync(agentsMdPath)) {
+          const size = fs.statSync(agentsMdPath).size;
+          agentsMdStats[agent] = size;
+          if (size > 30000) agentsMdOverflow = true;
+        } else {
+          agentsMdStats[agent] = 0;
+        }
+      }
+      const agentsMdDetail = Object.entries(agentsMdStats).map(([a, s]) => `${a}:${(s / 1000).toFixed(1)}k`).join('/');
+      results.push(`${agentsMdOverflow ? '⚠️' : '✅'} AGENTS.md 大小：${agentsMdDetail}${agentsMdOverflow ? '（>30k = Skill 溢出，等待提取）' : ''}`);
+      if (agentsMdOverflow && score === '✅') score = '⚠️';
+    } catch (e) {
+      results.push(`⚠️ AGENTS.md 大小检查失败：${e.message.slice(0, 60)}`);
+    }
+
+    // 6c. Skill 晋升候选积压（archive 中 success≥3 + failRate<30% 但仍未晋升到 native）
+    try {
+      const archiveBase3 = path.join(INSTANCE_ROOT, 'Data', 'learning', 'auto-skills');
+      let promotionCandidates = 0;
+      const promotionDetail = [];
+      if (fs.existsSync(archiveBase3)) {
+        for (const agent of ['lucas', 'andy', 'lisa']) {
+          const agentDir = path.join(archiveBase3, agent);
+          if (!fs.existsSync(agentDir)) continue;
+          const files = fs.readdirSync(agentDir).filter(f => f.endsWith('.md'));
+          for (const f of files) {
+            try {
+              const raw = fs.readFileSync(path.join(agentDir, f), 'utf8');
+              const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+              if (!fm) continue;
+              const yaml = fm[1];
+              const successM = yaml.match(/success_count:\s*(\d+)/);
+              const failM = yaml.match(/fail_count:\s*(\d+)/);
+              if (!successM) continue;
+              const success = parseInt(successM[1]);
+              const fail = failM ? parseInt(failM[1]) : 0;
+              const total = success + fail;
+              const failRate = total > 0 ? fail / total : 0;
+              if (success >= 3 && failRate < 0.3) {
+                promotionCandidates++;
+                promotionDetail.push(`${agent}/${f.replace('.md', '')}`);
+              }
+            } catch {}
+          }
+        }
+      }
+      const promotionMsg = promotionCandidates > 0 ? `（${promotionDetail.slice(0, 3).join(', ')}${promotionDetail.length > 3 ? '...' : ''}）` : '';
+      results.push(`${promotionCandidates > 3 ? '⚠️' : '✅'} Skill 晋升候选积压：${promotionCandidates} 个待晋升${promotionMsg}`);
+      if (promotionCandidates > 3 && score === '✅') score = '⚠️';
+    } catch (e) {
+      results.push(`⚠️ Skill 晋升候选检查失败：${e.message.slice(0, 60)}`);
+    }
+
     // X. 三角色记忆召回质量（四维度 canary 查询：语义/时间/实体/因果）
     const _recallTests = [
       { collection: 'conversations', label: 'Lucas', query: '家庭日常对话',     entityField: 'entityTags', hasCausal: true  },
