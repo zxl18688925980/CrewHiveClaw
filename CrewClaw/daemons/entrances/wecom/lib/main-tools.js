@@ -19,7 +19,8 @@ const axios         = require('axios');
 
 module.exports = function createMainTools(logger, deps) {
   const { readAgentModelConfig, callAgentModel, nowCST, sendWeComFile, INSTANCE_ROOT,
-          VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE } = deps;
+          VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE,
+          readTaskRegistry, writeTaskRegistry } = deps;
 
   // 剥离推理模型 <think>...</think> 块（MiniMax/GLM/DeepSeek-R1 等推理模型返回）
   function stripThink(text) {

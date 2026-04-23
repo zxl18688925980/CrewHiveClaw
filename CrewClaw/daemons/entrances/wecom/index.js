@@ -188,6 +188,8 @@ function initMainTools() {
     sendWeComFile,
     INSTANCE_ROOT,
     VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE,
+    readTaskRegistry: () => readTaskRegistry(),
+    writeTaskRegistry: (...args) => writeTaskRegistry(...args),
   });
   ({ callMainModel, executeMainTool, handleMainCommand, saveTechDocToObsidian, SAVE_DOC_RE, SAVE_TECH_RE, MAIN_SYSTEM_PROMPT } = _mt2);
 }
