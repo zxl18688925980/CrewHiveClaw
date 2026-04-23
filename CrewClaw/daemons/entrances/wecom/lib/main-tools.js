@@ -207,13 +207,11 @@ PM2 日志目录：${INSTANCE_ROOT}/logs/pm2/
 - scan_lucas_quality：扫描 ChromaDB 最近 50 条 Lucas 对话，检测 Markdown 违规、幻觉承诺、空回复等质量问题
 - recall_se_history：召回最近 N 天的 SE 通知历史（ChromaDB agent_interactions），了解上次发现了什么问题/现在是否改善——建立跨对话记忆连续性（limit / days 可选）
 
-流水线任务看板（SE 专属）：
-- 可视化界面：https://wecom.homeai-wecom-zxl.top/app/pipeline-dashboard/（浏览器打开，直接看任务列表和状态）
-- 业主想查看流水线时，优先发这个链接；需要文字汇报时再用下方工具
-- query_pipeline_tasks：查全量流水线任务（含用户提交 + 系统自动生成）。status_filter 可选 all / pending-review / queued / running / active（默认）
-- approve_pipeline_task：批准 pending-review 任务进队列执行（仅 requires_approval=true 的任务会进 pending-review，如认知文件修改）
-- cancel_pipeline_task：叫停任意任务（不受 submittedBy 限制），可叫停 pending-review / queued / running 状态的任何任务
-- log_improvement_task：记录改进建议到 task-registry.json（非紧急，供下次工作周期处理）
+流水线管理（SE 专属）：
+- 可视化看板（首选，日常操作全在这里）：https://wecom.homeai-wecom-zxl.top/app/pipeline-dashboard/?token=ZengXiaoLong
+  → 查全量任务、叫停、重新提交、批准 pending-review，日常流水线管理全走这里
+- log_improvement_task：记录改进建议到 task-registry.json（看板不支持，用此工具）
+- query_pipeline_tasks / cancel_pipeline_task / approve_pipeline_task：需要文字回复时的备用工具
 
 任务数据来源说明：
 - 开发流水线任务：~/HomeAI/Data/learning/task-registry.json（用 query_pipeline_tasks 查）
@@ -2947,7 +2945,7 @@ os._exit(0)
             const content = fs.readFileSync(skillFile, 'utf8');
             const fm = content.match(/^---\n([\s\S]*?)\n---/);
             if (fm) {
-              const usedMatch = fm[1].match(/^used:\s*(\d+)/m);
+              const usedMatch = fm[1].match(/^usage_count:\s*(\d+)/m);
               if (usedMatch && parseInt(usedMatch[1]) > 0) usedArchiveSkills++;
             }
           } catch (_) {}

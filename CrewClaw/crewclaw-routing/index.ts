@@ -4209,6 +4209,40 @@ async function launchOpenCodeBackground(
             }
           } catch (_e) { /* 静默，不影响主流程 */ }
         }
+
+        // 自动登记新 Web 应用到 Lucas TOOLS.md
+        // brief 里含 /app/xxx/ 路径 → 检查是否已在 TOOLS.md → 未在则追加新行
+        try {
+          const appPaths = [...(brief.matchAll(/\/app\/([a-z0-9_-]+)\//gi))].map(m => m[0]);
+          if (appPaths.length > 0) {
+            const lucasToolsPath = join(homedir(), ".openclaw/workspace-lucas/TOOLS.md");
+            let toolsContent = readFileSync(lucasToolsPath, "utf8");
+            const BASE_URL = "https://wecom.homeai-wecom-zxl.top";
+            const newRows: string[] = [];
+            for (const appPath of appPaths) {
+              if (toolsContent.includes(appPath)) continue; // 已登记
+              const publicUrl = `${BASE_URL}${appPath}`;
+              // 尝试从 index.html 提取 <title>
+              const indexHtml = join(HOMEAI_DATA_ROOT, "..", "App", "generated",
+                appPath.replace(/^\/app\//, "").replace(/\/$/, ""), "index.html");
+              let appTitle = appPath.replace(/^\/app\//, "").replace(/\/$/, "").replace(/-/g, " ");
+              try {
+                const html = readFileSync(indexHtml, "utf8");
+                const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+                if (titleMatch) appTitle = titleMatch[1].trim().slice(0, 20);
+              } catch (_e) { /* 无 index.html，用路径名 */ }
+              newRows.push(`| ${appTitle} | （新交付应用，请补充描述） | ${publicUrl} |`);
+            }
+            if (newRows.length > 0) {
+              // 插入到表格末尾（最后一个 | 结尾的行之后）
+              toolsContent = toolsContent.replace(
+                /(\| 启灵体验[^\n]+\n)/,
+                `$1${newRows.join("\n")}\n`,
+              );
+              writeFileSync(lucasToolsPath, toolsContent, "utf8");
+            }
+          }
+        } catch (_e) { /* 静默，不影响主流程 */ }
         if (_taskRequesterUserId && _taskRequesterUserId !== "unknown") {
           // 访客无持久化渠道，改用拉取机制：写入 visitor-pipeline-results，下次会话时 Lucas 主动告知
           if (_taskRequesterUserId.startsWith("visitor:")) {
@@ -6153,7 +6187,7 @@ const crewclawRoutingPlugin = {
         const promptWords = new Set(
           prompt.toLowerCase().split(/[\s，。！？、；：""''【】（）()\[\]\r\n]+/).filter(w => w.length > 1),
         );
-        const hits: Array<{ description: string; score: number }> = [];
+        const hits: Array<{ description: string; score: number; skillMd: string }> = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
           const skillMd = join(archiveDir, entry.name, "SKILL.md");
@@ -6171,11 +6205,22 @@ const crewclawRoutingPlugin = {
           const matchText = `${description} ${triggerText}`;
           const descWords = matchText.toLowerCase().split(/[\s，。！？、；：""''【】（）()\r\n]+/).filter(w => w.length > 1);
           const score = descWords.filter(w => promptWords.has(w)).length;
-          if (score > 0) hits.push({ description, score });
+          if (score > 0) hits.push({ description, score, skillMd });
         }
         if (hits.length === 0) return "";
         hits.sort((a, b) => b.score - a.score);
         const top = hits.slice(0, topK);
+        // 写回 usage_count + last_used（异步，不阻塞主路径）
+        const today = nowCST().slice(0, 10);
+        for (const hit of top) {
+          try {
+            const raw = readFileSync(hit.skillMd, "utf8");
+            const updated = raw
+              .replace(/^usage_count:\s*(\d+)/m, (_, n) => `usage_count: ${parseInt(n) + 1}`)
+              .replace(/^last_used:\s*.*/m, `last_used: ${today}`);
+            writeFileSync(hit.skillMd, updated, "utf8");
+          } catch (_) {}
+        }
         return `【相关工作流模式】\n${top.map(s => `• ${s.description}`).join("\n")}`;
       } catch (_e) {
         return "";
@@ -6890,6 +6935,12 @@ const crewclawRoutingPlugin = {
         }
         if ((_lucasBehavioralRules as Record<string, unknown>).statusRule) {
           appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).statusRule as string);
+        }
+        if ((_lucasBehavioralRules as Record<string, unknown>).toolFailureRule) {
+          appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).toolFailureRule as string);
+        }
+        if ((_lucasBehavioralRules as Record<string, unknown>).errorConvergenceRule) {
+          appendSystem.push((_lucasBehavioralRules as Record<string, unknown>).errorConvergenceRule as string);
         }
 
         // ── 工具调用幻觉纠正注入（上一轮检测到幻觉时注入，打断传播链条）──────────
@@ -8192,9 +8243,7 @@ ${toolDescriptions}
                       const archiveSkillPath = join(archiveDir, skillNameFromPath, "SKILL.md");
                       if (existsSync(archiveSkillPath)) {
                         const archiveFmContent = readFileSync(archiveSkillPath, "utf8");
-                        const archiveFmMatch = archiveFmContent.match(/^---
-([\s\S]*?)
----/);
+                        const archiveFmMatch = archiveFmContent.match(/^---\n([\s\S]*?)\n---/);
                         if (archiveFmMatch) {
                           const archiveFm = archiveFmMatch[1];
                           const aUsage = parseInt(archiveFm.match(/usage_count: (\d+)/)?.[1] ?? "0");
