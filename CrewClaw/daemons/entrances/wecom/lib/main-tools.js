@@ -175,7 +175,7 @@ HomeAI 当前架构：
 遇到问题，先建立上下文，再动手。顺序：
 1. 看日志（get_logs / run_shell tail）→ 定位症状
 2. 读相关代码（read_file）→ 理解根因，不猜
-3. 做修改（exec_script / write_file）→ 改最小必要的地方
+3. 做修改（write_file）→ 改最小必要的地方
 4. 重启验证（restart_service / restart_gateway）→ test_lucas 确认
 5. 报告：说清楚改了什么、为什么、验证结果
 
@@ -201,7 +201,6 @@ PM2 日志目录：${INSTANCE_ROOT}/logs/pm2/
 - restart_gateway：重启 OpenClaw Gateway（launchctl），改完插件代码后用
 - run_shell：执行诊断命令（curl/cat/tail/grep/launchctl/pm2 等白名单命令）
 - test_lucas：向 Lucas 发测试消息，验证 wecom→Gateway 全链路是否正常
-- exec_script：在 HomeAI 根目录执行 bash/python3 脚本，对本机所有目录有完整读写权限（含 ~/Documents/Obsidian Vault/、系统配置等），无路径限制
 - send_file：将 HomeAI 目录下的文件通过企业微信发给业主
 - trigger_finetune：触发增量微调
 - scan_pipeline_health：全面扫描系统健康（PM2 + Gateway + 最近 1h 日志错误），返回结构化报告
@@ -215,7 +214,7 @@ PM2 日志目录：${INSTANCE_ROOT}/logs/pm2/
 - log_improvement_task：记录改进建议到 task-registry.json（非紧急，供下次工作周期处理）
 
 任务数据来源说明：
-- 开发流水线任务：~/HomeAI/Data/learning/task-registry.json（用 query_pipeline_tasks 查，不要手动 exec_script 读文件）
+- 开发流水线任务：~/HomeAI/Data/learning/task-registry.json（用 query_pipeline_tasks 查）
 - 旧格式任务目录（~/HomeAI/Data/tasks/、pipeline/）：已废弃，不要读这里
 
 
@@ -349,24 +348,7 @@ const MAIN_TOOLS = [
       required: [],
     },
   },
-  {
-    name: 'exec_script',
-    description: '在 HomeAI 目录下执行 bash 或 python3 脚本，CWD 为 HomeAI 根目录，对本机所有目录有完整读写权限（无路径限制，可写 ~/Documents/Obsidian Vault/ 等任意位置）。适合写文件、合并数据、远程调试、生成报告等任务。',
-    input_schema: {
-      type: 'object',
-      properties: {
-        code: {
-          type: 'string',
-          description: '要执行的脚本内容（可多行）',
-        },
-        interpreter: {
-          type: 'string',
-          description: 'bash 或 python3，默认 bash',
-        },
-      },
-      required: ['code'],
-    },
-  },
+
   {
     name: 'write_file',
     description: '将内容直接写入本机任意路径的文件（path 和 content 分开传，不需要生成代码）。适合写 Obsidian 笔记、保存文章摘要、更新配置文件等需要写入大段文本的场景。父目录不存在时自动创建。',
@@ -807,27 +789,7 @@ async function executeMainTool(toolName, toolInput) {
     }
   }
 
-  if (toolName === 'exec_script') {
-    const interpreter = toolInput.interpreter === 'python3' ? '/usr/bin/python3' : '/bin/bash';
-    const tmpScript = path.join(INSTANCE_ROOT, 'temp', `main-script-${Date.now()}.${interpreter.includes('python') ? 'py' : 'sh'}`);
-    try {
-      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
-      fs.writeFileSync(tmpScript, toolInput.code, { mode: 0o755 });
-      const output = execSync(`${interpreter} ${tmpScript}`, {
-        encoding: 'utf8',
-        timeout: 60000,
-        cwd: INSTANCE_ROOT,
-        env: { ...process.env, INSTANCE_ROOT },
-      });
-      fs.unlinkSync(tmpScript);
-      return output.trim().slice(0, 2000) || '（脚本执行成功，无输出）';
-    } catch (e) {
-      try { fs.unlinkSync(tmpScript); } catch (_) {}
-      const out = (e.stdout || '').trim();
-      const err = (e.stderr || e.message || '').trim();
-      return `执行失败（退出码 ${e.status}）：\n${err || out}`.slice(0, 2000);
-    }
-  }
+
 
   if (toolName === 'write_file') {
     const filePath = toolInput.path;
