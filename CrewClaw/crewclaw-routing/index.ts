@@ -6097,6 +6097,22 @@ const crewclawRoutingPlugin = {
     // session → 安全阀 timer（agent_end 释放时 clearTimeout）
     const sessionSemTimer   = new Map<string, ReturnType<typeof setTimeout>>();
     const sessionCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    // session 最后活跃时间：用于 TTL 周期清理（防止 agent_end 未触发时 Map 永久积累）
+    const sessionLastAccess = new Map<string, number>();
+
+    // Session Map TTL 周期清理：每 20 分钟扫一次，清理超过 2 小时未活跃的 stale session
+    // 防止 API 超时 / OOM 崩溃导致 agent_end 未触发时 Map 条目永久堆积
+    const SESSION_TTL_MS = 2 * 60 * 60 * 1000;       // 2 小时
+    const SESSION_SWEEP_INTERVAL_MS = 20 * 60 * 1000; // 20 分钟
+    setInterval(() => {
+      const now = Date.now();
+      for (const [key, lastAccess] of sessionLastAccess) {
+        if (now - lastAccess > SESSION_TTL_MS) {
+          logger.info(`[session-ttl] cleaning stale session: ${key} (age=${Math.round((now - lastAccess) / 60000)}min)`);
+          cleanupSessionNow(key);
+        }
+      }
+    }, SESSION_SWEEP_INTERVAL_MS).unref();
 
     function cleanupSessionMaps(sessionKey: string) {
       sessionIntent.delete(sessionKey);
@@ -6107,6 +6123,7 @@ const crewclawRoutingPlugin = {
       sessionFalseCommitCorrections.delete(sessionKey);
       sessionSkillReminders.delete(sessionKey);
       sessionTodoMap.delete(sessionKey);
+      sessionLastAccess.delete(sessionKey);
     }
 
     function releaseSessionSemaphore(sessionKey: string) {
@@ -6237,6 +6254,7 @@ const crewclawRoutingPlugin = {
 
       // 缓存本次路由的模型信息，供 agent_end 写 conversations 用
       sessionModel.set(ctx.sessionKey ?? "", { modelUsed: event.model ?? "unknown", isCloud });
+      sessionLastAccess.set(ctx.sessionKey ?? "", Date.now());
 
       appendJsonl(join(PROJECT_ROOT, "data/learning/route-events.jsonl"), {
         id: `${event.runId}_${Math.random().toString(36).slice(2, 6)}`,
