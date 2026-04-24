@@ -1230,3 +1230,32 @@ openclaw config validate
 ```
 
 **注意**：`plugins.allow` 中保留 `"google"` 插件（OpenClaw google 扩展），`plugins.entries.google.enabled: true` 确保原生 google API 扩展加载。
+
+### normalizeUserId 有转小写副作用，不可用于 botSend userId
+
+**发现时间**：2026-04-24
+
+**背景**：企业微信 aibot `sendMessage(chatid, body)` 要求 chatid 与企业微信后台注册的 userId 大小写完全一致（如 `ZengXiaoLong`）。
+
+**陷阱**：`normalizeUserId(raw)` 函数除了剥离 `CHANNEL_USER_PREFIX`（如 `wecom-`），还会在末尾 `.toLowerCase()`。如果用 `normalizeUserId()` 来规范化 botSend 的 chatid，`ZengXiaoLong` → `zengxiaolong`，企业微信返回 93006（invalid chatid）。
+
+**正确做法**：需要剥离前缀但保留大小写时，直接用：
+```typescript
+const userId = (CHANNEL_USER_PREFIX && rawUserId.startsWith(CHANNEL_USER_PREFIX))
+  ? rawUserId.slice(CHANNEL_USER_PREFIX.length)
+  : rawUserId;
+```
+
+### wecom-entrance launchd 进程不继承 CHANNEL_USER_PREFIX
+
+**发现时间**：2026-04-24
+
+**背景**：`CHANNEL_USER_PREFIX=wecom-` 在 `~/.openclaw/start-gateway.sh` 中设置，供 Gateway 插件使用。但 `wecom-entrance` 由独立的 launchd plist 管理，不继承 Gateway 的环境变量。
+
+**陷阱**：如果 index.js 里的 prefix 剥离逻辑依赖 `process.env.CHANNEL_USER_PREFIX`，在 wecom-entrance 进程中该变量为 `undefined`，条件永远不触发。
+
+**正确做法**：wecom-entrance 内部的 prefix 剥离逻辑必须有硬编码 fallback：
+```javascript
+const _chanPrefix = process.env.CHANNEL_USER_PREFIX || 'wecom-';
+```
+更根本的修法：在 Gateway 插件层（index.ts）发出请求前就剥离前缀，不依赖 wecom-entrance 的二次处理。

@@ -1932,27 +1932,28 @@ async function queryPendingCommitments(userId: string): Promise<string> {
   try {
     // 主动循环（system-scheduler-*）：查所有待办，不限 userId
     const isProactiveLoop = userId.startsWith("system-scheduler");
-    // 48 小时过期：超过 48 小时未确认的承诺不再注入，避免过期事项被当成新鲜信息
-    const cutoff48h = agoCST(48 * 3600 * 1000);
+    // 7 天过期：超过 7 天未确认的承诺不再注入，避免过期事项被当成新鲜信息
+    const cutoff7d = agoCST(7 * 24 * 3600 * 1000);
     const where = isProactiveLoop
-      ? { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { outcome: { $eq: "" } }, { timestamp: { $gt: cutoff48h } }] }
-      : { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { userId: { $eq: userId } }, { outcome: { $eq: "" } }, { timestamp: { $gt: cutoff48h } }] };
+      ? { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { outcome: { $eq: "" } }, { timestamp: { $gt: cutoff7d } }] }
+      : { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { userId: { $eq: userId } }, { outcome: { $eq: "" } }, { timestamp: { $gt: cutoff7d } }] };
 
     const results = await chromaGet("decisions", where);
-    if (results.length === 0) return "";
 
-    // 异步标记超过 48 小时的过期承诺（fire-and-forget，不阻塞主流程）
+    // 异步标记超过 7 天的过期承诺（fire-and-forget，不阻塞主流程）
     void (async () => {
       try {
         const expiredWhere = isProactiveLoop
-          ? { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { outcome: { $eq: "" } }, { timestamp: { $lte: cutoff48h } }] }
-          : { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { userId: { $eq: userId } }, { outcome: { $eq: "" } }, { timestamp: { $lte: cutoff48h } }] };
+          ? { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { outcome: { $eq: "" } }, { timestamp: { $lte: cutoff7d } }] }
+          : { $and: [{ agent: { $eq: FRONTEND_AGENT_ID } }, { userId: { $eq: userId } }, { outcome: { $eq: "" } }, { timestamp: { $lte: cutoff7d } }] };
         const expired = await chromaGet("decisions", expiredWhere);
         for (const r of expired) {
-          await chromaUpdate("decisions", r.id, { outcome: "expired", outcome_at: nowCST(), outcome_note: "超过48小时未确认，自动过期" });
+          await chromaUpdate("decisions", r.id, { outcome: "expired", outcome_at: nowCST(), outcome_note: "超过7天未确认，自动过期" });
         }
       } catch { /* 静默 */ }
     })();
+
+    if (results.length === 0) return "";
 
     const now = Date.now();
     const lines = results.map(r => {
@@ -1965,8 +1966,8 @@ async function queryPendingCommitments(userId: string): Promise<string> {
       return `- [${date}]${forUser} ${meta.context ?? ""}（⏳ ${ageTag}，还没交付）`;
     });
     return isProactiveLoop
-      ? `【所有待办承诺（48小时内）】\n${lines.join("\n")}`
-      : `【对你的待办事项（48小时内）】\n${lines.join("\n")}`;
+      ? `【所有待办承诺（7天内）】\n${lines.join("\n")}`
+      : `【对你的待办事项（7天内）】\n${lines.join("\n")}`;
   } catch (_e) {
     return "";
   }
@@ -2148,6 +2149,7 @@ function readFamilyProfile(userId: string): string {
 
 const NOW_FILE_MAX_LINES = 50;
 const NOW_FILE_EXPIRY_DAYS = 7;
+const NOW_FILE_COMPLETED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function readNowFile(userId: string): string {
   try {
@@ -2179,13 +2181,15 @@ function updateNowFile(
     const dateStr = `${now.getMonth() + 1}/${now.getDate()}`;
     const cutoffDate = new Date(now.getTime() - NOW_FILE_EXPIRY_DAYS * 86400000);
 
-    // 过期清理：移除超过 7 天的条目（带日期标记 {M/D} 的行）
+    // 过期清理：移除超过 7 天的条目；已完成条目在 24 小时后移除
     const filtered = lines.filter(line => {
-      const dateMatch = line.match(/\((\d{1,2}\/\d{1,2})\)/);
-      if (dateMatch) {
-        const [m, d] = dateMatch[1].split("/").map(Number);
-        const entryDate = new Date(now.getFullYear(), m - 1, d);
-        if (entryDate < cutoffDate) return false;
+      const dateMatch = line.match(/\((\d{1,2}\/\d{1,2})(?:，[^)]*)?\)/);
+      if (!dateMatch) return true;
+      const [m, d] = dateMatch[1].split("/").map(Number);
+      const entryDate = new Date(now.getFullYear(), m - 1, d);
+      if (entryDate < cutoffDate) return false;
+      if (line.includes("✅已完成")) {
+        return now.getTime() - entryDate.getTime() < NOW_FILE_COMPLETED_RETENTION_MS;
       }
       return true;
     });
@@ -2237,10 +2241,10 @@ function updateNowFile(
         pendingSection.unshift(entry);
       }
     }
-    // 已完成标记：如果 response 含成功关键词，将对应的 pending 标记为完成
+    // 已完成标记：如果 response 含成功关键词，将对应的 pending 标记为完成，并刷新完成日期用于 24 小时保留
     pendingSection = pendingSection.map(l =>
       l.includes("⏳进行中") && (response.includes("完成") || response.includes("成功") || response.includes("已发送"))
-        ? l.replace("⏳进行中", "✅已完成")
+        ? l.replace(/（\d{1,2}\/\d{1,2}，⏳进行中）/, `（${dateStr}，✅已完成）`)
         : l
     );
     // 待跟进最多保留 10 条
@@ -6092,6 +6096,56 @@ const crewclawRoutingPlugin = {
     const sessionSem        = new Map<string, Semaphore>();
     // session → 安全阀 timer（agent_end 释放时 clearTimeout）
     const sessionSemTimer   = new Map<string, ReturnType<typeof setTimeout>>();
+    const sessionCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    function cleanupSessionMaps(sessionKey: string) {
+      sessionIntent.delete(sessionKey);
+      sessionModel.delete(sessionKey);
+      sessionPrompt.delete(sessionKey);
+      sessionPendingCorrections.delete(sessionKey);
+      sessionVisitorPrivacyCorrections.delete(sessionKey);
+      sessionFalseCommitCorrections.delete(sessionKey);
+      sessionSkillReminders.delete(sessionKey);
+      sessionTodoMap.delete(sessionKey);
+    }
+
+    function releaseSessionSemaphore(sessionKey: string) {
+      const semTimer = sessionSemTimer.get(sessionKey);
+      if (semTimer) {
+        clearTimeout(semTimer);
+        sessionSemTimer.delete(sessionKey);
+      }
+      const s = sessionSem.get(sessionKey);
+      if (s) {
+        s.release();
+        sessionSem.delete(sessionKey);
+      }
+    }
+
+    function scheduleSessionCleanup(sessionKey: string) {
+      if (!sessionKey) return;
+      const existing = sessionCleanupTimers.get(sessionKey);
+      if (existing) clearTimeout(existing);
+      const timer = setTimeout(() => {
+        cleanupSessionMaps(sessionKey);
+        releaseSessionSemaphore(sessionKey);
+        sessionCleanupTimers.delete(sessionKey);
+      }, SEMAPHORE_TIMEOUT_MS + 30000);
+      (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+      sessionCleanupTimers.set(sessionKey, timer);
+    }
+
+    function cleanupSessionNow(sessionKey: string) {
+      if (!sessionKey) return;
+      cleanupSessionMaps(sessionKey);
+      releaseSessionSemaphore(sessionKey);
+
+      const timer = sessionCleanupTimers.get(sessionKey);
+      if (timer) {
+        clearTimeout(timer);
+        sessionCleanupTimers.delete(sessionKey);
+      }
+    }
 
     // ━━ 模型路由（数据驱动，Axis 1 进化基础）━━━━━━━━━━━━━━━━━━
     //
@@ -6685,6 +6739,11 @@ const crewclawRoutingPlugin = {
 
     api.on("before_prompt_build", async (event, ctx) => {
       const agentId = ctx.agentId;
+      const _sessionKey = ctx.sessionKey ?? "";
+      scheduleSessionCleanup(_sessionKey);
+
+      const { userId, isGroup } = parseSessionUser(ctx.sessionKey);
+      const _agentUserKey = `${ctx.agentId}:${userId}`;
 
       // ── Watchdog probe 短路：不消耗 Agent token，直接注入固定回复指令 ──────
       // watchdog 每小时发一次 /v1/chat/completions (model=openclaw/lucas, content="watchdog probe")
@@ -6762,7 +6821,6 @@ const crewclawRoutingPlugin = {
       // ── Lucas 专属：滑动消息窗口 + 意图推断 ───────────────────────────
       //
       // 这两项不属于知识注入，是 Lucas 的运行时管理逻辑，不走 context-sources 注册表。
-      const { userId, isGroup } = parseSessionUser(ctx.sessionKey);
       const isPreWriteTestSession = /test|watchdog/i.test(ctx.sessionKey ?? "");
       // visitor:TOKEN — 访客会话，跳过家庭信息注入（Kuzu 家人档案 + ChromaDB 家庭记忆）
       const isVisitorSession = userId.startsWith("visitor:");
@@ -6974,9 +7032,9 @@ const crewclawRoutingPlugin = {
         // ── 工具调用幻觉纠正注入（上一轮检测到幻觉时注入，打断传播链条）──────────
         // 幻觉从原理上无法消灭，但可以在下一轮上下文里纠正，阻止链条蔓延。
         // 策略：agent_end 写入 sessionPendingCorrections，这里读取后注入并立即清除。
-        const _pendingCorrection = sessionPendingCorrections.get(ctx.sessionKey ?? "");
+        const _pendingCorrection = sessionPendingCorrections.get(_agentUserKey);
         if (_pendingCorrection) {
-          sessionPendingCorrections.delete(ctx.sessionKey ?? "");
+          sessionPendingCorrections.delete(_agentUserKey);
           appendSystem.push(
             `【工具调用纠正】\n` +
             `上一轮你在回复里提到了"${_pendingCorrection}"，但实际上没有发出 read_file / list_files / search_codebase 工具调用。\n` +
@@ -6985,9 +7043,9 @@ const crewclawRoutingPlugin = {
           );
         }
         // 访客隐私泄漏纠正（上一轮检测到泄漏时注入）
-        const _pendingPrivacyCorrection = sessionVisitorPrivacyCorrections.get(ctx.sessionKey ?? "");
+        const _pendingPrivacyCorrection = sessionVisitorPrivacyCorrections.get(_agentUserKey);
         if (_pendingPrivacyCorrection && isVisitorSession) {
-          sessionVisitorPrivacyCorrections.delete(ctx.sessionKey ?? "");
+          sessionVisitorPrivacyCorrections.delete(_agentUserKey);
           appendSystem.push(
             `【隐私边界纠正】\n` +
             `上一轮你在回复中泄露了内部信息（${_pendingPrivacyCorrection}）。\n` +
@@ -7002,9 +7060,9 @@ const crewclawRoutingPlugin = {
         // 承诺幻觉纠正（上一轮检测到 false_commitment 时注入）
         // 这是 tool_call_hallucination 纠正的补全：false_commitment 频率远高于
         // tool_call_hallucination，之前缺少下一轮纠正机制。
-        const _pendingFalseCommit = sessionFalseCommitCorrections.get(ctx.sessionKey ?? "");
+        const _pendingFalseCommit = sessionFalseCommitCorrections.get(_agentUserKey);
         if (_pendingFalseCommit) {
-          sessionFalseCommitCorrections.delete(ctx.sessionKey ?? "");
+          sessionFalseCommitCorrections.delete(_agentUserKey);
           appendSystem.push(
             `【承诺纠正】\n` +
             `上一轮你说了"${_pendingFalseCommit}"，但实际上没有调用任何工具来执行。\n` +
@@ -7594,9 +7652,9 @@ const crewclawRoutingPlugin = {
       // agent_end 检测到 5+ 工具调用 → sessionSkillReminders 写入 → 本轮读取注入并清除
       // 参考 Hermes SKILLS_GUIDANCE："After completing a complex task (5+ tool calls),
       // save the approach as a skill."弱模型需要显式提醒才不会遗漏。
-      const _skillReminder = sessionSkillReminders.get(ctx.sessionKey ?? "");
+      const _skillReminder = sessionSkillReminders.get(_agentUserKey);
       if (_skillReminder) {
-        sessionSkillReminders.delete(ctx.sessionKey ?? "");
+        sessionSkillReminders.delete(_agentUserKey);
         const _agentLabel = ctx.agentId === FRONTEND_AGENT_ID ? "Lucas"
           : ctx.agentId === DESIGNER_AGENT_ID ? "Andy"
           : ctx.agentId === IMPLEMENTOR_AGENT_ID ? "Lisa" : ctx.agentId;
@@ -7818,6 +7876,7 @@ ${toolDescriptions}
         sessionSem.delete(semKey);
         sessionSemTimer.delete(semKey);
       }
+      cleanupSessionNow(semKey);
 
       // agent_end 调试日志：保留最近 200 条，供排障用
       const DEBUG_LOG_FILE = join(PROJECT_ROOT, "data/learning/agent-end-debug.jsonl");
@@ -7850,6 +7909,7 @@ ${toolDescriptions}
       if (!event.success) return;
 
       const { userId, isGroup } = parseSessionUser(ctx.sessionKey);
+      const _agentUserKey = `${ctx.agentId}:${userId}`;
 
       // L3 扩展成员：访客会话结束时，标记已注入的 pipeline 结果为 surfaced
       // 防止下次会话重复告知；同时更新 lastInteractionAt（供 dormant 检测使用）
@@ -7979,7 +8039,6 @@ ${toolDescriptions}
       // 真实用户消息：优先用 before_prompt_build 保存的原始 event.prompt，
       // 没有时才 fallback 到 lastUser（兼容未走 before_prompt_build 的场景）
       const actualPrompt = sessionPrompt.get(ctx.sessionKey ?? "") || lastUser;
-      sessionPrompt.delete(ctx.sessionKey ?? "");
 
       // ── 人工干预：连续失败告警（前台 Agent 专属）──────────────────────────
       if (ctx.agentId === FRONTEND_AGENT_ID) {
@@ -8054,7 +8113,7 @@ ${toolDescriptions}
         const _fcCalledCommit = _fcPatterns.commitment_tools.some(t => (toolUseCounts[t] ?? 0) > 0);
         const _fcHit = _fcPatterns.false_commitment.find(p => _fcAllText.includes(p));
         if (_fcHit && !_fcCalledCommit) {
-          sessionFalseCommitCorrections.set(ctx.sessionKey ?? "", _fcHit);
+          sessionFalseCommitCorrections.set(_agentUserKey, _fcHit);
           // 纠正持久化：追踪频率，跨 ≥3 个 session 自动写入 AGENTS.md 永久禁令
           trackDpoFrequency(_fcHit, "false_commitment", ctx.sessionKey ?? "");
           checkAndPersistCorrection(ctx.agentId, _fcHit, "false_commitment", ctx.sessionKey ?? "");
@@ -8099,7 +8158,7 @@ ${toolDescriptions}
             writeFileSync(_hbPath, _updated, "utf8");
           } catch (_e) { /* 静默 */ }
           // 存入 sessionPendingCorrections，下一轮 before_prompt_build 读取并注入纠正
-          sessionPendingCorrections.set(ctx.sessionKey ?? "", _hallucinHit);
+          sessionPendingCorrections.set(_agentUserKey, _hallucinHit);
         }
       }
 
@@ -8124,7 +8183,7 @@ ${toolDescriptions}
           _visitorPrivacyLeakDetected = true;
           // 写入纠正（下一轮注入，独立于工具调用幻觉）
           sessionVisitorPrivacyCorrections.set(
-            ctx.sessionKey ?? "",
+            _agentUserKey,
             `访客隐私泄漏：${_leakHit.label}（${_leakHit.pattern}）`,
           );
           console.log(`[visitor-privacy] leak detected: label="${_leakHit.label}" preview="${lastAssistant.slice(0, 80)}"`);
@@ -8188,7 +8247,7 @@ ${toolDescriptions}
           .filter(t => !new Set(["recall_memory", "query_member_profile", "list_active_tasks", "read_file", "list_files", "search_codebase"]).has(t))
           .length;
         if (_totalActionTools >= 5) {
-          sessionSkillReminders.set(ctx.sessionKey ?? `${ctx.agentId}:skill-reminder`, {
+          sessionSkillReminders.set(_agentUserKey, {
             toolCount: Object.values(toolUseCounts).reduce((s, n) => s + n, 0),
             tools: Object.keys(toolUseCounts),
           });
@@ -13495,7 +13554,12 @@ last_used: null
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
           return { content: [{ type: "text", text: `❌ send_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
-        const { userId, text } = params as { userId: string; text: string };
+        const { userId: rawUserId, text } = params as { userId: string; text: string };
+        // 剥离 CHANNEL_USER_PREFIX（如 'wecom-ZengXiaoLong' → 'ZengXiaoLong'）
+        // 不用 normalizeUserId()：它会转小写，botSend 需要原始大小写
+        const userId = (CHANNEL_USER_PREFIX && rawUserId.startsWith(CHANNEL_USER_PREFIX))
+          ? rawUserId.slice(CHANNEL_USER_PREFIX.length)
+          : rawUserId;
         // App 使用追踪：检测消息中是否包含家庭 App 链接（fire-and-forget，不阻塞发送）
         try {
           const appUrlMatch = text.match(/https?:\/\/[^\s]+\/app\/([^\s?#]+)/);

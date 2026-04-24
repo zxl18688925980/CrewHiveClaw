@@ -4094,3 +4094,22 @@ PM2 现在只管理 chromadb / local-tts / gateway-watchdog（基础支撑服务
 ### 越界干预记录
 
 openclaw.json 配置修复属于基础设施层运维操作，由系统工程师直接介入。wrong_agent isError 修复属于框架层 bug 修复，记录于此。
+
+---
+
+## v721（2026-04-24）
+
+### 变更内容
+
+**群定位机制（config-driven）**：
+- `~/HomeAI/data/groups.json`：新增 `name`/`positioning` 字段，已配置两个群（启灵的家/黟黟的阳光城）
+- `group-registry.js`：新增 `getGroupInfo(chatId)` 方法，暴露在 return 对象
+- `bot-connection.js`：memberTag 使用群名替换"群聊"，messageToLucas 前注入群定位上下文
+
+**send_message wecom- 前缀 93006 修复**：
+- `crewclaw-routing/index.ts`：send_message execute 中剥离 CHANNEL_USER_PREFIX，保留原始大小写（注：不用 normalizeUserId，后者会转小写）
+- `daemons/entrances/wecom/index.js`：send-message handler 入口处 `let` 重赋值剥离前缀，fallback='wecom-'
+
+### 越界干预记录
+
+wecom- 前缀导致 93006 属于框架层 bug（插件在 send_message 工具中未规范化 userId），系统工程师直接修复。群定位机制属于 HomeAI 实例层运维配置，由系统工程师直接配置。

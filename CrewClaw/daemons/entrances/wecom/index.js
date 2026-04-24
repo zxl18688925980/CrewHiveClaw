@@ -799,9 +799,15 @@ const taskManager = new TaskManager({
 const ORG_GROUP_CHAT_ID = process.env.WECOM_ORG_GROUP_CHAT_ID || process.env.WECOM_FAMILY_GROUP_CHAT_ID || '';
 
 app.post('/api/wecom/send-message', async (req, res) => {
-  const { userId, text, voiceText } = req.body || {};
+  let { userId, text, voiceText } = req.body || {};
   if (!userId || !text) {
     return res.status(400).json({ success: false, error: 'userId and text are required' });
+  }
+  // 剥离 CHANNEL_USER_PREFIX（如 'wecom-ZengXiaoLong' → 'ZengXiaoLong'）
+  // Lucas 从插件会话上下文中拿到的 userId 可能带 wecom- 前缀，botSend 不接受带前缀的 chatid
+  const _chanPrefix = process.env.CHANNEL_USER_PREFIX || 'wecom-';
+  if (_chanPrefix && !userId.startsWith('visitor:') && userId.startsWith(_chanPrefix)) {
+    userId = userId.slice(_chanPrefix.length);
   }
   // visitor:姓名 → 推送到访客待消息队列，前端轮询取走
   if (userId.startsWith('visitor:')) {
