@@ -54,27 +54,17 @@ module.exports = {
       combine_logs: true,
       merge_logs: true
     },
-    {
-      name: 'wecom-entrance',
-      script: 'entrances/wecom/index.js',
-      cwd: __dirname,
-      instances: 1,
-      exec_mode: 'fork',
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '200M',
-      restart_delay: 3000,
-      env: {
-        NODE_ENV: 'production',
-        WECOM_PORT: 3003,
-        ...envVars
-      },
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: path.join(LOGS_DIR, 'wecom-error.log'),
-      out_file:   path.join(LOGS_DIR, 'wecom-out.log'),
-      combine_logs: true,
-      merge_logs: true
-    },
+    // wecom-entrance 已迁移到 launchd 管理（2026-04-24）
+    // label: com.homeai.wecom-entrance
+    // wrapper: ~/.openclaw/start-wecom.sh
+    // plist: ~/Library/LaunchAgents/com.homeai.wecom-entrance.plist
+    // 不再由 PM2 管理，PM2 daemon 崩溃不影响微信通道
+    // {
+    //   name: 'wecom-entrance',
+    //   script: 'entrances/wecom/index.js',
+    //   cwd: __dirname,
+    //   ...
+    // },
     // mlx-vision 暂停（2026-04-08）：等 mlx_vlm 支持 gemma4 后用 Gemma4 多模态一次性替换
     // 视觉功能当前降级到 GLM Vision 云端兜底
     // 恢复命令：pm2 start ecosystem.config.js --only mlx-vision
