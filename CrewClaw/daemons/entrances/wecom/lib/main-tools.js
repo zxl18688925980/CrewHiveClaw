@@ -3088,56 +3088,61 @@ os._exit(0)
 
     // ══ 模型层：行为内化 ══
 
-    // M1. DPO 模式积累进度（按 pattern_type 分组，追踪距内化阈值的缺口）
+    // M1. DPO 模式积累进度（按 capability + internalization_target 分组，schema v2 2026-04-25）
     try {
       const dpoCandPath = path.join(learningDir, 'dpo-candidates.jsonl');
       if (!fs.existsSync(dpoCandPath)) {
         mdlLayerResults.push('⚪ dpo-candidates.jsonl：文件不存在（尚无 L5 模型层训练信号）');
       } else {
         const lines = fs.readFileSync(dpoCandPath, 'utf8').split('\n').filter(l => l.trim());
-        const patternCounts = {};
+        const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        const capCounts = {}, targetCounts = {};
+        let phase2Count = 0, confirmedCount = 0, hasGoodCount = 0;
         const nowTs = Date.now();
         const sevenDaysAgo = nowTs - 7 * 24 * 3600 * 1000;
         const fourteenDaysAgo = nowTs - 14 * 24 * 3600 * 1000;
-        let recentCount = 0;
-        let prevWeekCount = 0;
+        let recentCount = 0, prevWeekCount = 0;
 
-        for (const line of lines) {
-          try {
-            const entry = JSON.parse(line);
-            const ts = new Date(entry.t).getTime();
-            if (ts > sevenDaysAgo) recentCount++;
-            else if (ts > fourteenDaysAgo) prevWeekCount++;
-            for (const reason of (entry.reasons || [])) {
-              const m = reason.match(/^([a-z_]+):/);
-              if (m) {
-                const pt = m[1];
-                patternCounts[pt] = (patternCounts[pt] || 0) + 1;
-              }
-            }
-          } catch (_) {}
+        for (const entry of entries) {
+          const ts = new Date(entry.t).getTime();
+          if (ts > sevenDaysAgo) recentCount++;
+          else if (ts > fourteenDaysAgo) prevWeekCount++;
+          const cap = entry.capability || 'unknown';
+          capCounts[cap] = (capCounts[cap] || 0) + 1;
+          const target = entry.internalization_target || 'unknown';
+          targetCounts[target] = (targetCounts[target] || 0) + 1;
+          if (entry.phase2_eligible) phase2Count++;
+          if (entry.confirmed) confirmedCount++;
+          if (entry.good_response) hasGoodCount++;
         }
 
         const THRESHOLD = 50;
-        const patternLines = Object.entries(patternCounts)
-          .sort((a, b) => b[1] - a[1])
-          .map(([pt, n]) => {
-            const icon = n >= THRESHOLD ? '🔴' : n >= 20 ? '🟡' : '⚪';
-            return `${icon} ${pt}：${n} 条${n >= THRESHOLD ? '（已达阈值，待内化）' : `（距阈值还差 ${THRESHOLD - n} 条）`}`;
-          });
+        mdlLayerResults.push(`✅ DPO 信号总计：${entries.length} 条（confirmed:${confirmedCount} / good_response:${hasGoodCount} / phase2_eligible:${phase2Count}）`);
 
-        mdlLayerResults.push(`✅ DPO 信号总计：${lines.length} 条`);
-        patternLines.forEach(l => mdlLayerResults.push(`   ${l}`));
+        // capability 分布（直接字段，替代旧 reasons 正则）
+        Object.entries(capCounts).sort((a, b) => b[1] - a[1]).forEach(([cap, n]) => {
+          const icon = n >= THRESHOLD ? '🔴' : n >= 20 ? '🟡' : '⚪';
+          mdlLayerResults.push(`   ${icon} capability:${cap}：${n} 条${n >= THRESHOLD ? '（已达阈值）' : `（距阈值 ${THRESHOLD - n} 条）`}`);
+        });
+
+        // internalization_target 分布（L5 咬合核心：哪些 AGENTS.md 规则可内化删除）
+        if (Object.keys(targetCounts).length > 0) {
+          mdlLayerResults.push('📎 internalization_target 分布（规则删除候选）：');
+          Object.entries(targetCounts).sort((a, b) => b[1] - a[1]).forEach(([t, n]) => {
+            const icon = n >= THRESHOLD ? '🔴' : '⚪';
+            mdlLayerResults.push(`   ${icon} ${t}：${n} 条${n >= THRESHOLD ? '（达阈值，内化后可删规则）' : ''}`);
+          });
+        }
 
         // 近 7 天趋势（判断 L5 系统层干预是否在收敛问题）
         const trendIcon = recentCount < prevWeekCount ? '📉' : recentCount > prevWeekCount ? '📈' : '➡️';
         const trendMsg  = recentCount < prevWeekCount ? 'L5 系统层干预有效，问题在收敛' : recentCount > prevWeekCount ? '问题在增加，L5 系统层干预需加强' : '持平';
         mdlLayerResults.push(`${trendIcon} 近 7 天新增 ${recentCount} 条 vs 前 7 天 ${prevWeekCount} 条（${trendMsg}）`);
 
-        const ripePatterns = Object.entries(patternCounts).filter(([, n]) => n >= THRESHOLD);
-        if (ripePatterns.length > 0) {
+        const ripeTargets = Object.entries(targetCounts).filter(([, n]) => n >= THRESHOLD);
+        if (ripeTargets.length > 0) {
           score = '🔴';
-          mdlLayerResults.push(`🔴 ${ripePatterns.length} 个模式已达内化阈值，等待工程师确认触发微调`);
+          mdlLayerResults.push(`🔴 ${ripeTargets.length} 条规则已有足够训练信号（>=${THRESHOLD}条），等待模型内化后可从 AGENTS.md 删除`);
         }
       }
     } catch (e) {
