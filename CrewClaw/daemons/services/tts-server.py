@@ -16,6 +16,7 @@ import asyncio
 import io
 import json
 import logging
+import socket
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -99,6 +100,8 @@ class TtsHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    # SO_REUSEADDR：允许进程重启后立即重新绑定端口，避免 PM2 重启时 "Address already in use"
     server = HTTPServer(('127.0.0.1', PORT), TtsHandler)
+    server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     logger.info(f'edge-tts TTS server 启动，端口 {PORT}，voice={VOICE}')
     server.serve_forever()
