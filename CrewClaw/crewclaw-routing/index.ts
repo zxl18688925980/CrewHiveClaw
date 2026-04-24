@@ -9768,6 +9768,49 @@ last_used: null
       },
     }));
 
+    // ━━ 工具注册：task_andy（Lucas 专属，委托 Andy 执行调研/分析任务，异步回报）━━━━━━━━━
+
+    api.registerTool((toolCtx) => ({
+      label: "委托 Andy 任务",
+      name: "task_andy",
+      description: [
+        "Lucas 专属：把一项调研/分析/评估任务委托给 Andy 异步执行，Andy 完成后通过消息通知你。",
+        "适用：调研某个技术方案的优劣、分析某段日志或数据、评估某个架构决策、起草不需要 Lisa 实现的分析报告。",
+        "与 ask_andy 的区别：ask_andy 是即时问答（等回答）；task_andy 是任务委托（Andy 去做，做完通知）。",
+        "不适用：需要 Lisa 实现的开发需求（用 trigger_development_pipeline）、Bug 修复（用 report_bug）、即时问答（用 ask_andy）。",
+      ].join("\n"),
+      parameters: Type.Object({
+        task:    Type.String({ description: "任务描述：要 Andy 调研/分析/评估什么，尽量具体" }),
+        context: Type.Optional(Type.String({ description: "背景说明（可选），帮助 Andy 理解任务来源和期望产出形式" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: "❌ task_andy 是 Lucas 专属工具。" }], details: { error: "wrong_agent" }, isError: true };
+        }
+        const p = params as { task: string; context?: string };
+        const { userId } = parseSessionUser(toolCtx.sessionKey);
+        const prompt = [
+          `【Lucas 直接委托调研任务】`,
+          p.context ? `背景：${p.context}` : "",
+          ``,
+          `任务：${p.task}`,
+          ``,
+          `请独立完成这项任务，不走开发流水线，不需要触发 trigger_lisa_implementation。`,
+          `完成后用 send_message 把结果回报给 Lucas（userId: ${userId}），简明扼要，300~800 字。`,
+        ].filter(Boolean).join("\n");
+
+        void callGatewayAgent(DESIGNER_AGENT_ID, prompt, PIPELINE_TIMEOUT.LONG, undefined, FRONTEND_AGENT_ID);
+        void notifyEngineer(
+          `【Lucas→Andy 委托任务】\n${p.task.slice(0, 200)}`,
+          "info", FRONTEND_AGENT_ID,
+        );
+        return {
+          content: [{ type: "text", text: `已委托给 Andy：「${p.task.slice(0, 80)}」\nAndy 完成后会直接通知你结果。` }],
+          details: { dispatched: true },
+        };
+      },
+    }));
+
     // ━━ 工具注册：ask_lisa（Lucas 专属，直接向 Lisa 咨询实现细节，不触发协作链）━━━━━━━━━
 
     api.registerTool((toolCtx) => ({
@@ -9824,6 +9867,52 @@ last_used: null
             details: { error: "lisa_query_failed" },
           };
         }
+      },
+    }));
+
+    // ━━ 工具注册：task_lisa（Lucas 专属，委托 Lisa 直接执行任务，异步回报）━━━━━━━━━
+
+    api.registerTool((toolCtx) => ({
+      label: "委托 Lisa 执行",
+      name: "task_lisa",
+      description: [
+        "Lucas 专属：把一项执行任务直接委托给 Lisa 完成，Lisa 用直接编码工具执行后通知你结果。",
+        "适用：运行脚本、修改配置文件、生成报告、处理数据文件、执行一次性操作——意图清晰无需设计的任务。",
+        "与 ask_lisa 的区别：ask_lisa 是即时问答；task_lisa 是任务委托（Lisa 去做，做完通知）。",
+        "不适用：需要 Andy 设计的开发需求（用 trigger_development_pipeline）、Bug 修复（用 report_bug）。",
+        "质量边界：如 Lisa 执行中发现需要架构决策，她会升级给 Andy，你会收到「已升级」通知。",
+      ].join("\n"),
+      parameters: Type.Object({
+        task:    Type.String({ description: "执行任务描述：要 Lisa 做什么，越具体越好（脚本路径/文件路径/操作目标）" }),
+        context: Type.Optional(Type.String({ description: "背景说明（可选），帮助 Lisa 理解期望结果" })),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          return { content: [{ type: "text", text: "❌ task_lisa 是 Lucas 专属工具。" }], details: { error: "wrong_agent" }, isError: true };
+        }
+        const p = params as { task: string; context?: string };
+        const { userId } = parseSessionUser(toolCtx.sessionKey);
+        const prompt = [
+          `【Lucas 直接委托执行任务】`,
+          p.context ? `背景：${p.context}` : "",
+          ``,
+          `任务：${p.task}`,
+          ``,
+          `这是 Lucas 直接委托的执行任务，意图明确，不需要 Andy 设计。`,
+          `请优先用直接编码工具（read/edit/bash/write）完成，复杂操作才用 run_opencode。`,
+          `如执行中遇到需要架构决策的问题，调 report_implementation_issue 升级给 Andy，并告知 Lucas「已升级，Andy 在处理」。`,
+          `完成后用 send_message 把执行结果回报给 Lucas（userId: ${userId}），说明做了什么、结果如何。`,
+        ].filter(Boolean).join("\n");
+
+        void callGatewayAgent(IMPLEMENTOR_AGENT_ID, prompt, PIPELINE_TIMEOUT.LONG, undefined, FRONTEND_AGENT_ID);
+        void notifyEngineer(
+          `【Lucas→Lisa 委托执行】\n${p.task.slice(0, 200)}`,
+          "info", FRONTEND_AGENT_ID,
+        );
+        return {
+          content: [{ type: "text", text: `已委托给 Lisa：「${p.task.slice(0, 80)}」\nLisa 完成后会直接通知你结果。` }],
+          details: { dispatched: true },
+        };
       },
     }));
 
@@ -11692,7 +11781,7 @@ last_used: null
       label: "搜索代码库",
       name: "search_codebase",
       description: [
-        "Andy 专属工具：在 HomeAI 代码库中智能搜索代码和文件。",
+        "Andy / Lucas 可用：在 HomeAI 代码库中智能搜索代码和文件。",
         "四种搜索模式可单独或组合使用：",
         "  files — 按文件名模式查找文件（支持 glob 片段，如 'context-handler'、'gateway'）",
         "  content — grep 搜索代码内容（支持关键词和简单模式，如 'chromaQuery'、'visitor.*registry'）",
@@ -11713,10 +11802,10 @@ last_used: null
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const p = params as { query: string; scope?: string };
 
-        // Andy 专属 guard
-        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
+        // Andy + Lucas 可用（Andy：写 spec 前定位文件；Lucas：理解系统现状）
+        if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID && toolCtx.agentId !== FRONTEND_AGENT_ID) {
           return {
-            content: [{ type: "text", text: "Error: search_codebase 是 Andy 专用工具" }],
+            content: [{ type: "text", text: "Error: search_codebase 仅 Andy / Lucas 可用" }],
             details: { error: "wrong_agent" },
             isError: true,
           };
