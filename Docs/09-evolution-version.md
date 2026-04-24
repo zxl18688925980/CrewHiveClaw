@@ -4138,3 +4138,32 @@ Gateway 内存持续增长（RSS 最高达 3.1GB）导致 OOM 崩溃、pipeline 
 ### 越界干预记录
 
 Gateway 内存管理属于框架基础设施，由系统工程师直接修复。
+
+---
+
+## v723（2026-04-24）：TTS SO_REUSEADDR + Gateway 堆内存稳定确认
+
+### 干预类型
+
+基础设施 bug 修复（L0 进程稳定性）
+
+### 背景
+
+系统工程师观察到两类基础设施不稳：① local-tts (8082) 每次 PM2 重启后因端口占用崩溃循环；② Gateway 在 v722 内存泄漏修复后内存状态需要确认是否真正稳定。
+
+### 变更内容
+
+**TTS SO_REUSEADDR 修复**（`daemons/services/tts-server.py`）：
+- 新增 `import socket`
+- HTTPServer 创建后立即调用 `server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)`
+- 作用：允许进程重启后立即重新绑定端口，防止 PM2 重启时 "Address already in use" 崩溃循环
+
+**Gateway 堆内存状态确认**：
+- 已验证 Lisa 的 `cleanupSessionMaps` / `scheduleSessionCleanup` / `cleanupSessionNow` 三函数代码存在（index.ts lines 6101-6148）
+- 内存时序：Gateway 重启 805MB → 初始化完成 2867MB → GC 后 2394MB → 稳定 2395MB（10min 后基本持平）
+- 确认 GC 正常工作，12GB heap limit 留有约 9.5GB 余量
+- 发现两处次级泄漏（`opencodeSessions` line ~3910、`revisionRoundsMap` line ~11432 无 .delete()），但生命周期为 per-task 而非 per-message，全年影响 <500KB，列为低优先级
+
+### 越界干预记录
+
+TTS 是基础设施组件，SO_REUSEADDR 属于 Python socket 标准做法，系统工程师直接修复。Gateway 内存验证为观察性操作，无代码变更。

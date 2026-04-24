@@ -1259,3 +1259,43 @@ const userId = (CHANNEL_USER_PREFIX && rawUserId.startsWith(CHANNEL_USER_PREFIX)
 const _chanPrefix = process.env.CHANNEL_USER_PREFIX || 'wecom-';
 ```
 更根本的修法：在 Gateway 插件层（index.ts）发出请求前就剥离前缀，不依赖 wecom-entrance 的二次处理。
+
+---
+
+## 2026-04-24（续）
+
+### Python HTTPServer 缺少 SO_REUSEADDR 导致 PM2 重启崩溃循环
+
+**场景**：PM2 管理的 Python HTTPServer 服务（如 local-tts port 8082）在 crash 后 PM2 自动重启。
+
+**现象**：`OSError: [Errno 48] Address already in use`——上一个进程的 zombie 或 TIME_WAIT socket 仍占用端口，新进程无法绑定，立即崩溃，PM2 反复重启反复崩溃。
+
+**根因**：Python `HTTPServer` 默认不设置 `SO_REUSEADDR`，内核在连接关闭后保留 TIME_WAIT 状态约 60s，导致短时间内同一端口无法重绑定。
+
+**修复方式**：在 `HTTPServer(...)` 创建后、`serve_forever()` 前显式设置：
+```python
+import socket
+server = HTTPServer(('127.0.0.1', PORT), Handler)
+server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.serve_forever()
+```
+
+**状态**：活跃（已在 tts-server.py 修复，其余 Python HTTP 服务如需新建应同样加此行）
+
+### Node.js 不设 --max-old-space-size 在 Gateway 场景下默认堆太小
+
+**场景**：OpenClaw Gateway 作为长运行 Node.js 进程，加载 46 个工具、Kuzu 图谱、ChromaDB 客户端、多 Agent workspace，稳态内存约 2.4GB。
+
+**现象**：未设 `--max-old-space-size` 时 Node.js 默认堆上限约 1.4GB（ARM64 macOS）。内存泄漏或峰值负载超过上限触发 OOM crash，Gateway 崩溃后 pipeline 全部超时。
+
+**根因**：Node.js heap limit 按机器内存百分比动态设置，低端设备约 512MB~1.4GB，对 Gateway 这类多 Agent 重负载进程严重不足。
+
+**修复方式**：在 `start-gateway.sh` 启动命令中显式指定：
+```bash
+exec node \
+  --max-old-space-size=12288 \
+  /path/to/entry.js gateway --port 18789
+```
+12288（12GB）在 48GB 机器上安全；根据实际物理内存调整（建议不超过系统内存的 25%）。
+
+**状态**：活跃（已在 start-gateway.sh 设置 12288，其余 Node.js 长运行服务应评估是否需要同样配置）
