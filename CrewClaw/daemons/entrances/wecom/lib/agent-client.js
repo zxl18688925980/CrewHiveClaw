@@ -70,7 +70,10 @@ function readAgentModelConfig(agentId) {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   const agent = config.agents.list.find(a => a.id === agentId);
   if (!agent) throw new Error(`Agent ${agentId} not found in openclaw.json`);
-  const [providerKey, modelId] = agent.model.split('/');
+  // 用 indexOf 而非 split('/')，保留 "models/gemini-3.1-pro-preview" 这类带斜杠的完整 model ID
+  const slashIdx = agent.model.indexOf('/');
+  const providerKey = agent.model.slice(0, slashIdx);
+  const modelId = agent.model.slice(slashIdx + 1);
   const provider = config.models?.providers?.[providerKey];
   if (!provider) throw new Error(`Provider ${providerKey} not found in openclaw.json`);
   return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId };
@@ -133,7 +136,8 @@ async function callClaudeFallback(userMessage, fromUser, historyMessages = []) {
   const messages = [...historyMessages, { role: 'user', content: userMessage }];
 
   // 跟随 Lucas 在 openclaw.json 里的模型配置，不硬编码任何 provider
-  const text = await callAgentModel('lucas', soul, messages, 1024) || '收到～';
+  // 推理模型（Gemini 3.x / GLM-5.1 等）thinking tokens 计入 max_tokens 预算，< 4000 时 content 返回空字符串
+  const text = await callAgentModel('lucas', soul, messages, 4000) || '收到～';
   logger.info('Agent model 后备回复成功', { fromUser, replyLen: text.length });
   return text;
 }
