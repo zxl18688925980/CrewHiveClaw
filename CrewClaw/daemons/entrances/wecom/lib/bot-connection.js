@@ -28,6 +28,8 @@
  * }
  */
 const { WSClient } = require('@wecom/aibot-node-sdk');
+const fs   = require('fs');
+const path = require('path');
 
 module.exports = function createBotConnection(logger, deps) {
   const {
@@ -56,6 +58,23 @@ module.exports = function createBotConnection(logger, deps) {
   // so both index.js and this module share the same counter
   function getGatewayDownNotifiedAt() { return _gatewayDownNotifiedAt_ref.value; }
   function setGatewayDownNotifiedAt(v) { _gatewayDownNotifiedAt_ref.value = v; }
+
+  // ── Scene 辅助（渠道层翻译：wecom chatId → framework sceneId）────────────
+  // scenes.json 是框架层 Scene 配置（SE 手动维护），内存缓存，不随群注册更新
+  let _scenesCache = null;
+  function getSceneIdByChannelRef(channelRef) {
+    if (!channelRef) return undefined;
+    if (!_scenesCache) {
+      try {
+        const raw = fs.readFileSync(path.join(INSTANCE_ROOT, 'CrewHiveClaw', 'HomeAILocal', 'Config', 'scenes.json'), 'utf8');
+        _scenesCache = JSON.parse(raw);
+        if (!Array.isArray(_scenesCache)) _scenesCache = [];
+      } catch {
+        _scenesCache = [];
+      }
+    }
+    return _scenesCache.find(s => s.channelRef === channelRef)?.sceneId;
+  }
 
 // ─── 智能机器人 WebSocket 长连接（通道 B：家庭群 + 成员私聊 → Lucas）────────
 
@@ -297,9 +316,13 @@ function startBotLongConnection() {
     const messageToLucas = `${memberTag}${groupCtx}${lucasText}`;
 
     // wecomUserId 编码：crewclaw-routing 插件从 requesterSenderId 解析此格式
-    // 群消息用 group:fromUser:msgId（per-message 独立 session），避免一条消息卡住后续所有群消息排队
+    // 群消息用 scene:sceneId:fromUser:msgId（per-message 独立 session），避免一条消息卡住后续所有群消息排队
+    // sceneId 来自 scenes.json（框架层），渠道无关；未配置的新群 fallback 到 group:chatId 格式
     const msgId = frame.body?.msgid || crypto.randomUUID();
-    const wecomUserId = isGroup ? `group:${chatId}:${fromUser}:${msgId}` : fromUser;
+    const sceneId = isGroup ? getSceneIdByChannelRef(chatId) : undefined;
+    const wecomUserId = isGroup
+      ? (sceneId ? `scene:${sceneId}:${fromUser}:${msgId}` : `group:${chatId}:${fromUser}:${msgId}`)
+      : fromUser;
 
     // sendMessage 有时挂起（WebSocket 等待 ACK 但永不到来），加超时保护
     const sendWithTimeout = (fn, ms = 15000) =>

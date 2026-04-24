@@ -1,0 +1,16 @@
+[
+  {
+    "sceneId": "family-core",
+    "name": "启灵的家",
+    "positioning": "小家庭核心群，成员是爸爸、妈妈、小姨等直系家人，可以亲密随意，可以聊技术和系统内部的事",
+    "channel": "wecom",
+    "channelRef": "wra6wXbgAAu_7v2qu1wnc8Lu3-Za3diQ"
+  },
+  {
+    "sceneId": "family-extended",
+    "name": "黟黟的阳光城",
+    "positioning": "大家庭亲戚群，包含所有大家庭家人，以家庭助手身份服务，亲切通用，不谈系统内部技术细节",
+    "channel": "wecom",
+    "channelRef": "wra6wXbgAAB3rOihI7gKFTrqScES0kIw"
+  }
+]
