@@ -2604,6 +2604,73 @@ LOCAL_MODEL_NAME 质量评估（三域打分）
 
 ---
 
+### L5 执行路线图：本地模型咬合路径
+
+> **核心命题**：AGENTS.md 规则条数持续减少，是系统层 + 模型层完成一次咬合的唯一可观测证明。不减少 = L5 没有真正发生。
+
+L5 的执行分两个阶段，由外部条件（llama.cpp 对新架构的支持）决定触发时机：
+
+#### 第一阶段：Qwen3-VL-32B 三角色独立 LoRA（当下可执行）
+
+**基底选择**：Qwen3-VL-32B-4bit（原生视觉编码器，GGUF 可用，约 20.6GB，可用 mlx_vlm 推理）。三角色各训练一个独立 LoRA 适配器，而不是共享一个通用适配器——原因：Lucas 需要的是家庭沟通判断力，Andy 需要的是架构设计审美，Lisa 需要的是实现工程品味，三个方向在训练信号上相互干扰。
+
+```
+qwen3-vl-32b-4bit (base)
+  ├── LoRA: qwen3-vl-lucas  ← 家庭沟通 + 需求判断 + 人格对齐
+  ├── LoRA: qwen3-vl-andy   ← 架构设计 + spec 精度 + 工具调用稳定性
+  └── LoRA: qwen3-vl-lisa   ← 实现工程 + 编码品味 + 错误修复模式
+```
+
+**多模态恢复**：Qwen3-VL-32B 原生支持图片输入，作为第一阶段 base 同时恢复多模态链路（接入 `describeImageWithLlava` 主链路，替代 GLM-4v-flash 降级）。
+
+**路由函数**：新增 `callLocalMLX(role, prompt, imagePath?)` 统一路由本地推理，按 role 注入对应 LoRA adapter 路径，支持可选图片输入。
+
+#### 第二阶段：Qwen3.6-27B 统一蒸馏（等 GGUF 就绪触发）
+
+**触发条件**：llama.cpp 支持 Gated DeltaNet 架构 → Qwen3.6-27B 官方 GGUF 发布 → 可用 `ollama create` 加载。
+
+**为什么升级**：Qwen3.6-27B（27B 参数，Gated DeltaNet 线性注意力，原生视觉编码器，中文母语级，SWE-bench 77.2）在编码能力和中文理解上显著优于 Qwen3-VL-32B。Phase 1 的三角色 LoRA 数据集（带角色系统提示前缀）可直接迁移作为 Phase 2 的统一微调语料。
+
+```
+数据合并策略：
+  lucas-corpus (with lucas system prefix) ─────┐
+  andy-corpus  (with andy system prefix)  ──────┼→ SFT + DPO 联合蒸馏 → Qwen3.6-27B unified
+  lisa-corpus  (with lisa system prefix)  ─────┘
+```
+
+#### 训练数据 Schema
+
+每条训练样本必须包含 `internalization_target` 字段，关联 AGENTS.md 中的具体规则 ID——这是连接「训练什么」和「能删什么规则」的桥梁：
+
+```json
+{
+  "role": "lucas | andy | lisa",
+  "capability": "false_commitment | tool_call | reasoning | persona | ...",
+  "system": "<角色 SOUL.md 内容>",
+  "conversations": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}],
+  "quality_score": 0.85,
+  "source": "dpo_approved | sft_distilled | manual",
+  "internalization_target": "lucas-AGENTS.md#rule:no_false_commitment",
+  "phase2_eligible": true
+}
+```
+
+规则：
+- `internalization_target` 为空 = 通用能力样本，不驱动规则删除
+- `internalization_target` 指向的规则积累到足够样本（≥ 50 条同向信号）+ 真实行为验证通过 → 该规则可从 AGENTS.md 删除
+- 删除一条规则 = 完成一次咬合，在 09-evolution-version.md 记录
+
+#### 里程碑
+
+| 里程碑 | 内容 | 完成信号 |
+|--------|------|---------|
+| **M1**（2-3周） | DPO 候选重分类（113 条补 capability + internalization_target）；训练 schema 就绪 | dpo-candidates.jsonl 所有条目有 capability 字段 |
+| **M2**（4-6周） | 三角色 LoRA 第一轮训练完成；多模态链路恢复（Qwen3-VL-32B） | `callLocalMLX` 可正常推理；`describeImageWithLlava` 走本地而非 GLM-4v-flash |
+| **M3**（8周） | 首次完成一条 AGENTS.md 规则删除，附 internalization_target 对应 50+ 样本 | AGENTS.md 合计行数首次下降 |
+| **M4**（持续） | Phase 2 等 Qwen3.6-27B GGUF 就绪后统一蒸馏；三角色 AGENTS.md 行数持续收敛 | AGENTS.md 规则行数长期趋势向下 |
+
+---
+
 ### 两类知识与 Skill 自增强设计
 
 #### 两类知识，性质不同，不互相替代
