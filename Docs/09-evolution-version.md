@@ -4167,3 +4167,52 @@ Gateway 内存管理属于框架基础设施，由系统工程师直接修复。
 ### 越界干预记录
 
 TTS 是基础设施组件，SO_REUSEADDR 属于 Python socket 标准做法，系统工程师直接修复。Gateway 内存验证为观察性操作，无代码变更。
+
+---
+
+## v724 (2026-04-24) Scene 实体建模 + Lucas 能力扩展 + send_message 三角色化
+
+**干预类型**：框架层实体概念建模 + 协作通道扩展
+
+**背景**：
+1. `group:chatId` 把 wecom-specific chatId 嵌入 sessionKey，群的概念与 channel 耦合，无法支持未来其他 channel 的群（如邮件群发）
+2. Lucas 在协作工具上有盲区：只能触发完整流水线（重型）或即时问答（同步），缺少「异步委托有交付物任务」的通道
+3. `send_message` Lucas-only 导致 task_andy/task_lisa 的回调承诺（"完成后用 send_message 通知你"）实际不可执行——Andy/Lisa 调用该工具会被 wrong_agent 拒绝
+
+**变更内容**：
+
+1. **Scene 实体抽象**：三层分离设计
+   - 框架层：`scenes.json`（sceneId/name/positioning/channel/channelRef）
+   - Channel 层：`group-registry.js` channelRef→sceneId 翻译 + 运行时 groups.json merge
+   - 实例层：`HomeAILocal/Config/scenes.json`（SE 维护）
+   - sessionKey 格式：`group:chatId:fromUser:msgId` → `scene:sceneId:fromUser:msgId`；旧前缀向后兼容
+   - ChromaDB 元数据：`chatId/groupName` → `sceneId/sceneName`；展示层兼容旧记录
+
+2. **Lucas 能力扩展**：
+   - `search_codebase` 门控：Andy-only → Andy+Lucas 可用
+   - `task_andy`（新工具）：Lucas 委托 Andy 异步调研/分析，Andy 完成后 send_message 回报；fire-and-forget，不走流水线
+   - `task_lisa`（新工具）：Lucas 委托 Lisa 直接执行任务，Lisa 完成后 send_message 回报；遇架构判断自动升级 Andy
+
+3. **send_message 三角色化**：
+   - 移除 Lucas-only 硬性门控，改为定向门控
+   - Lucas：无限制，可发给任何家庭成员/群/访客
+   - Andy/Lisa：只能发给任务委托人（WECOM_OWNER_ID），不可直接向组织成员或群发消息
+   - 修复 task_andy/task_lisa 回调不可达的 bug（之前 Andy/Lisa 调用 send_message 会被 wrong_agent 拒绝）
+
+4. **六条协作通道（新增 Lisa→Lucas）**：
+   - Lisa 执行 task_lisa 中遇到用户侧决策问题时，用 send_message + `【来自Lisa·执行澄清】` 前缀直接问 Lucas
+   - 技术/架构问题仍走 report_implementation_issue
+
+**变更文件**：
+- `CrewClaw/crewclaw-routing/index.ts`（Scene cache 函数 + sessionKey 升级 + search_codebase 门控扩展 + task_andy/task_lisa 工具 + send_message 门控重构）
+- `CrewClaw/daemons/entrances/wecom/lib/bot-connection.js`（getSceneIdByChannelRef）
+- `CrewClaw/daemons/entrances/wecom/lib/group-registry.js`（loadScenes + getSceneByChannelRef）
+- `HomeAILocal/Config/scenes.json`（新文件，家庭群 Scene 配置）
+- `~/.openclaw/workspace-andy/AGENTS.md`（三类任务行为差异：新增 task_andy 直接委托）
+- `~/.openclaw/workspace-lisa/AGENTS.md`（直接执行模式：新增第 4 条执行澄清规则）
+- `Docs/HomeAI Readme.md`（Andy/Lisa 交互通道列更新）
+- `Docs/00-project-overview.md`（三角色直接协作通道扩展为六条 + 工具表更新）
+
+### 越界干预记录
+
+框架层实体建模（Scene）属于架构演化，系统工程师直接实施。send_message 门控重构属于修复 task 回调 bug，同时明确设计约束。

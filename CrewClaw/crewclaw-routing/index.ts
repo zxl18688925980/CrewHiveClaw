@@ -13710,17 +13710,22 @@ last_used: null
       },
     }));
 
-    // ── send_message：Lucas 主动向家庭成员发消息 ──────────────────────────
+    // ── send_message：三角色共用——向家庭成员/委托人发消息 ──────────────
     api.registerTool((toolCtx) => ({
-      label: "主动发消息给家人",
+      label: "发消息",
       name: "send_message",
       description: [
-        "Lucas 专属工具：主动向指定家庭成员、家庭群或访客发送文字消息。",
-        "适用场景：",
-        "1. 【最常用】发送图形工具链接给家人——当家人需要上传文件、图形操作时，必须调用此工具把链接发给对应家人，仅在回复文字里写链接地址无效，家人收不到",
+        "三角色共用：向指定成员、家庭群或访客发送文字消息。",
+        "【Lucas 常用场景】",
+        "1. 发送图形工具链接给家人——当家人需要上传文件、图形操作时，必须调用此工具把链接发给对应家人",
         "2. 任务完成后主动通知家人（私聊或群聊）",
         "3. 提醒待办事项、跟进承诺",
-        "4. 【访客主动联系】向正在访问 demo-chat 的访客发消息，userId 填 visitor:姓名（如 visitor:任婧、visitor:赵昱）",
+        "4. 向访客发消息，userId 填 visitor:姓名（如 visitor:任婧）",
+        "【Andy 使用场景】task_andy 调研任务完成后，用此工具把结果回报给委托人（userId 从任务提示中读取，必须是委托人 userId）",
+        "【Lisa 使用场景】",
+        "- task_lisa 执行任务完成后，用此工具把结果回报给委托人（userId 从任务提示中读取，必须是委托人 userId）",
+        "- 执行过程中遇到需要委托人决策的问题（选哪个/确认/偏好），用 【来自Lisa·执行澄清】 前缀发消息给委托人，等待回复；技术/架构问题改用 report_implementation_issue",
+        "⚠️ Andy/Lisa 限制：只能发给任务委托人（业主 userId），不可直接向其他组织成员或群发消息——那是 Lucas 的职责",
         "userId 取值：",
         "- 私聊家庭成员：XiaMoQiuFengLiang、ZiFeiYu、ZengXiaoLong 等企业微信 userId",
         "- 发到家庭群：填 \"group\"",
@@ -13735,10 +13740,18 @@ last_used: null
         }),
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
-        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ send_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
-        }
         const { userId: rawUserId, text } = params as { userId: string; text: string };
+        // Andy/Lisa 门控：只能发给任务委托人（WECOM_OWNER_ID），不可直接向组织成员发消息
+        if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
+          const ownerUserId = process.env.WECOM_OWNER_ID ?? "ZengXiaoLong";
+          if (normalizeUserId(rawUserId) !== normalizeUserId(ownerUserId)) {
+            return {
+              content: [{ type: "text", text: `❌ Andy/Lisa 的 send_message 只能发给任务委托人（${ownerUserId}）。向组织成员发消息需通过 Lucas，不可直接发。收到此错误说明 userId 不对，请检查任务提示中的委托人 userId。` }],
+              details: { error: "wrong_target" },
+              isError: true,
+            };
+          }
+        }
         // 剥离 CHANNEL_USER_PREFIX（如 'wecom-ZengXiaoLong' → 'ZengXiaoLong'）
         // 不用 normalizeUserId()：它会转小写，botSend 需要原始大小写
         const userId = (CHANNEL_USER_PREFIX && rawUserId.startsWith(CHANNEL_USER_PREFIX))
