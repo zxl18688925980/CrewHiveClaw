@@ -381,14 +381,14 @@ function startBotLongConnection() {
 
             let replyText;
             try {
-              replyText = await callGatewayAgent('lucas', msg, userId, 180000, history) || '收到～';
+              replyText = await callGatewayAgent('lucas', msg, userId, 300000, history) || '收到～';
             } catch (firstErr) {
               // socket hang up / ECONNRESET：DeepSeek R1 偶发网络断连，自动重试一次
               const isNetErr = /socket hang up|ECONNRESET|ECONNABORTED|ETIMEDOUT/i.test(firstErr?.message || '');
               if (isNetErr) {
                 logger.warn('Gateway 网络错误，2s 后重试一次', { fromUser, error: firstErr.message });
                 await new Promise(r => setTimeout(r, 2000));
-                replyText = await callGatewayAgent('lucas', msg, userId, 180000, history) || '收到～';
+                replyText = await callGatewayAgent('lucas', msg, userId, 300000, history) || '收到～';
               } else {
                 throw firstErr;
               }
@@ -643,7 +643,7 @@ function startBotLongConnection() {
       const historyMessages = buildHistoryWithCrossChannel(isGroup, histKey);
       const msgId = frame.body?.msgid || crypto.randomUUID();
       const wecomUserId = isGroup ? `group:${chatId}:${fromUser}:${msgId}` : fromUser;
-      const replyText = await callGatewayAgent('lucas', `${memberTag}${rawText}`, wecomUserId, 180000, historyMessages) || '收到～';
+      const replyText = await callGatewayAgent('lucas', `${memberTag}${rawText}`, wecomUserId, 300000, historyMessages) || '收到～';
       appendChatHistory(histKey, `${memberTag}${rawText}`, replyText);
       const streamId = crypto.randomUUID();
       if (isGroup) {
@@ -694,7 +694,7 @@ function startBotLongConnection() {
 
     appendChatHistory(histKey, `${memberTag}发了图文消息`, `[系统] 图文混排：文字=${rawText || '无'}，图片=${imageDescs.length}张`);
 
-    const replyText = await callGatewayAgent('lucas', messageToLucas, wecomUserId, 180000, historyMessages) || '收到～';
+    const replyText = await callGatewayAgent('lucas', messageToLucas, wecomUserId, 300000, historyMessages) || '收到～';
     const streamId = crypto.randomUUID();
     if (isGroup) {
       await wsClient.sendMessage(chatId, { msgtype: 'markdown', markdown: { content: replyText } });
@@ -746,7 +746,7 @@ function startBotLongConnection() {
       Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error(`sendMessage timeout ${ms}ms`)), ms))]);
 
     try {
-      const replyText = await callGatewayAgent('lucas', messageToLucas, wecomUserId, 180000, historyMessages) || '收到～';
+      const replyText = await callGatewayAgent('lucas', messageToLucas, wecomUserId, 300000, historyMessages) || '收到～';
       const wecomSafeReply = stripMarkdownForWecom(replyText);  // 剥离 <think> 块等，统一入口
       appendChatHistory(histKey, `${memberTag}（语音）${voiceText}`, wecomSafeReply);
 
