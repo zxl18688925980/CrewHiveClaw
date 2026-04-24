@@ -3212,9 +3212,72 @@ os._exit(0)
         const hasGemma4 = mlxModels.some(m => /gemma.*4/i.test(m)) || ollamaModels.some(m => /gemma.*4/i.test(m));
         mdlLayerResults.push(hasGemma4 ? '✅ Gemma 4 就绪（L5 模型层进化终态已达）' : '⏳ Gemma 4 尚未就绪（L5 模型层进化终态，不阻塞当前微调）');
       }
+
+      // M2b+. L5 Phase 1 adapter 就绪状态（三角色 qwen3vl LoRA）
+      try {
+        const { listLocalModels } = require('./local-inference');
+        const localStatus = listLocalModels();
+        const baseOk = localStatus.baseModelExists;
+        mdlLayerResults.push(baseOk
+          ? `✅ Qwen3-VL-32B-4bit MLX base 就绪（L5 Phase 1 多模态训练基底）`
+          : `⏳ Qwen3-VL-32B-4bit MLX base 未就绪（需下载到 ~/HomeAI/Models/mlx/Qwen3-VL-32B-4bit）`);
+        const hasVisionOllama = ollamaModels.some(m => /qwen3.vl/i.test(m));
+        mdlLayerResults.push(hasVisionOllama
+          ? `✅ qwen3-vl:32b-q4 Ollama 就绪（多模态推理 + describeImageWithLlava 主路径）`
+          : `⏳ qwen3-vl:32b-q4 Ollama 未就绪（拉取中或尚未 ollama pull）`);
+        const adapterLines = localStatus.adapters.map(a =>
+          a.ready ? `✅ ${a.role} adapter（${a.adapterName}）已训练` : `⏳ ${a.role} adapter 未训练`
+        );
+        const readyCount = localStatus.adapters.filter(a => a.ready).length;
+        mdlLayerResults.push(`L5 LoRA adapter（${readyCount}/3）：${adapterLines.join(' | ')}`);
+      } catch (_e) {}
     } catch (e) {
       mdlLayerResults.push(`⚠️ 本地模型检查异常：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
+    }
+
+    // M2c. L2 行为量化信号：正向 DPO 样本积累（家人积极反馈捕获）
+    try {
+      const posPath = path.join(learningDir, 'positive-dpo-samples.jsonl');
+      if (fs.existsSync(posPath)) {
+        const posLines = fs.readFileSync(posPath, 'utf8').split('\n').filter(l => l.trim());
+        const posEntries = posLines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        const phase2Pos = posEntries.filter(e => e.phase2_eligible).length;
+        mdlLayerResults.push(`✅ 正向 DPO 样本（L2 行为量化）：${posEntries.length} 条积极反馈信号 / phase2_eligible: ${phase2Pos}`);
+        if (posEntries.length > 0) {
+          const triggers = {};
+          for (const e of posEntries) { triggers[e.trigger || '未知'] = (triggers[e.trigger || '未知'] || 0) + 1; }
+          const top = Object.entries(triggers).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}×${v}`).join('、');
+          mdlLayerResults.push(`   触发词分布：${top}`);
+        }
+      }
+    } catch (e) {
+      mdlLayerResults.push(`⚪ 正向 DPO 样本检查跳过：${e.message.slice(0, 60)}`);
+    }
+
+    // M2d. L2 行为量化信号：Andy spec 成功模式待确认（7天无 bug）
+    try {
+      const taskRegPath = path.join(learningDir, 'task-registry.json');
+      if (fs.existsSync(taskRegPath)) {
+        const tasks = JSON.parse(fs.readFileSync(taskRegPath, 'utf8'));
+        const sevenDaysAgo = Date.now() - 7 * 24 * 3600000;
+        const pendingSuccess = tasks.filter(t =>
+          t.successPendingCheck === true &&
+          t.completedAt &&
+          new Date(t.completedAt).getTime() < sevenDaysAgo
+        );
+        if (pendingSuccess.length > 0) {
+          mdlLayerResults.push(`🟡 L2 成功模式待确认（${pendingSuccess.length} 条 7天前完成任务，尚未写 success_pattern）：`);
+          pendingSuccess.slice(0, 3).forEach(t => {
+            mdlLayerResults.push(`   - ${t.id} 完成于 ${(t.completedAt || '').slice(0, 10)}：${(t.title || t.requirement || '').slice(0, 60)}`);
+          });
+          mdlLayerResults.push('   → Andy 确认无 bug 后调 write_file 写入 decisions(type=success_pattern)');
+        } else {
+          mdlLayerResults.push('✅ L2 成功模式：暂无 7天前完成且待确认的 spec（successPendingCheck 队列为空）');
+        }
+      }
+    } catch (e) {
+      mdlLayerResults.push(`⚪ L2 成功模式检查跳过：${e.message.slice(0, 60)}`);
     }
 
     // M3. 模型能力评估提示（evaluate_local_model 已有完整实现）

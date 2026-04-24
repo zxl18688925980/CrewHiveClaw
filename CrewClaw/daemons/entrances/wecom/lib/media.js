@@ -12,6 +12,7 @@ const path = require('path');
 const axios = require('axios');
 const { execFile, execFileSync, execSync } = require('child_process');
 const { chromium } = require('playwright');
+const { callLocalMLX } = require('./local-inference');
 
 const INSTANCE_ROOT   = process.env.INSTANCE_ROOT || path.join(__dirname, '../../../../../..');
 const WHISPER_MODEL = path.join(INSTANCE_ROOT, 'Models/whisper/ggml-base.bin');
@@ -360,41 +361,33 @@ module.exports = function createMedia(logger) {
   }
 
   /**
-   * 图片视觉描述：qwen3.6 Ollama（主）→ GLM vision 云端（降级）
+   * 图片视觉描述：MLX Qwen3-VL-32B（主）→ DashScope qwen-vl-plus 云端（降级）
+   *
+   * 主路径：callLocalMLX('lucas', prompt, imagePath) → mlx_vlm.generate（本地 Qwen3-VL-32B-4bit）
+   *   - 支持角色专属 LoRA adapter（训练完成后自动切入）
+   *   - 无需 GGUF 转换，直接用 MLX 4-bit 量化模型推理
+   * 降级：DashScope qwen-vl-plus（本地推理失败时）
    */
   async function describeImageWithLlava(imagePath) {
-    const base64Image = fs.readFileSync(imagePath).toString('base64');
-    const ext = path.extname(imagePath).toLowerCase().replace('.', '') || 'jpeg';
-    const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
     const prompt = '请用中文详细描述这张图片的所有内容，包括文字、数字、地址、人物、物品、场景等，不要遗漏任何可见文字。';
     const VISION_REFUSAL_RE = /无法(直接)?查看|没有(实际的?)?图片数据|无法(分析|处理)(图片|图像)|cannot (view|see|analyze|process) (the )?image/i;
 
-    // 主：Ollama qwen3.6 原生多模态
+    // 主：本地 MLX Qwen3-VL-32B（callLocalMLX 自动处理 adapter / base model 路径）
     try {
-      const resp = await axios.post(
-        'http://127.0.0.1:11434/v1/chat/completions',
-        {
-          model: 'qwen3.6',
-          messages: [{ role: 'user', content: [
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-            { type: 'text', text: prompt },
-          ]}],
-          max_tokens: 512,
-          temperature: 0,
-        },
-        { timeout: 120000 }
-      );
-      const result = resp.data?.choices?.[0]?.message?.content?.trim();
+      const result = await callLocalMLX('lucas', prompt, imagePath, { maxTokens: 512, timeoutMs: 180000 });
       if (result && !VISION_REFUSAL_RE.test(result)) {
-        logger.info('qwen3.6 多模态描述成功');
+        logger.info('MLX Qwen3-VL 多模态描述成功');
         return result;
       }
-      if (result) logger.warn('qwen3.6 返回拒绝回复，降级 GLM', { preview: result.slice(0, 80) });
+      if (result) logger.warn('MLX Qwen3-VL 返回拒绝回复，降级云端', { preview: result.slice(0, 80) });
     } catch (e) {
-      logger.warn('qwen3.6 vision 失败，降级 GLM', { error: e.message });
+      logger.warn('MLX Qwen3-VL vision 失败，降级云端', { error: e.message });
     }
 
     // 降级：DashScope qwen-vl-plus
+    const ext = path.extname(imagePath).toLowerCase().replace('.', '') || 'jpeg';
+    const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+    const base64Image = fs.readFileSync(imagePath).toString('base64');
     const dashscopeKey = process.env.DASHSCOPE_API_KEY;
     if (!dashscopeKey) return null;
     try {
