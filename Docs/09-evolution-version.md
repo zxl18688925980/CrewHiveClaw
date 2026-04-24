@@ -4251,3 +4251,30 @@ TTS 是基础设施组件，SO_REUSEADDR 属于 Python socket 标准做法，系
 ### 越界干预记录
 
 基础设施参数修复（超时、fallback、compat），属于 L0 稳定性范畴，系统工程师直接修复。
+
+---
+
+## v728 (2026-04-25) Andy↔Lisa 模型互换 + Readme 内容清洁
+
+**干预类型**：模型配置变更（业主指令）+ 文档清洁
+
+**背景**：
+Andy（Gemini 3.1 Pro Preview）遭遇 250 次/天免费配额限制（Preview 状态），每天上午即耗尽，导致 Andy spec 设计频繁失败。Lisa 使用频率远低于 Andy，Gemini 配额对 Lisa 够用。
+
+**变更内容**：
+
+1. **Andy → GPT-5.4**（openai）：Andy spec 设计频率最高，切高频稳定模型；fallback → Sonnet 4.6 → Ollama
+2. **Lisa → Gemini 3.1 Pro Preview**（google）：Lisa 使用频率低，Gemini 配额可覆盖；fallback → Sonnet 4.6 → Ollama
+3. **andy-evaluator / skill-candidate-processor / skill-crystallization-evaluator / research-assistant** → gpt-5.4（跟随 Andy）
+4. **lisa-evaluator** → gemini-3.1-pro-preview（跟随 Lisa）
+
+**变更文件**：
+- `~/.openclaw/openclaw.json`（Andy/Lisa 及所有子 Agent 模型更新，不进 git）
+- `~/.openclaw/start-gateway.sh`（ANDY_PROVIDER/ANDY_MODEL/LISA_PROVIDER/LISA_MODEL 更新，不进 git）
+- `CLAUDE.md`（稳定区技术现实 + 宪法表更新）
+- `memory/MEMORY.md`（当前模型分工更新）
+- `Docs/00-project-overview.md`（6 处过时模型名称去特化：evaluator 表格/Coordinator 状态标注/设计哲学/路由图/云端 Agent L5 段落/env var 表格）
+
+### 越界干预记录
+
+模型切换为业主明确指令（2026-04-25）。配置文件修改属于系统工程师职责范围（不经 Andy 流水线）。文档清洁（去特化过时模型名）属于维护性工作，不影响架构设计。
