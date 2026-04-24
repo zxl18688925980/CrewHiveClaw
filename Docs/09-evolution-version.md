@@ -4216,3 +4216,38 @@ TTS 是基础设施组件，SO_REUSEADDR 属于 Python socket 标准做法，系
 ### 越界干预记录
 
 框架层实体建模（Scene）属于架构演化，系统工程师直接实施。send_message 门控重构属于修复 task 回调 bug，同时明确设计约束。
+
+---
+
+## v725 (2026-04-25) 流水线稳定性修复：超时/限流/schema 三项
+
+**干预类型**：基础设施配置修复（L0）
+
+**背景**：
+昨日流水线磕绊，日志分析发现三个独立故障点：
+1. Lucas `callGatewayAgent` 超时 180s，与 Andy Gemini 3.1 Pro 处理时长重合，触发 `⚠️ 系统应急模式`（昨日共 20 次）
+2. Lucas/Andy/Lisa 三个角色均无显式 fallback 配置，云端模型失败时继承 `defaults.primary = zai/GLM-5.1`（云端），不符合「本地模型兜底」设计意图；GLM-5.1 也超时后 `next=none`，请求完全失败
+3. Andy (Gemini 3.1 Pro) 每日 100+ 次 429 限流；另有 12 次 400 schema 拒绝，原因是 compat 配置缺 `maxTokensField: "max_tokens"`
+
+**变更内容**：
+
+1. **Lucas 超时 180s→300s**（`bot-connection.js`）：
+   - 5 处 `callGatewayAgent('lucas', ..., 180000, ...)` 全部改为 `300000`
+   - 对齐 `ask_andy` 的 MEDIUM 超时（300s），防止 Gateway 忙时误触应急模式
+
+2. **三角色 fallback 本地化**（`openclaw.json`）：
+   - Lucas / Andy / Lisa 的 `model` 字段从字符串改为 `{primary, fallbacks}` 对象
+   - fallback 统一设为 `ollama/homeai-assistant`（本地 Qwen3 36B MoE）
+   - openclaw 自动注册了 `ollama` provider 插件
+
+3. **Gemini 400 schema 修复**（`openclaw.json`）：
+   - `google/models/gemini-3.1-pro-preview` compat 新增 `"maxTokensField": "max_tokens"`
+   - Google Native API 用 `max_tokens` 而非 `max_completion_tokens`，缺此配置导致请求 schema 被拒
+
+**变更文件**：
+- `CrewClaw/daemons/entrances/wecom/lib/bot-connection.js`（超时 180s→300s，5 处）
+- `~/.openclaw/openclaw.json`（三角色 fallback + Gemini compat，不进 git）
+
+### 越界干预记录
+
+基础设施参数修复（超时、fallback、compat），属于 L0 稳定性范畴，系统工程师直接修复。
