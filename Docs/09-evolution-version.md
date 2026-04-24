@@ -4113,3 +4113,28 @@ openclaw.json 配置修复属于基础设施层运维操作，由系统工程师
 ### 越界干预记录
 
 wecom- 前缀导致 93006 属于框架层 bug（插件在 send_message 工具中未规范化 userId），系统工程师直接修复。群定位机制属于 HomeAI 实例层运维配置，由系统工程师直接配置。
+
+---
+
+## v722（2026-04-24）：session Map TTL 周期清理
+
+### 干预类型
+
+基础设施 bug 修复（L0 Gateway 内存泄漏根治）
+
+### 背景
+
+Gateway 内存持续增长（RSS 最高达 3.1GB）导致 OOM 崩溃、pipeline 卡壳。前次会话已将 `--max-old-space-size` 扩容至 12GB（治标）。本次修复根因：`agent_end` 未触发时（API 超时、OOM 中途崩溃），`sessionIntent` / `sessionModel` / `sessionPrompt` / `sessionSem` 等 9 个 session Map 的条目永久堆积，无任何 TTL 保护。
+
+### 变更内容
+
+`crewclaw-routing/index.ts`：
+- 新增 `sessionLastAccess = new Map<string, number>()`，记录每个 sessionKey 的最后活跃时间
+- `setInterval` 每 20 分钟扫描一次，对超过 2 小时未活跃的 key 调 `cleanupSessionNow()`，打 `[session-ttl]` 日志
+- `llm_input` 的 `sessionModel.set(...)` 旁边同步写 `sessionLastAccess.set(..., Date.now())`
+- `cleanupSessionMaps` 末尾同步 `sessionLastAccess.delete(sessionKey)` 防重复清理
+- `setInterval().unref()` 确保不阻止进程退出
+
+### 越界干预记录
+
+Gateway 内存管理属于框架基础设施，由系统工程师直接修复。
