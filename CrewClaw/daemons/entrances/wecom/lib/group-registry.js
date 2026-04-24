@@ -91,10 +91,21 @@ module.exports = function createGroupRegistry(logger, { HOMEAI_ROOT }) {
     }
   }
 
+  /**
+   * 获取群信息（含 name / positioning 等元数据）。
+   * 未找到返回 null；新群发现时 name/positioning 为空，调用方需容错。
+   */
+  function getGroupInfo(chatId) {
+    if (!chatId) return null;
+    const list = loadGroups();
+    return list.find(g => g.chatId === chatId) || null;
+  }
+
   return {
     loadGroups,
     saveGroups,
     registerGroup,
+    getGroupInfo,
     getDefaultGroup,
     getDefaultGroupChatId,
     setDefaultGroup,

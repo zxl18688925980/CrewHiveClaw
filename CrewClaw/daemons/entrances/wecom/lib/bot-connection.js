@@ -164,7 +164,9 @@ function startBotLongConnection() {
 
     // 身份标签（让 Lucas 知道是谁发的，含渠道信息）
     const member    = getOrgMembers()[fromUser];
-    const channel   = isGroup ? '群聊' : '私聊';
+    // 群消息：从注册表读取群名，未配置时降级为「群聊」（容错新群场景）
+    const groupInfo = isGroup && groupRegistry ? groupRegistry.getGroupInfo(chatId) : null;
+    const channel   = isGroup ? (groupInfo?.name || '群聊') : '私聊';
     const memberTag = member
       ? `【${channel}·${member.role}${member.name}】`
       : `【${channel}·${fromUser}】`;
@@ -287,7 +289,12 @@ function startBotLongConnection() {
       }
     }
 
-    const messageToLucas = `${memberTag}${lucasText}`;
+    // 群定位上下文：让 Lucas 知道当前群的场景，调整回复风格
+    // 新群（无 positioning）自动降级，不影响正常处理
+    const groupCtx = isGroup && groupInfo?.positioning
+      ? `[当前群：${groupInfo.name}，${groupInfo.positioning}]\n`
+      : '';
+    const messageToLucas = `${memberTag}${groupCtx}${lucasText}`;
 
     // wecomUserId 编码：crewclaw-routing 插件从 requesterSenderId 解析此格式
     // 群消息用 group:fromUser:msgId（per-message 独立 session），避免一条消息卡住后续所有群消息排队

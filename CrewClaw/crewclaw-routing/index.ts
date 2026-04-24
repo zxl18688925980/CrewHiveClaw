@@ -124,7 +124,7 @@ function wrapCodingTool(
       const HOME = process.env.HOME ?? "/";
       // Agent 门控：只有 Lisa 能用编码工具
       if (toolCtx.agentId && toolCtx.agentId !== IMPLEMENTOR_AGENT_ID) {
-        return { content: [{ type: "text", text: "该工具是 Lisa 专属编码工具。" }], details: { error: "wrong_agent" } };
+        return { content: [{ type: "text", text: "该工具是 Lisa 专属编码工具。" }], details: { error: "wrong_agent" }, isError: true };
       }
       // 写操作路径沙箱（与 write_file 一致）
       if (overrides.needsWriteSandbox && params.path) {
@@ -8959,6 +8959,7 @@ last_used: null
           return {
             content: [{ type: "text", text: `❌ trigger_development_pipeline 是前台 Agent 专属工具，${toolCtx.agentId} 不应调用。Andy 应使用：research_task → trigger_lisa_implementation。` }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
 
@@ -9249,6 +9250,7 @@ last_used: null
           return {
             content: [{ type: "text", text: `❌ report_bug 是前台 Agent 专属工具。` }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
 
@@ -9514,7 +9516,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ search_web 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ search_web 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const p = params as { query: string; purpose?: string };
         if (!DEEPSEEK_API_KEY) {
@@ -9572,6 +9574,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ ask_andy 是 Lucas 专属工具。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
         const p = params as { question: string; context?: string };
@@ -9630,6 +9633,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ ask_lisa 是 Lucas 专属工具。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
         const p = params as { question: string; context?: string };
@@ -9712,6 +9716,7 @@ last_used: null
           return {
             content: [{ type: "text", text: `❌ trigger_lisa_implementation 是 Andy 专属工具。Lucas 应使用 trigger_development_pipeline（功能需求）或 report_bug（Bug 修复）。` }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
 
@@ -10866,6 +10871,7 @@ last_used: null
           return {
             content: [{ type: "text", text: `❌ query_requirement_owner 是 Andy 专属工具。` }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
 
@@ -11151,6 +11157,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ report_implementation_issue 是 Lisa 专属工具。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
         const p = params as { issue: string; spec_section?: string; options?: string; requirement_id?: string; thread_id?: string; phase?: string };
@@ -11340,6 +11347,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ request_implementation_revision 是 Andy 专属工具。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
 
@@ -11447,6 +11455,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ trigger_lisa_integration 是 Andy 专属工具（Coordinator 模式集成阶段）。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
 
@@ -11555,6 +11564,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "Error: search_codebase 是 Andy 专用工具" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
 
@@ -11666,7 +11676,7 @@ last_used: null
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const allowedAgents = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (toolCtx.agentId && !allowedAgents.has(toolCtx.agentId)) {
-          return { content: [{ type: "text", text: "Error: write_file 是 Lucas/Andy/Lisa 专用工具" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "Error: write_file 是 Lucas/Andy/Lisa 专用工具" }], details: { error: "wrong_agent" }, isError: true };
         }
 
         const { content, append = false } = params as { path: string; content: string; append?: boolean };
@@ -11760,7 +11770,7 @@ last_used: null
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const allowedAgents = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (toolCtx.agentId && !allowedAgents.has(toolCtx.agentId)) {
-          return { content: [{ type: "text", text: "Error: patch_file 是 Lucas/Andy/Lisa 专用工具" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "Error: patch_file 是 Lucas/Andy/Lisa 专用工具" }], details: { error: "wrong_agent" }, isError: true };
         }
 
         const { old_string, new_string, replace_all = false } = params as { path: string; old_string: string; new_string: string; replace_all?: boolean };
@@ -11873,6 +11883,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ consult_lisa 是 Andy 专属工具。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
         const p = params as { question: string; requirement_id?: string };
@@ -11958,6 +11969,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ request_evaluation 是 Lisa 专属工具。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
         const p = params as { spec_summary: string; implementation_report: string; requirement_id?: string; thread_id?: string };
@@ -12079,6 +12091,7 @@ last_used: null
           return {
             content: [{ type: "text", text: "❌ request_andy_evaluation 是 Andy 专属工具。" }],
             details: { error: "wrong_agent" },
+            isError: true,
           };
         }
         const p = params as { spec_summary: string; original_symptom?: string; requirement_id?: string; thread_id?: string };
@@ -12185,7 +12198,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ follow_up_requirement 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ follow_up_requirement 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { requirement_summary, outcome, user_feedback, requirement_id } = params as {
           requirement_summary: string;
@@ -12239,7 +12252,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ alert_owner 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ alert_owner 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { reason, severity } = params as { reason: string; severity?: string };
         const icon = severity === "high" ? "🚨" : "⚠️";
@@ -12291,7 +12304,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== DESIGNER_AGENT_ID) {
-          return { content: [{ type: "text", text: "Error: restart_service 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "Error: restart_service 是 Andy 专用工具" }], details: { error: "wrong_agent" }, isError: true };
         }
 
         const { service, reason } = params as { service: string; reason: string };
@@ -12383,7 +12396,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId !== DESIGNER_AGENT_ID)
-          return { content: [{ type: "text", text: "Error: register_l4_task 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "Error: register_l4_task 是 Andy 专用工具" }], details: { error: "wrong_agent" }, isError: true };
         const { type, description: desc, can_stop = true } = params as { type: string; description: string; can_stop?: boolean };
         const taskId = `l4-${Date.now()}`;
         const task: L4Task = { id: taskId, type, description: desc, status: "running", started_at: new Date().toISOString(), completed_at: null, can_stop, agent: DESIGNER_AGENT_ID };
@@ -12414,7 +12427,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId !== DESIGNER_AGENT_ID)
-          return { content: [{ type: "text", text: "Error: complete_l4_task 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "Error: complete_l4_task 是 Andy 专用工具" }], details: { error: "wrong_agent" }, isError: true };
         const { task_id, status, summary } = params as { task_id: string; status: string; summary: string };
         const tasks = readL4Tasks();
         const idx = tasks.findIndex((t) => t.id === task_id);
@@ -12446,7 +12459,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId !== DESIGNER_AGENT_ID)
-          return { content: [{ type: "text", text: "Error: check_l4_control 是 Andy 专用工具" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "Error: check_l4_control 是 Andy 专用工具" }], details: { error: "wrong_agent" }, isError: true };
         const { task_id } = params as { task_id?: string };
         const ctrl = readL4Control();
         const taskStopped = task_id ? ctrl.stop_tasks.includes(task_id) : false;
@@ -12544,7 +12557,7 @@ last_used: null
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const allowedAgents = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (toolCtx.agentId && !allowedAgents.has(toolCtx.agentId)) {
-          return { content: [{ type: "text", text: `❌ flag_for_skill 不支持 ${toolCtx.agentId} 调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ flag_for_skill 不支持 ${toolCtx.agentId} 调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { pattern_name, description, suggested_form } = params as {
           pattern_name: string; description: string; suggested_form?: string;
@@ -12603,7 +12616,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ share_with_andy 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ share_with_andy 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { topic, content, source, implications } = params as {
           topic: string; content: string; source: string; implications?: string;
@@ -12654,7 +12667,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ propose_knowledge_tag 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ propose_knowledge_tag 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { visitor_user_id, tag, reason } = params as {
           visitor_user_id: string; tag: string; reason: string;
@@ -12840,7 +12853,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ query_member_profile 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ query_member_profile 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const p = params as { member_id: string };
         const shadowAgentId = p.member_id.startsWith("shadow-") ? p.member_id : `shadow-${p.member_id}`;
@@ -12938,7 +12951,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ record_outcome_feedback 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ record_outcome_feedback 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { outcome, outcome_note, decision_id } = params as {
           outcome: string;
@@ -13034,7 +13047,7 @@ last_used: null
       parameters: Type.Object({}),
       execute: async (_toolCallId, _params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ list_active_tasks 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ list_active_tasks 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const entries = readTaskRegistry();
         const active = entries.filter(e => e.status === "queued" || e.status === "running");
@@ -13100,7 +13113,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ cancel_task 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ cancel_task 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const p = params as { task_id?: string; keyword?: string };
         const entries = readTaskRegistry();
@@ -13179,7 +13192,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ select_spec_approach 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ select_spec_approach 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const p = params as { requirement_id: string; choice: string; reason?: string };
         const choiceId = p.choice.toUpperCase().trim();
@@ -13305,7 +13318,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ ack_task_delivered 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ ack_task_delivered 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const p = params as { task_id?: string; keyword?: string };
         const entries = readTaskRegistry();
@@ -13410,7 +13423,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ forward_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ forward_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { message, visitorCode } = params as { message: string; visitorCode: string };
         const intent = detectForwardIntent(message, visitorCode);
@@ -13480,7 +13493,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ send_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ send_message 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { userId, text } = params as { userId: string; text: string };
         // App 使用追踪：检测消息中是否包含家庭 App 链接（fire-and-forget，不阻塞发送）
@@ -13543,7 +13556,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ send_file 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ send_file 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { target, filePath, text } = params as { target: string; filePath: string; text?: string };
         // "group" 解析为家庭群 chatId，私聊直接用 userId
@@ -13594,7 +13607,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ send_voice 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ send_voice 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { target, text } = params as { target: string; text: string };
         try {
@@ -13745,7 +13758,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ recall_memory 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ recall_memory 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         const { query, scope = "all" } = params as { query: string; scope?: string };
         try {
@@ -13957,7 +13970,7 @@ last_used: null
       }),
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         if (toolCtx.agentId && toolCtx.agentId !== FRONTEND_AGENT_ID) {
-          return { content: [{ type: "text", text: `❌ gen_visitor_invite 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: `❌ gen_visitor_invite 是 Lucas 专属工具，${toolCtx.agentId} 不应调用。` }], details: { error: "wrong_agent" }, isError: true };
         }
         try {
           const wecomUrl = CHANNEL_BASE_URL || "https://wecom.homeai-wecom-zxl.top";
@@ -14072,7 +14085,7 @@ last_used: null
         // 仅三角色可用
         const SKILL_ALLOWED_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (!SKILL_ALLOWED_AGENTS.has(agentId)) {
-          return { content: [{ type: "text", text: "❌ skill_manage 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "❌ skill_manage 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" }, isError: true };
         }
         // 名称验证（Hermes 风格：^[a-z0-9][a-z0-9._-]*$，最长 64 字符）
         if (!/^[a-z0-9][a-z0-9._-]*$/.test(p.skill_name)) {
@@ -14414,7 +14427,7 @@ last_used: null
         const agentId = toolCtx.agentId ?? "";
         const SKILL_ALLOWED_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (!SKILL_ALLOWED_AGENTS.has(agentId)) {
-          return { content: [{ type: "text", text: "❌ skill_view 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "❌ skill_view 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" }, isError: true };
         }
         const HOME = process.env.HOME ?? "/";
         const agentLabel = agentId; // workspace 目录名 = agentId，框架层无需硬编码映射
@@ -14490,7 +14503,7 @@ last_used: null
         const agentId = toolCtx.agentId ?? "";
         const SKILL_ALLOWED_AGENTS = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (!SKILL_ALLOWED_AGENTS.has(agentId)) {
-          return { content: [{ type: "text", text: "❌ skills_list 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "❌ skills_list 仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" }, isError: true };
         }
         const HOME = process.env.HOME ?? "/";
         const agentLabel = agentId; // workspace 目录名 = agentId，框架层无需硬编码映射
@@ -14613,7 +14626,7 @@ last_used: null
         // Lucas 是家庭成员节点的配置者（节点归属影子），Andy/Lisa 是框架层小弟的管理者
         const ALLOWED = new Set([FRONTEND_AGENT_ID, DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (!ALLOWED.has(toolCtx.agentId ?? "")) {
-          return { content: [{ type: "text", text: "❌ nodes 工具仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "❌ nodes 工具仅 Lucas/Andy/Lisa 可用。" }], details: { error: "wrong_agent" }, isError: true };
         }
 
         const p = params as { action: string; nodeId?: string; command?: string };
@@ -14920,7 +14933,7 @@ last_used: null
       execute: async (_toolCallId, params): Promise<AgentToolResult<Record<string, unknown>>> => {
         const ALLOWED = new Set([DESIGNER_AGENT_ID, IMPLEMENTOR_AGENT_ID]);
         if (!ALLOWED.has(toolCtx.agentId ?? "")) {
-          return { content: [{ type: "text", text: "❌ session_todo 仅 Andy/Lisa 可用。" }], details: { error: "wrong_agent" } };
+          return { content: [{ type: "text", text: "❌ session_todo 仅 Andy/Lisa 可用。" }], details: { error: "wrong_agent" }, isError: true };
         }
         const p = params as { action: string; todos?: { id: string; content: string; status?: string }[]; item_id?: string; status?: string };
         const sessionKey = toolCtx.sessionKey ?? toolCtx.agentId ?? "default";

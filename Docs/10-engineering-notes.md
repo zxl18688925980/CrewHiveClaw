@@ -1186,3 +1186,47 @@ python3 -c "content=open('/path/to/AGENTS.md').read(); print(f'chars: {len(conte
 
 **状态**：活跃（直连 Google URL 已验证，不需要中转代理，2026-04-24）
 **确认日期**：2026-04-24
+
+---
+
+### OpenClaw Google Provider：`api` 类型必须为 `google-generative-ai`，否则 thought_signature 丢失导致 400
+
+**发现日期**：2026-04-24
+**影响范围**：所有使用 Gemini 2.5+/3.x 系列的 Agent（Andy / andy-evaluator / skill-candidate-processor / skill-crystallization-evaluator / research-assistant）
+
+**症状**：Agent 完成工具调用后，下一轮请求触发 Gemini 返回 `400 INVALID_ARGUMENT: Function call is missing a thought_signature in functionCall parts`，OpenClaw 将此包装为"couldn't generate a response"，SE 通知显示"无法生成回复"。单轮问答正常，多轮工具调用必崩。
+
+**根因**：
+- `openclaw.json` 的 Google provider 配置了 `"api": "openai-completions"`，走 OpenAI 兼容路径（`/v1beta/openai`）
+- OpenClaw 的 `sanitizeGoogleThinkingPayload`（处理 thought_signature 透传）只在 `model.api === "google-generative-ai"` 时执行
+- `openai-completions` 路径完全跳过 thought_signature 处理，导致 Gemini 3.1 Pro 的 `thought_signature` 在工具结果发回时丢失
+- Gemini 3.1 Pro（及 2.5+ 系列）要求每个工具调用的 functionCall part 携带 `thought_signature`，缺失即 400
+
+**正确配置**：
+```json
+"google": {
+  "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+  "apiKey": "...",
+  "api": "google-generative-ai",
+  "models": [{
+    "id": "models/gemini-3.1-pro-preview",
+    "name": "Gemini 3.1 Pro Preview",
+    "compat": { "supportsStore": false }
+  }]
+}
+```
+
+关键变化：
+1. `api`: `"openai-completions"` → `"google-generative-ai"`（激活 OpenClaw 原生 Gemini 路径）
+2. `baseUrl`: 去掉 `/openai` 后缀（原生 API 不走 `/v1beta/openai`，走 `/v1beta`）
+3. `compat.maxTokensField`: 移除（原生 API 使用自身字段名，无需覆盖）
+
+**验证命令**：
+```bash
+openclaw config validate
+# 重启后在 gateway.log 确认：
+# [reload] config hot reload applied (models.providers.google...)
+# 无 400 INVALID_ARGUMENT 错误
+```
+
+**注意**：`plugins.allow` 中保留 `"google"` 插件（OpenClaw google 扩展），`plugins.entries.google.enabled: true` 确保原生 google API 扩展加载。
