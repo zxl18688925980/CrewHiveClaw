@@ -102,6 +102,66 @@ const _lucasBehavioralRules   = loadInstanceConfig<{ commitmentRule: string; sil
 const _visitorRestrictions    = loadInstanceConfig<{ blockedTools: string[] }>("visitor-restrictions.json");
 const VISITOR_BLOCKED_TOOLS   = new Set(_visitorRestrictions.blockedTools);
 
+// ── 执行约束规则（工具契约：Andy 经验提炼 → 硬约束，不依赖模型记忆）────────────
+// 规则文件：~/HomeAI/Data/learning/enforcement-rules.json（Andy 通过 write_file 维护）
+// 60s TTL 缓存，无需重启 Gateway 即可热更新
+const ENFORCEMENT_RULES_PATH = join(PROJECT_ROOT, "data", "learning", "enforcement-rules.json");
+
+type EnforcementCondition =
+  | { type: "time_window"; blocked_hours: number[] }       // 按小时禁止（CST）
+  | { type: "param_contains"; param: string; value: string } // 参数包含特定值时禁止
+  | { type: "always" };                                     // 无条件禁止
+
+type EnforcementRule = {
+  id: string;
+  tool: string;
+  condition: EnforcementCondition;
+  action: "block";
+  reason: string;
+  created_by?: string;
+  active?: boolean;
+};
+
+let _enforcementRulesCache: EnforcementRule[] | null = null;
+let _enforcementRulesCacheAt = 0;
+const ENFORCEMENT_CACHE_TTL = 60_000; // 60s
+
+function loadEnforcementRules(): EnforcementRule[] {
+  const now = Date.now();
+  if (_enforcementRulesCache && now - _enforcementRulesCacheAt < ENFORCEMENT_CACHE_TTL) {
+    return _enforcementRulesCache;
+  }
+  try {
+    _enforcementRulesCache = existsSync(ENFORCEMENT_RULES_PATH)
+      ? (JSON.parse(readFileSync(ENFORCEMENT_RULES_PATH, "utf8")) as EnforcementRule[])
+      : [];
+  } catch (_e) {
+    _enforcementRulesCache = [];
+  }
+  _enforcementRulesCacheAt = now;
+  return _enforcementRulesCache;
+}
+
+function evaluateEnforcementCondition(
+  condition: EnforcementCondition,
+  params: Record<string, unknown>,
+): boolean {
+  switch (condition.type) {
+    case "time_window": {
+      const hourCST = (new Date().getUTCHours() + 8) % 24;
+      return condition.blocked_hours.includes(hourCST);
+    }
+    case "param_contains": {
+      const val = String(params[condition.param] ?? "");
+      return val.includes(condition.value);
+    }
+    case "always":
+      return true;
+    default:
+      return false;
+  }
+}
+
 // ── Agent 协作线程历史（Andy↔Lisa 多轮协作）────────────────────────────────
 const AGENT_THREAD_DIR    = join(PROJECT_ROOT, "data", "agent-threads");
 const AGENT_THREAD_STORE  = 20;   // 最多保留 20 轮
@@ -7802,6 +7862,19 @@ const crewclawRoutingPlugin = {
     // 所有实现必须通过 trigger_lisa_implementation 交给 Lisa。
     // write / edit 工具完全封锁；exec 工具检测写操作特征。
     api.on("before_tool_call", (event, ctx) => {
+      // ── 执行约束规则检查（工具契约：Andy 经验提炼的硬约束）─────────────────────
+      // 规则来自 Data/learning/enforcement-rules.json，60s 热更新，无需重启 Gateway
+      // Andy/Lisa/Lucas 全部受约束；访客禁令在后续独立处理
+      const enforcementRules = loadEnforcementRules();
+      for (const rule of enforcementRules) {
+        if (!rule.active) continue;
+        if (rule.tool !== event.toolName) continue;
+        if (evaluateEnforcementCondition(rule.condition, (event.params ?? {}) as Record<string, unknown>)) {
+          api.logger.info(`[enforcement] rule="${rule.id}" blocked ${event.toolName} agent=${ctx.agentId ?? "?"}`);
+          return { block: true, blockReason: `⚠️ 执行约束（${rule.id}）：${rule.reason}` };
+        }
+      }
+
       // ── 访客会话工具禁令（基础设施层强制，不依赖模型合规）────────────────────
       // 禁令列表在 config/visitor-restrictions.json 管理。
       // appendSystem 文字说明保留为「告知模型原因」的辅助手段。
