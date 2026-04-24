@@ -49,6 +49,7 @@ module.exports = function createBotConnection(logger, deps) {
     formatVideoInjection, scrapeWechatArticle, describeImageWithLlava,
     VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE,
     runMainMonitorLoop,
+    groupRegistry,
   } = deps;
 
   // _gatewayDownNotifiedAt is a mutable ref object { value: 0 }
@@ -80,6 +81,33 @@ function startBotLongConnection() {
   wsClient.on('authenticated', () => {
     logger.info('智能机器人认证成功，开始接收家庭消息');
     setGlobalBotReady(true);
+
+    // 首次启动：向默认群发送帮助消息
+    if (groupRegistry) {
+      const defaultChatId = groupRegistry.getDefaultGroupChatId();
+      if (defaultChatId) {
+        const defaultGroup = groupRegistry.getDefaultGroup();
+        if (!defaultGroup || !defaultGroup.helpSent) {
+          const helpText = `👋 大家好！我是启灵，家庭 AI 助手。\n\n` +
+            `你可以直接跟我聊天，或者 @我 提问。\n` +
+            `比如：\n` +
+            `• 问我问题、闲聊\n` +
+            `• 让我帮你做工具、修 bug\n` +
+            `• 发文件给我处理\n\n` +
+            `有事随时找我～`;
+          // 稍延迟发送，等 bot 完全就绪
+          setTimeout(async () => {
+            try {
+              await botSend(defaultChatId, helpText);
+              groupRegistry.markHelpSent(defaultChatId);
+              logger.info('首次启动帮助消息已发送到默认群', { chatId: defaultChatId });
+            } catch (e) {
+              logger.warn('首次启动帮助消息发送失败', { error: e?.message });
+            }
+          }, 3000);
+        }
+      }
+    }
   });
 
   wsClient.on('disconnected', () => {
@@ -107,6 +135,14 @@ function startBotLongConnection() {
       chatId,
       content: content.substring(0, 60)
     });
+
+    // 群消息时注册群到 group-registry
+    if (isGroup && chatId && groupRegistry) {
+      const isNew = groupRegistry.registerGroup(chatId, { fromUser, content: content.substring(0, 50) });
+      if (isNew) {
+        logger.info('Bot 发现新群，已注册', { chatId, fromUser });
+      }
+    }
 
     // 群消息去掉 @机器人 前缀
     // 注意：WeChat 不总是在 @名称后加空格，/^@\S+\s*/ 贪婪匹配会吃掉没有空格的中文内容

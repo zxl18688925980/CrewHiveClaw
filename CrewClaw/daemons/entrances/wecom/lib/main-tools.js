@@ -14,6 +14,7 @@
 
 const fs            = require('fs');
 const path          = require('path');
+const os            = require('os');
 const { execSync, execFileSync } = require('child_process');
 const axios         = require('axios');
 
@@ -21,6 +22,8 @@ module.exports = function createMainTools(logger, deps) {
   const { readAgentModelConfig, callAgentModel, nowCST, sendWeComFile, INSTANCE_ROOT,
           VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE,
           readTaskRegistry, writeTaskRegistry } = deps;
+
+  const CHROMA_API_BASE = 'http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections';
 
   // 剥离推理模型 <think>...</think> 块（MiniMax/GLM/DeepSeek-R1 等推理模型返回）
   function stripThink(text) {
@@ -1190,7 +1193,7 @@ async function executeMainTool(toolName, toolInput) {
       if (score === '✅') score = '⚠️';
     }
 
-    // 2. Gateway 可达性 + 延迟
+    // 2. Gateway 可达性 + 延迟 + 插件加载验证
     try {
       const gwStart = Date.now();
       const gwResp = await fetch('http://localhost:18789/health', { signal: AbortSignal.timeout(10000) });
@@ -1204,6 +1207,21 @@ async function executeMainTool(toolName, toolInput) {
       } else {
         results.push(`✅ Gateway：可达，延迟 ${gwMs}ms`);
       }
+      // 插件加载验证：/health 不含插件状态，必须独立检查 gateway.log
+      try {
+        const gwLogPath = path.join(os.homedir(), '.openclaw', 'logs', 'gateway.log');
+        const gwLog = execSync(`tail -n 50 "${gwLogPath}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
+        const readyLine = gwLog.split('\n').filter(l => l.includes('[gateway]') && l.includes('ready')).pop() || '';
+        if (readyLine.includes('crewclaw-routing')) {
+          results.push(`✅ Gateway 插件：crewclaw-routing 已加载`);
+        } else if (readyLine) {
+          results.push(`❌ Gateway 插件：crewclaw-routing 未在 ready 行（仅 ${readyLine.match(/ready\s*\(([^)]+)\)/)?.[1] || '?'}）`);
+          score = '❌';
+        } else {
+          // 无 ready 行 = Gateway 长期运行未重启，不代表插件有问题，已通过 Check 11 错误扫描
+          results.push(`✅ Gateway 插件：运行中（无近期重启日志）`);
+        }
+      } catch (_e) { /* gateway.log 读取失败，静默 */ }
     } catch (e) {
       results.push(`❌ Gateway：不可达（${e.message.slice(0, 50)}）`);
       score = '❌';
@@ -1212,7 +1230,7 @@ async function executeMainTool(toolName, toolInput) {
     // 3. ChromaDB 可达性 + 延迟
     try {
       const chrStart = Date.now();
-      const chrResp = await fetch(`${CHROMA_API_BASE}/heartbeat`, { signal: AbortSignal.timeout(10000) });
+      const chrResp = await fetch('http://localhost:8001/api/v2/heartbeat', { signal: AbortSignal.timeout(10000) });
       const chrMs = Date.now() - chrStart;
       if (!chrResp.ok) {
         results.push(`❌ ChromaDB：响应 ${chrResp.status}（${chrMs}ms）`);
@@ -1246,23 +1264,26 @@ async function executeMainTool(toolName, toolInput) {
       if (score === '✅') score = '⚠️';
     }
 
-    // 5. 磁盘空间
+    // 5. 磁盘空间（用 df -k 读实际可用块数，避免 macOS /System/Volumes/Data 虚拟卷 Use%=100% 误报）
     try {
-      const dfRaw = execSync(`df -h "${INSTANCE_ROOT}"`, { encoding: 'utf8', timeout: 5000 });
-      const dfLine = dfRaw.split('\n').find(l => l.includes('/'));
+      const dfRaw = execSync(`df -k "${INSTANCE_ROOT}"`, { encoding: 'utf8', timeout: 5000 });
+      const dfLine = dfRaw.split('\n').slice(1).find(l => l.trim().length > 0);
       if (dfLine) {
         const parts = dfLine.trim().split(/\s+/);
-        const usePct = parts[parts.length - 1];
-        const avail = parts[parts.length - 2];
-        const pct = parseInt(usePct);
-        if (pct > 95) {
-          results.push(`❌ 磁盘：已用 ${usePct}，仅剩 ${avail}（严重不足）`);
+        // df -k 列：Filesystem  1K-blocks  Used  Available  Capacity  Mounted
+        const availKB = parseInt(parts[3]);
+        const usedKB = parseInt(parts[2]);
+        const totalKB = usedKB + availKB;
+        const availGB = (availKB / 1024 / 1024).toFixed(1);
+        const usePct = totalKB > 0 ? Math.round(usedKB / totalKB * 100) : 0;
+        if (availKB < 5 * 1024 * 1024) {   // < 5GB
+          results.push(`❌ 磁盘：已用 ${usePct}%，仅剩 ${availGB}GB（严重不足）`);
           score = '❌';
-        } else if (pct > 85) {
-          results.push(`⚠️ 磁盘：已用 ${usePct}，剩余 ${avail}`);
+        } else if (availKB < 20 * 1024 * 1024) {  // < 20GB
+          results.push(`⚠️ 磁盘：已用 ${usePct}%，剩余 ${availGB}GB`);
           if (score === '✅') score = '⚠️';
         } else {
-          results.push(`✅ 磁盘：已用 ${usePct}，剩余 ${avail}`);
+          results.push(`✅ 磁盘：已用 ${usePct}%，剩余 ${availGB}GB`);
         }
       }
     } catch (e) {
@@ -1333,7 +1354,7 @@ async function executeMainTool(toolName, toolInput) {
     // 8. launchd 服务状态（Gateway + Ollama，不走 PM2）
     try {
       const ldRaw = execSync('launchctl list 2>&1', { timeout: 5000, encoding: 'utf8' });
-      const LAUNCHD_SVCS = ['ai.openclaw.gateway', 'com.ollama.ollama'];
+      const LAUNCHD_SVCS = ['ai.openclaw.gateway']; // Ollama 已在 Check 4 通过 HTTP 验证可达性，launchd label 不固定，跳过
       for (const svc of LAUNCHD_SVCS) {
         const line = ldRaw.split('\n').find(l => l.includes(svc));
         if (!line) {
@@ -1409,6 +1430,30 @@ async function executeMainTool(toolName, toolInput) {
         if (parts.length > 0 && score === '✅') score = '⚠️';
       }
     } catch (_e) { /* 日志扫描失败，静默跳过 */ }
+
+    // 11. Gateway 日志错误扫描（近 1h）
+    // 专门检测插件加载失败 / ParseError 等 /health 看不到的隐蔽故障
+    try {
+      const gwLogPath = path.join(os.homedir(), '.openclaw', 'logs', 'gateway.log');
+      const gwErrRaw = execSync(`tail -n 300 "${gwLogPath}" 2>/dev/null`, { encoding: 'utf8', timeout: 5000 });
+      const nowMs = Date.now();
+      let pluginFails = 0, parseErrors = 0;
+      for (const line of gwErrRaw.split('\n')) {
+        const tsMatch = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+        if (tsMatch && (nowMs - new Date(tsMatch[1]).getTime()) > 3600000) continue;
+        if (/failed to load|plugin.*failed|plugins.*failed/i.test(line)) pluginFails++;
+        if (/ParseError|SyntaxError|Unterminated/i.test(line)) parseErrors++;
+      }
+      if (pluginFails > 0 || parseErrors > 0) {
+        const parts = [];
+        if (pluginFails > 0) parts.push(`插件加载失败×${pluginFails}`);
+        if (parseErrors > 0) parts.push(`ParseError×${parseErrors}`);
+        results.push(`❌ Gateway日志：${parts.join('，')}（近1h）—— Lucas 当前可能裸跑`);
+        score = '❌';
+      } else {
+        results.push(`✅ Gateway日志：无插件加载错误（近1h）`);
+      }
+    } catch (_e) { /* gateway.log 扫描失败，静默跳过 */ }
 
     const out = results.join('\n');
     return `## L0 基础设施稳定性 ${score}\n\n${out}`;

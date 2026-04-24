@@ -56,6 +56,7 @@ const _demoRoutesFactory = require('./lib/demo-routes');
 const _seDashboardFactory = require('./lib/se-dashboard');
 const _lucasRoutesFactory = require('./lib/lucas-routes');
 const _botConnectionFactory = require('./lib/bot-connection');
+const _groupRegistryFactory = require('./lib/group-registry');
 let _mu;  // 由 initMsgUtils() 填充
 
 // ── 时区统一：所有时间戳使用 CST（UTC+8）──
@@ -118,6 +119,7 @@ const groupBotLastSend = new Map(); // chatId -> timestamp
 const GROUP_BOT_MIN_INTERVAL_MS = 5000;
 
 let startBotLongConnection;  // 由 initBotConnection() 填充
+let groupRegistry;           // 由 initGroupRegistry() 填充
 
 // ─── 全局路径常量（必须在任何函数定义之前）────────────────────────────────────
 const INSTANCE_ROOT     = process.env.INSTANCE_ROOT || path.join(__dirname, '../../../../..');
@@ -252,6 +254,9 @@ function initLucasRoutes() {
     loadInvites, isInviteValid, visitorPendingMessages,
   }));
 }
+function initGroupRegistry() {
+  groupRegistry = _groupRegistryFactory(logger, { HOMEAI_ROOT: INSTANCE_ROOT });
+}
 function initBotConnection() {
   startBotLongConnection = _botConnectionFactory(logger, {
     WECOM_BOT_ID, WECOM_BOT_SECRET, INSTANCE_ROOT, PORT, WECOM_OWNER_ID,
@@ -277,6 +282,7 @@ function initBotConnection() {
     formatVideoInjection, scrapeWechatArticle, describeImageWithLlava,
     VIDEO_URL_RE, DOUYIN_URL_RE, FRAME_ANALYSIS_RE,
     runMainMonitorLoop,
+    groupRegistry,
   });
 }
 
@@ -756,6 +762,7 @@ initAgentClient();
 initWecomApi();
 initMainTools();
 initLoops();
+initGroupRegistry();
 initBotConnection();
 initLucasRoutes();
 
@@ -816,8 +823,9 @@ app.post('/api/wecom/send-message', async (req, res) => {
   // 非法 userId 过滤：系统会话 / UUID / 测试用户 → 静默跳过，不发企微
   // 注意：'group' 已在上方处理，不再跳过
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!isGroupSend && (userId.startsWith('system') || userId === 'unknown' || userId === 'test' ||
-      userId === 'owner' || userId === 'heartbeat-cron' ||
+  if (!isGroupSend && (userId.startsWith('system') || userId.startsWith('agent:') ||
+      userId === 'unknown' || userId === 'test' ||
+      userId === 'owner' || userId === 'heartbeat-cron' || userId.endsWith('-heartbeat') ||
       UUID_RE.test(userId))) {
     logger.info('send-message: 跳过非法 userId', { userId, textLen: text.length });
     return res.json({ success: true, skipped: true, reason: 'non-human-user' });
@@ -873,6 +881,13 @@ process.on('uncaughtException', (err) => {
   logger.error('uncaughtException（已拦截，不 crash）', { error: err.message, stack: err.stack });
 });
 
+// ── 模块级 interval ID：防止 PM2 重启时多次注册定时器 ────────────────────────
+let _lucasLoopIntervalId = null;
+let _mainMonitorIntervalId = null;
+let _andyHbIntervalId = null;
+let _mainWeeklyIntervalId = null;
+let _stuckCheckIntervalId = null;
+
 app.listen(PORT, () => {
   logger.info('企业微信入口已启动', { port: PORT });
   console.log(`企业微信入口运行在 http://localhost:${PORT}`);
@@ -886,7 +901,8 @@ app.listen(PORT, () => {
   // 启动 Lucas 主动循环（启动后延迟 5 分钟首次触发，避免和启动流程冲突）
   setTimeout(() => {
     runLucasProactiveLoop();
-    setInterval(runLucasProactiveLoop, 60 * 60 * 1000);
+    if (_lucasLoopIntervalId) clearInterval(_lucasLoopIntervalId);
+    _lucasLoopIntervalId = setInterval(runLucasProactiveLoop, 60 * 60 * 1000);
   }, 5 * 60 * 1000);
   logger.info('Lucas 主动循环已注册', { intervalMinutes: 60 });
 
@@ -894,7 +910,8 @@ app.listen(PORT, () => {
   if (WECOM_OWNER_ID) {
     setTimeout(() => {
       runMainMonitorLoop();
-      setInterval(runMainMonitorLoop, 4 * 60 * 60 * 1000);
+      if (_mainMonitorIntervalId) clearInterval(_mainMonitorIntervalId);
+      _mainMonitorIntervalId = setInterval(runMainMonitorLoop, 4 * 60 * 60 * 1000);
     }, 10 * 60 * 1000);
     logger.info('Main 监控循环已注册', { intervalHours: 4, 协议: '告警级别3紧急/告警级别2日报/告警级别1静默' });
   }
@@ -902,7 +919,8 @@ app.listen(PORT, () => {
   // Andy HEARTBEAT：每天 23:00-23:30 CST 固定窗口，每 5 分钟检查一次是否到窗口
   // 夜间批量模式：收集全天信号 → Andy 综合规划 → 逐条提交 task-registry.json
   let _andyHbLastDate = '';
-  setInterval(() => {
+  if (_andyHbIntervalId) clearInterval(_andyHbIntervalId);
+  _andyHbIntervalId = setInterval(() => {
     const cstNow = new Date(Date.now() + 8 * 3600000); // UTC+8
     const h = cstNow.getUTCHours(), m = cstNow.getUTCMinutes();
     const dateStr = cstNow.toISOString().slice(0, 10);
@@ -915,7 +933,8 @@ app.listen(PORT, () => {
 
   // Main 周度自动评估：每周日 22:00-22:30 CST，每 5 分钟检查一次
   let _mainWeeklyLastDate = '';
-  setInterval(() => {
+  if (_mainWeeklyIntervalId) clearInterval(_mainWeeklyIntervalId);
+  _mainWeeklyIntervalId = setInterval(() => {
     const cstNow = new Date(Date.now() + 8 * 3600000); // UTC+8
     const day = cstNow.getUTCDay(); // 0=Sunday
     const h = cstNow.getUTCHours(), m = cstNow.getUTCMinutes();
@@ -976,7 +995,8 @@ app.listen(PORT, () => {
   })();
 
   // ── Layer 3：周期性卡住检查（每 30 分钟，超过 2 小时未完成通知 SE）──────
-  setInterval(() => {
+  if (_stuckCheckIntervalId) clearInterval(_stuckCheckIntervalId);
+  _stuckCheckIntervalId = setInterval(() => {
     try {
       const entries = readTaskRegistry();
       const now = Date.now();

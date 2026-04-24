@@ -13,6 +13,7 @@ const envVars = {
   HOMEAI_ROOT:                process.env.HOMEAI_ROOT         || path.join(require('os').homedir(), 'HomeAI'),
   ZAI_API_KEY:                process.env.ZHIPU_API_KEY,  // OpenClaw zai provider
   ZHIPU_API_KEY:              process.env.ZHIPU_API_KEY,  // OpenCode zai provider
+  DASHSCOPE_API_KEY:          process.env.DASHSCOPE_API_KEY || 'sk-80e1f099ac224496a00e9cdc79ccad06',  // 阿里视觉 qwen-vl-plus（图片识别降级）
   DEEPSEEK_API_KEY:           process.env.DEEPSEEK_API_KEY,
   ANTHROPIC_API_KEY:          process.env.ANTHROPIC_API_KEY,  // Main 系统工程师通道（Claude）
   WECOM_CORP_ID:              process.env.WECOM_CORP_ID,

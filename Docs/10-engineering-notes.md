@@ -1150,3 +1150,39 @@ python3 -c "content=open('/path/to/AGENTS.md').read(); print(f'chars: {len(conte
 
 **状态**：活跃（index.ts 机制3 已实装，2026-04-23 编译验证通过）
 **确认日期**：2026-04-23
+
+---
+
+### OpenClaw 自定义 openai-completions provider 发 store/max_completion_tokens 给 Google 导致 400
+
+**场景**：在 `openclaw.json` 中配置 Google Gemini API（`api: "openai-completions"`，baseUrl 指向 `generativelanguage.googleapis.com/v1beta/openai`），通过 `before_model_resolve` hook 路由 Lucas → google provider。
+
+**现象**：Lucas 每次回复「⚠️ Agent couldn't generate a response. Please try again.」，OpenClaw 日志 `providerRuntimeFailureKind: "schema"`，`rawErrorPreview: "400 status code (no body)"`。Google API 实际报错：`Invalid JSON payload received. Unknown name "store": Cannot find field.`
+
+**根因**：OpenClaw 的 `provider-model-compat-Dsxuyzi4.js` 对 `openai-completions` 类型的自定义 provider 自动检测 `supportsStore: true`（OpenAI 专有字段）和 `maxTokensField: "max_completion_tokens"`（GPT-5 系列专有字段）。两者都被 Google API 拒绝：
+- `store: false` → Google：`Unknown name "store"`
+- `max_completion_tokens` → Google 需要 `max_tokens`
+
+**修复**：在 `openclaw.json` 的 Google provider 模型定义里显式覆盖 compat：
+```json
+{
+  "id": "models/gemini-3.1-pro-preview",
+  "name": "Gemini 3.1 Pro Preview",
+  "compat": {
+    "supportsStore": false,
+    "maxTokensField": "max_tokens"
+  }
+}
+```
+
+**附注**：调查过程中还发现：
+- `before_model_resolve` hook 在工具构建（line ~5604）之后才运行（line ~8195），工具 schema 清洗实际由 `normalizeToolParameters`（provider=google 时调 `cleanSchemaForGemini`）完成，并非 `normalizeGeminiToolSchemas`（那是另一个未触发的代码路径）
+- OpenClaw dist 文件里的 `GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS` 未包含 `if`/`then`/`else`（PR #70497 尚未合并），已手动补丁（但 400 的真实根因是 `store` 字段，不是 schema keywords）
+- `agent-client.js` 的 `readAgentModelConfig` 有 `split('/')` bug（截断含斜杠的 model ID 如 `models/gemini-3.1-pro-preview`）→ 已修复为 `indexOf('/')`（fallback 路径用）
+
+**完整验证结论（2026-04-24 补充）**：
+
+`buildInlineProviderModels` 正确地从 provider config 中继承 `baseUrl`（含 Google URL `generativelanguage.googleapis.com`），并从 model 定义中继承 `compat`，两者都传入 `detectOpenAICompletionsCompat(model)`。Google URL 的 `endpointClass=google-generative-ai`，由此 `usesExplicitProxyLikeEndpoint=true`（非 OpenAI 原生端点），`supportsStore` 自动检测为 `false`。加上 `compat.supportsStore: false` 显式覆盖，两路保险——直连 `generativelanguage.googleapis.com` 无需任何代理即可工作。调试阶段通过本地 Python 代理（127.0.0.1:19999）验证的结论与直连结果一致，代理已停止，baseUrl 已改回真实 Google URL。
+
+**状态**：活跃（直连 Google URL 已验证，不需要中转代理，2026-04-24）
+**确认日期**：2026-04-24

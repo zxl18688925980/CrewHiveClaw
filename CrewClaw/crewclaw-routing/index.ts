@@ -155,6 +155,14 @@ let lastProactiveDispatchAt              = 0;
 const BLIND_SPOT_DISTILL_COOLDOWN_MS     = 4 * 60 * 60 * 1000;
 const lastBlindSpotDistillTrigger        = new Map<string, number>();
 const KUZU_PYTHON3_BIN    = "/opt/homebrew/opt/python@3.11/bin/python3.11";
+const phaseLabels: Record<string, string> = {
+  queued: "排队中",
+  planning: "Andy 设计中",
+  implementing: "Lisa 实现中",
+  verifying: "验收中",
+  delivered: "已交付",
+  completed: "已完成",
+};
 // Andy 事件驱动反思冷却：spec 反思 6h，实现阻塞反思 4h
 let andySpecReflectLastRun              = 0;
 let andyBlockerReflectLastRun           = 0;
@@ -7387,14 +7395,6 @@ const crewclawRoutingPlugin = {
               return aUrgent - bUrgent; // 紧急任务排前
             });
           if (runningTasks.length > 0) {
-            const phaseLabels: Record<string, string> = {
-              queued: "排队中",
-              planning: "Andy 设计中",
-              implementing: "Lisa 实现中",
-              verifying: "验收中",
-              delivered: "已交付",
-              completed: "已完成",
-            };
             const taskLines = runningTasks.map(t => {
               const agoMin = Math.round((Date.now() - new Date(t.submittedAt).getTime()) / 60_000);
               const statusLabel = t.status === "queued" ? "排队中" : (phaseLabels[t.currentPhase ?? ""] ?? "进行中");
@@ -13029,7 +13029,7 @@ last_used: null
       description: [
         "Lucas 专属工具：查看当前排队或进行中的开发任务列表。",
         "当家人问「Andy 在做什么」「上个任务做完了吗」「有什么任务在跑」时调用。",
-        "返回任务 ID、需求描述、提交时间、状态（queued/running/completed/cancelled）和最近状态变更时间。",
+        "返回任务 ID、需求描述、提交时间、状态（queued/running/completed）和最近状态变更时间。",
       ].join("\n"),
       parameters: Type.Object({}),
       execute: async (_toolCallId, _params): Promise<AgentToolResult<Record<string, unknown>>> => {
@@ -13038,7 +13038,7 @@ last_used: null
         }
         const entries = readTaskRegistry();
         const active = entries.filter(e => e.status === "queued" || e.status === "running");
-        const recent = entries.filter(e => e.status === "completed" || e.status === "cancelled").slice(-3);
+        const recent = entries.filter(e => e.status === "completed").slice(-3);
         const all = [...active, ...recent];
         if (all.length === 0) {
           return { content: [{ type: "text", text: "当前没有进行中的开发任务。" }], details: { tasks: [] } };

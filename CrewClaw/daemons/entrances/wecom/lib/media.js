@@ -394,25 +394,25 @@ module.exports = function createMedia(logger) {
       logger.warn('qwen3.6 vision 失败，降级 GLM', { error: e.message });
     }
 
-    // 降级：GLM vision
-    const zhipuKey = process.env.ZAI_API_KEY || process.env.ZHIPU_API_KEY;
-    if (!zhipuKey) return null;
+    // 降级：DashScope qwen-vl-plus
+    const dashscopeKey = process.env.DASHSCOPE_API_KEY;
+    if (!dashscopeKey) return null;
     try {
       const resp = await axios.post(
-        'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+        'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
         {
-          model: 'glm-4v-flash',
+          model: 'qwen-vl-plus',
           messages: [{ role: 'user', content: [
             { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
             { type: 'text', text: prompt },
           ]}],
           max_tokens: 500,
         },
-        { headers: { Authorization: `Bearer ${zhipuKey}`, 'Content-Type': 'application/json' }, timeout: 30000 }
+        { headers: { Authorization: `Bearer ${dashscopeKey}`, 'Content-Type': 'application/json' }, timeout: 30000 }
       );
       return resp.data?.choices?.[0]?.message?.content?.trim() || null;
     } catch (e) {
-      logger.warn('GLM vision 失败', { error: e.message });
+      logger.warn('DashScope vision 失败', { error: e.message });
       return null;
     }
   }

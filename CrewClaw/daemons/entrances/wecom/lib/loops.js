@@ -231,7 +231,18 @@ async function runLucasProactiveLoop() {
       logger.info('Lucas 主动上报超时任务（批量合并）', { count: staleTasks.length, userId: targetUserId });
       callGatewayAgent('lucas', batchMessage, targetUserId)
         .then(reply => logger.info('Lucas 超时任务批量上报完成', { count: staleTasks.length, reply: (reply || '').slice(0, 100) }))
-        .catch(e => logger.error('Lucas 超时任务批量上报失败', { count: staleTasks.length, error: e.message }));
+        .catch(e => {
+          logger.error('Lucas 超时任务批量上报失败', { count: staleTasks.length, error: e.message });
+          // 降级：直接 notify-engineer，确保 SE 至少收到原始超时任务列表
+          const fallbackMsg = `【超时任务上报降级】Lucas Gateway 调用失败（${e.message.slice(0, 60)}），以下任务超时未完成，请 SE 人工跟进：
+
+${batchMessage}`;
+          fetch(`http://localhost:${PORT}/api/wecom/notify-engineer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'intervention', fromAgent: 'main', message: fallbackMsg }),
+          }).catch(ne => logger.error('降级 notify-engineer 也失败', { error: ne.message }));
+        });
     }
 
     if (pendingAck.length === 0 && staleTasks.length === 0) {

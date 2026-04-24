@@ -22,7 +22,7 @@ const express = require('express');
 const fs      = require('fs');
 const path    = require('path');
 
-const CHROMA_API_BASE = 'http://localhost:8000/api/v1/collections';
+const CHROMA_API_BASE = 'http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections';
 
 module.exports = function createLucasRoutes(logger, {
   INSTANCE_ROOT, PORT, WECOM_OWNER_ID,
