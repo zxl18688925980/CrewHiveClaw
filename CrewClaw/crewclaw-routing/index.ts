@@ -1133,13 +1133,23 @@ async function chromaAdd(
   metadata: Record<string, string | number | boolean>,
   embedding: number[],
 ): Promise<void> {
-  const colId = await getChromaCollectionId(collection);
-  const resp = await fetch(`${CHROMA_BASE}/${colId}/add`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: [id], embeddings: [embedding], documents: [document], metadatas: [metadata] }),
-  });
-  if (!resp.ok) throw new Error(`ChromaDB add failed: ${resp.status}`);
+  const attempt = async () => {
+    const colId = await getChromaCollectionId(collection);
+    const resp = await fetch(`${CHROMA_BASE}/${colId}/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [id], embeddings: [embedding], documents: [document], metadatas: [metadata] }),
+    });
+    if (!resp.ok) throw new Error(`ChromaDB add failed: ${resp.status}`);
+  };
+  try {
+    await attempt();
+  } catch (_e) {
+    // 单次重试：ChromaDB 短暂不可达（fetch failed / timeout），500ms 后再试一次
+    await new Promise(r => setTimeout(r, 500));
+    chromaCollectionIds.delete(collection); // 清缓存，防止重启后 ID 变化
+    await attempt();
+  }
 }
 
 async function chromaQuery(
