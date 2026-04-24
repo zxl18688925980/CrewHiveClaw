@@ -2995,6 +2995,9 @@ async function callGatewayAgent(
   threadId?: string,   // 可选：多轮协作线程 ID，传入后自动注入历史并写回
   callerAgentId?: string,  // 可选：发起方 Agent ID，用于跨 Agent 通信时避免身份透传
 ): Promise<string> {
+  // 层 2 限速：Andy 的所有调用路径（流水线/ask_andy/验收）统一节流，防 Gemini RPM 429
+  if (agentId === DESIGNER_AGENT_ID) await throttleAndy();
+
   const historyMessages = threadId ? buildAgentThreadMessages(threadId) : [];
   const messages = [...historyMessages, { role: "user", content: message }];
 
@@ -3414,13 +3417,31 @@ async function pushEventDriven(text: string, userId: string, success: boolean, f
 //   推 1：Andy 规划完成（预告 Lisa 正在实现）
 //   推 2：Lucas 验收后的最终消息（降级时为 Lisa 原始报告）
 
-// ── Andy 并发限速（防止 MiniMax 级联超时）────────────────────────────
-// MiniMax 并发请求全部 300s 超时时会导致 Gateway session pool 腐化。
-// 信号量：最多同时跑 MAX_ANDY_CONCURRENT 个协作链，超出的排队等待（不丢弃）。
-// 暂定串行（=1），稳定后再评估是否放开。
+// ── Andy 两层限速 ──────────────────────────────────────────────────────
+//
+// 层 1（流水线串行）：保证同时只有 1 条 trigger_development_pipeline 协作链在跑，
+//   超出的需求排队等待，不丢弃。与模型无关，防止并行 spec 互相干扰。
+//
+// 层 2（API 调用节流）：callGatewayAgent 面向 Andy 的任何调用（流水线/ask_andy/验收）
+//   之间强制保留最小间隔，避免短时间内爆发多个请求触发 Gemini Preview 的 RPM 限额（5~10 RPM）。
+//   间隔通过 ANDY_API_MIN_INTERVAL_MS 环境变量配置，默认 12s（对应 5 RPM）。
+//   只引入等待，不取消请求；小弟（andy-evaluator 等）独立走各自配额，不在此控制。
+//
 const MAX_ANDY_CONCURRENT = 1;
 let andyRunningCount = 0;
 const andyQueue: Array<() => void> = [];
+
+const ANDY_API_MIN_INTERVAL_MS = parseInt(process.env.ANDY_API_MIN_INTERVAL_MS ?? "12000", 10);
+let lastAndyCallAt = 0;
+
+async function throttleAndy(): Promise<void> {
+  const wait = ANDY_API_MIN_INTERVAL_MS - (Date.now() - lastAndyCallAt);
+  if (wait > 0) {
+    logger.info(`[andy-throttle] spacing ${wait}ms before next Andy API call`);
+    await new Promise<void>(r => setTimeout(r, wait));
+  }
+  lastAndyCallAt = Date.now();
+}
 
 function andyAcquire(): Promise<void> {
   return new Promise((resolve) => {
