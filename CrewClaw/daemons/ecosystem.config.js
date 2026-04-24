@@ -134,22 +134,14 @@ module.exports = {
       combine_logs: true,
       merge_logs: true
     },
-    {
-      name: 'cloudflared-tunnel',
-      script: '/opt/homebrew/bin/cloudflared',
-      args: 'tunnel run homeai-wecom',
-      cwd: __dirname,
-      instances: 1,
-      exec_mode: 'fork',
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '100M',
-      restart_delay: 3000,
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: path.join(LOGS_DIR, 'cloudflared-error.log'),
-      out_file:   path.join(LOGS_DIR, 'cloudflared-out.log'),
-      combine_logs: true,
-      merge_logs: true
-    }
+    // cloudflared-tunnel 已迁移到 launchd 管理（2026-04-24）
+    // label: com.homeai.cloudflared
+    // plist: ~/Library/LaunchAgents/com.homeai.cloudflared.plist
+    // 不再由 PM2 管理，PM2 daemon 崩溃不影响公网隧道
+    // {\n    //   name: 'cloudflared-tunnel',
+    //   script: '/opt/homebrew/bin/cloudflared',
+    //   args: 'tunnel run homeai-wecom',
+    //   ...
+    // }
   ]
 };
