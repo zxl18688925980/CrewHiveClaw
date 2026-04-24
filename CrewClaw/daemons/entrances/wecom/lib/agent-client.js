@@ -70,10 +70,12 @@ function readAgentModelConfig(agentId) {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   const agent = config.agents.list.find(a => a.id === agentId);
   if (!agent) throw new Error(`Agent ${agentId} not found in openclaw.json`);
+  // v725 后 agent.model 可能是 {primary, fallbacks} 对象，兼容两种格式
+  const modelStr = typeof agent.model === 'string' ? agent.model : (agent.model?.primary ?? '');
   // 用 indexOf 而非 split('/')，保留 "models/gemini-3.1-pro-preview" 这类带斜杠的完整 model ID
-  const slashIdx = agent.model.indexOf('/');
-  const providerKey = agent.model.slice(0, slashIdx);
-  const modelId = agent.model.slice(slashIdx + 1);
+  const slashIdx = modelStr.indexOf('/');
+  const providerKey = modelStr.slice(0, slashIdx);
+  const modelId = modelStr.slice(slashIdx + 1);
   const provider = config.models?.providers?.[providerKey];
   if (!provider) throw new Error(`Provider ${providerKey} not found in openclaw.json`);
   return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId };
