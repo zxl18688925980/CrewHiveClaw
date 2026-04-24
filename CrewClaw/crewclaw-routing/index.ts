@@ -1667,11 +1667,13 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
     if (results.length > 0) {
       const now = new Date();
       const lines = results.map(r => {
-        const meta = r.metadata as { prompt?: string; response?: string; userId?: string; source?: string; timestamp?: string };
-        const who   = meta.source === "group" ? `（群）` : meta.userId ? `（${meta.userId}）` : "";
+        const meta = r.metadata as { prompt?: string; response?: string; userId?: string; source?: string; timestamp?: string; groupName?: string };
+        const groupLabel = meta.source === "group"
+          ? `（${meta.groupName ?? "群"}）`
+          : meta.userId ? `（${meta.userId}）` : "";
         const tLabel = meta.timestamp ? relativeTimeLabel(meta.timestamp, now) : "";
         const prefix = tLabel ? `[${tLabel}] ` : "";
-        return `${prefix}User${who}: ${meta.prompt ?? r.document}\nLucas: ${meta.response ?? ""}`;
+        return `${prefix}User${groupLabel}: ${meta.prompt ?? r.document}\nLucas: ${meta.response ?? ""}`;
       });
       parts.push(`【近期对话片段】\n${lines.join("\n---\n")}`);
     }
@@ -1680,6 +1682,32 @@ async function queryMemories(prompt: string, userId: string, isGroup = false): P
   } catch (_e) {
     return "";
   }
+}
+
+// ── 群信息缓存（从 groups.json 读取，避免每次写入都重复 I/O）────────────
+// groups.json 路径：PROJECT_ROOT/data/groups.json（与 wecom entrance 共享同一数据源）
+let _groupsCache: Array<{ chatId: string; name?: string; positioning?: string }> | null = null;
+function loadGroupsCache(): Array<{ chatId: string; name?: string; positioning?: string }> {
+  if (_groupsCache) return _groupsCache;
+  try {
+    const raw = readFileSync(join(PROJECT_ROOT, "data", "groups.json"), "utf8");
+    _groupsCache = JSON.parse(raw);
+  } catch { _groupsCache = []; }
+  return _groupsCache!;
+}
+
+/** 从 chatId 查群名，未找到时返回 undefined */
+function getGroupNameByChatId(chatId: string | undefined): string | undefined {
+  if (!chatId) return undefined;
+  return loadGroupsCache().find(g => g.chatId === chatId)?.name;
+}
+
+/** 从 group sessionKey 提取 chatId（格式：group:chatId:fromUser:msgId） */
+function extractGroupChatId(sessionKey: string | undefined): string | undefined {
+  if (!sessionKey) return undefined;
+  // sessionKey 格式：agent:agentId:openai-user:group:chatId:fromUser:msgId
+  const match = sessionKey.match(/group:([^:]+):/);
+  return match?.[1];
 }
 
 // conversations 集合写入元数据结构
@@ -1695,6 +1723,8 @@ interface ConvMeta {
   isCloud:       boolean;
   toolsCalled:   string[];                      // 工具名列表（无需计数）
   sessionId?:    string;
+  chatId?:       string;                        // 群消息的 chatId（多群时区分来源）
+  groupName?:    string;                        // 群名称（来自 groups.json，召回展示用）
   // ── 进化信号字段（L2/L4）────────────────────────────────────────────
   intent?:       string | null;                 // 意图分类，来自 sessionIntent
   qualityScore?: number;                        // 响应质量分 [0,1]，来自 evaluateResponseQuality
@@ -1797,6 +1827,9 @@ async function writeMemory(prompt: string, response: string, meta: ConvMeta, col
         response:       response.slice(0, 500),
         entityTags,
         hall_type:      hallType,
+        // 群消息额外字段：chatId + groupName，多群时召回可区分来源群
+        ...(meta.chatId    ? { chatId:    meta.chatId    } : {}),
+        ...(meta.groupName ? { groupName: meta.groupName } : {}),
         // 分块元数据：同一对话的多个 chunk 共享 parentConvId
         ...(chunks.length > 1 ? { parentConvId: baseId, chunkIndex: i } : {}),
       }, embedding);
@@ -8766,7 +8799,10 @@ last_used: null
         // 幻觉若进入 ChromaDB，后续召回时会强化错误，形成持久化幻觉循环
         if (_toolCallHallucinationDetected || _visitorPrivacyLeakDetected) {
           // skip: tool_call_hallucination or visitor privacy leak detected, not writing to conversations
-        } else
+        } else {
+        // 群消息：从 sessionKey 提取 chatId，查群名（多群语境标记）
+        const convChatId    = isGroup ? extractGroupChatId(ctx.sessionKey) : undefined;
+        const convGroupName = convChatId ? getGroupNameByChatId(convChatId) : undefined;
         void writeMemory(convPrompt, lastAssistant, {
           fromId:        convFromId,
           fromType:      convFromType,
@@ -8780,7 +8816,10 @@ last_used: null
           intent:        sessionIntent.get(ctx.sessionKey ?? "") ?? null,
           qualityScore,
           dpoFlagged,
+          chatId:        convChatId,
+          groupName:     convGroupName,
         });
+        }
         // 访客专属影子记忆：同时写入 visitor_shadow_{personId} 独立命名空间
         // personId 跨 token 稳定，换邀请码仍连续积累
         // 文档中用访客真实姓名替代 token，保证可读性与检索清晰度
@@ -13989,8 +14028,10 @@ last_used: null
             const rawLines: string[] = [];
             for (const [_sid, recs] of topSessions) {
               for (const r of recs.slice(0, 3)) {
-                const meta = r.metadata as { prompt?: string; response?: string; userId?: string; source?: string; timestamp?: string };
-                const who  = meta.source === "group" ? "（群聊）" : meta.userId ? `（${meta.userId}）` : "";
+                const meta = r.metadata as { prompt?: string; response?: string; userId?: string; source?: string; timestamp?: string; groupName?: string };
+                const who  = meta.source === "group"
+                  ? `（${meta.groupName ?? "群聊"}）`
+                  : meta.userId ? `（${meta.userId}）` : "";
                 const ts   = toCST(meta.timestamp);
                 rawLines.push(`[${ts}${who}] User: ${meta.prompt ?? ""}\nLucas: ${meta.response ?? ""}`);
               }
