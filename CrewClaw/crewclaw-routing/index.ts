@@ -4848,6 +4848,8 @@ function markTaskStatus(taskId: string, status: TaskRegistryEntry["status"]): vo
     if (actualH > 0) entry.actualHours = Math.round(actualH * 10) / 10; // 保留一位小数
     entry.blockedAt = undefined;      // 完成时清除阻塞信号
     entry.blockedReason = undefined;
+    // L2 行为量化信号：7 天后无 bug 反馈 → Andy HEARTBEAT 写 success_pattern
+    entry.successPendingCheck = true;
   }
   writeFileSync(TASK_REGISTRY_FILE, JSON.stringify(entries, null, 2), "utf8");
 }
@@ -7037,6 +7039,48 @@ const crewclawRoutingPlugin = {
                 // 静默失败，不影响主流程
               }
             })();
+          }
+        }
+
+        // ── L2 积极反馈信号采集（fire-and-forget）──────────────────────────
+        // 检测家人消息中的积极反馈语句 → 提取上一轮 Lucas 响应 → 写入正向 DPO 样本
+        // 原理：积极反馈 = 用户对上一轮响应满意，上一轮响应是高质量训练正样本
+        if (!isVisitorSession && FAMILY_USER_IDS_LOWER.has(userId)) {
+          const _posMsg = sessionPrompt.get(ctx.sessionKey ?? "") ?? "";
+          const L2_POSITIVE_PATTERNS = [
+            "懂了谢谢", "明白了", "好的谢谢", "谢谢你", "太好了", "好棒", "非常好",
+            "学到了", "这就是我要的", "完全理解", "清楚了", "知道了谢谢", "受教了",
+          ];
+          const _posHit = L2_POSITIVE_PATTERNS.find(p => _posMsg.includes(p));
+          if (_posHit) {
+            // 从 event.messages 倒序找最近一条 assistant 消息（就是赢得积极反馈的那条）
+            const _posM = event.messages as Array<{ role?: string; content?: unknown }>;
+            let _lastGoodResponse = "";
+            for (let _pi = _posM.length - 1; _pi >= 0; _pi--) {
+              const _pm = _posM[_pi];
+              if (_pm.role === "assistant" && typeof _pm.content === "string" && (_pm.content as string).trim().length > 20) {
+                _lastGoodResponse = (_pm.content as string).trim();
+                break;
+              }
+            }
+            if (_lastGoodResponse) {
+              void (async () => {
+                try {
+                  const _posPath = join(PROJECT_ROOT, "data/learning/positive-dpo-samples.jsonl");
+                  appendJsonl(_posPath, {
+                    t:                 nowCST(),
+                    userId,
+                    agentId:           FRONTEND_AGENT_ID,
+                    signal:            "positive_feedback",
+                    trigger:           _posHit,
+                    user_feedback:     _posMsg.slice(0, 100),
+                    positive_response: _lastGoodResponse.slice(0, 600),
+                    quality:           "high",
+                    phase2_eligible:   true,
+                  });
+                } catch (_e) { /* 静默 */ }
+              })();
+            }
           }
         }
       }
