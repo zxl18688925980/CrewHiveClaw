@@ -9290,6 +9290,30 @@ last_used: null
               details: { duplicate_task_id: found.id, decision: "blocked_duplicate" },
             };
           }
+
+          // 检查近期 failed 的相似任务：避免失败后无脑重提
+          const recentFailed = readTaskRegistry()
+            .filter(e => e.status === "failed")
+            .map(e => {
+              const raw = bigramScore(req, e.requirement);
+              const denom = Math.min(req.length, e.requirement.length) - 1;
+              const ratio = denom > 0 ? raw / denom : 0;
+              return { e, score: raw, ratio };
+            })
+            .filter(s => s.ratio >= 0.7)
+            .sort((a, b) => b.ratio - a.ratio)
+            .slice(0, 1);
+
+          if (recentFailed.length > 0) {
+            const found = recentFailed[0].e;
+            const failInfo = found.failReason
+              ? `失败原因：${(found.failReason as string).slice(0, 150)}`
+              : "（未记录失败原因，可能是 Andy 超时或 API 报错）";
+            return {
+              content: [{ type: "text", text: `⚠️ 相同需求之前已提交并失败（${found.id}，提交于 ${found.submittedAt?.slice(0, 16).replace("T", " ") ?? "未知时间"}）：\n${found.requirement.slice(0, 100)}…\n\n${failInfo}\n\n请先弄清楚失败原因，再决定是否重新提交。如确认要重试，在需求中注明"重新提交：[原因已解决]"再触发。` }],
+              details: { failed_task_id: found.id, decision: "warn_failed_duplicate" },
+            };
+          }
         }
 
         // 系统负载感知：检查 Lisa 队列深度和 Andy 状态
