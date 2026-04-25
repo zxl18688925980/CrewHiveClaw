@@ -1489,7 +1489,8 @@ try:
         fact_quality = round(len(good_ctx) / len(ctx_sample) * 100) if ctx_sample else None
     except:
         fact_quality = None
-    print(json.dumps({'facts': facts, 'persons': persons, 'entities': entities, 'fact_quality': fact_quality, 'fact_sample_size': len(ctx_sample) if 'ctx_sample' in dir() else 0}))
+    _fs = [c.strip()[:120] for c in (ctx_sample if 'ctx_sample' in dir() else []) if c and len(c.strip()) > 15][:3]
+    print(json.dumps({'facts': facts, 'persons': persons, 'entities': entities, 'fact_quality': fact_quality, 'fact_sample_size': len(ctx_sample) if 'ctx_sample' in dir() else 0, 'fact_samples': _fs}))
 except Exception as e:
     print(json.dumps({'error': str(e)}))
 sys.stdout.flush()
@@ -1515,6 +1516,11 @@ os._exit(0)
           const sampleN = kd.fact_sample_size || 0;
           results.push(`${fqOk ? '✅' : '⚠️'} Kuzu Fact context 质量（抽样${sampleN}条）：${kd.fact_quality}% 有实质描述${!fqOk ? '（含过短/空 context）' : ''}`);
           if (!fqOk && score === '✅') score = '⚠️';
+          // 内容样本（供 Main 教师视角判断实体关系是否有实质性）
+          if (kd.fact_samples && kd.fact_samples.length > 0) {
+            const _fLines = kd.fact_samples.map((s, i) => `    ${i + 1}. 「${s}」`).join('\n');
+            results.push(`  📋 Kuzu Fact 内容样本：\n${_fLines}`);
+          }
         }
       }
     } catch (e) {
@@ -1778,11 +1784,54 @@ os._exit(0)
               if (badDoc !== undefined) results.push(`    ↳ 差样本：「${String(badDoc || '').trim().slice(0, 80)}」`);
             }
           }
+          // 内容样本（供 Main 教师视角判断是否有实质洞察，不只是任务描述）
+          const _andySamples = andyDocs.filter(_checkDocQuality).slice(0, 3);
+          if (_andySamples.length > 0) {
+            const _aLines = _andySamples.map((d, i) => `    ${i + 1}. 「${String(d).trim().slice(0, 120)}」`).join('\n');
+            results.push(`  📋 Andy design_learning 样本：\n${_aLines}`);
+          }
+          const _lisaSamples = lisaDocs.filter(_checkDocQuality).slice(0, 3);
+          if (_lisaSamples.length > 0) {
+            const _lLines = _lisaSamples.map((d, i) => `    ${i + 1}. 「${String(d).trim().slice(0, 120)}」`).join('\n');
+            results.push(`  📋 Lisa impl_learning 样本：\n${_lLines}`);
+          }
         }
       }
     } catch (e) {
       results.push(`⚠️ Andy/Lisa 蒸馏产出检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
+    }
+
+    // 11. 承诺追踪：task-registry.json 中 >30 天未完成的需求（外循环教师测试集来源）
+    try {
+      const registryPath = path.join(INSTANCE_ROOT, 'Data', 'learning', 'task-registry.json');
+      if (fs.existsSync(registryPath)) {
+        const regRaw = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+        const allTasks = Array.isArray(regRaw) ? regRaw : (regRaw.tasks || []);
+        const nowMs = Date.now();
+        const _30dMs = 30 * 24 * 3600 * 1000;
+        const staleTasks = allTasks.filter(t => {
+          if (!['pending', 'in_progress', 'blocked'].includes(t.status)) return false;
+          const created = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+          return created > 0 && (nowMs - created) > _30dMs;
+        });
+        const activeTasks = allTasks.filter(t => ['pending', 'in_progress', 'blocked'].includes(t.status));
+        if (staleTasks.length > 0) {
+          results.push(`⚠️ 承诺追踪：${staleTasks.length} 条需求 >30 天未完成（共 ${activeTasks.length} 条活跃）`);
+          staleTasks.slice(0, 3).forEach(t => {
+            const daysOld = Math.floor((nowMs - new Date(t.createdAt).getTime()) / 86400000);
+            const title = (t.title || t.description || '（无标题）').slice(0, 60);
+            results.push(`    ↳ [${t.status}·${daysOld}天] ${title}`);
+          });
+          if (score === '✅') score = '⚠️';
+        } else {
+          results.push(`✅ 承诺追踪：${activeTasks.length} 条活跃需求均在 30 天内`);
+        }
+      } else {
+        results.push(`⚪ 承诺追踪：task-registry.json 不存在`);
+      }
+    } catch (e) {
+      results.push(`⚠️ 承诺追踪检查失败：${e.message.slice(0, 60)}`);
     }
 
     // T. 外循环教师测试：时间分层退化检测（conversations 近30天 vs 90天前 embedding 有效率对比）

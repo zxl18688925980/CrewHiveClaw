@@ -893,6 +893,7 @@ let _mainMonitorIntervalId = null;
 let _andyHbIntervalId = null;
 let _mainWeeklyIntervalId = null;
 let _stuckCheckIntervalId = null;
+let _tokenDailyIntervalId = null;
 
 app.listen(PORT, () => {
   logger.info('企业微信入口已启动', { port: PORT });
@@ -952,6 +953,27 @@ app.listen(PORT, () => {
   }, 5 * 60 * 1000);
   logger.info('Main 周度自动评估已注册', { window: '每周日 22:00-22:30 CST' });
 
+  // Token 日报：每天 21:30-21:35 CST 固定窗口，每 5 分钟检查一次，当天仅发一次
+  let _tokenDailyLastDate = '';
+  if (_tokenDailyIntervalId) clearInterval(_tokenDailyIntervalId);
+  _tokenDailyIntervalId = setInterval(() => {
+    const cstNow = new Date(Date.now() + 8 * 3600000); // UTC+8
+    const h = cstNow.getUTCHours(), m = cstNow.getUTCMinutes();
+    const dateStr = cstNow.toISOString().slice(0, 10);
+    if (h === 13 && m < 35 && _tokenDailyLastDate !== dateStr) { // 13:00 UTC = 21:00 CST
+      _tokenDailyLastDate = dateStr;
+      try {
+        const { sendTokenDailySummary } = require(
+          require('path').join(process.env.HOME, 'HomeAI', 'CrewHiveClaw', 'HomeAILocal', 'Scripts', 'token-daily-summary.js')
+        );
+        sendTokenDailySummary(sendWeComMessage)
+          .catch(e => logger.error('Token 日报发送失败', { error: e.message }));
+      } catch (e) {
+        logger.error('Token 日报脚本加载失败', { error: e.message });
+      }
+    }
+  }, 5 * 60 * 1000);
+  logger.info('Token 日报循环已注册', { window: '21:30-21:35 CST 每日' });
 
   // ── Layer 2：启动扫描——检测进程重启导致的孤儿任务 ───────────────────────
   // 进程崩溃时 catch 块不执行，running 任务永远卡住；启动时扫描并清零
