@@ -78,7 +78,7 @@ for ROLE in "${ROLES[@]}"; do
     $PYTHON -m mlx_vlm.lora \
         --model-path "$MLX_MODEL" \
         --dataset "$DATA_DIR" \
-        --output-path "$ADAPTER_OUT" \
+        --output-path "$ADAPTER_OUT/adapters" \
         --train-mode sft \
         --iters $ITERS \
         --batch-size $BATCH_SIZE \

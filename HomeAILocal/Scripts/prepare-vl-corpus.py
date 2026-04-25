@@ -142,6 +142,14 @@ def prepare_role(role):
     valid = unique[:n_valid]
     train = unique[n_valid:]
 
+    # 如果训练样本不足 MIN_TRAIN_SAMPLES，重复数据集（等价于多轮 epoch）
+    # mlx_vlm.lora --iters N 会取数据集前 N 条，训练集必须 ≥ iters
+    MIN_TRAIN_SAMPLES = 220  # 略大于 iters=200，留 10% 余量
+    if len(train) < MIN_TRAIN_SAMPLES:
+        repeats = (MIN_TRAIN_SAMPLES // len(train)) + 1
+        train = (train * repeats)[:MIN_TRAIN_SAMPLES]
+        random.shuffle(train)
+
     # 写出
     role_dir = OUTPUT_DIR / role
     role_dir.mkdir(exist_ok=True)
@@ -152,7 +160,7 @@ def prepare_role(role):
             for item in data:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
-    print(f"[{role}] total={len(unique)} → train={len(train)} / valid={len(valid)}")
+    print(f"[{role}] unique={len(unique)} → train={len(train)} / valid={len(valid)}")
     print(f"  output: {role_dir}")
     return len(unique)
 
