@@ -471,9 +471,9 @@ Main 在系统中具有独特的上帝视角：能访问全量 ChromaDB（所有
     ↓ 机械运行，产出可量化的原始结果（召回命中数 / 填充率 / 文件存在性 / 需求覆盖数）
 教师模型（Main，Claude Sonnet 4.6，上帝视角）
     ↓ 对原始结果做判断：哪里退化？哪里从未被覆盖？盲区在哪一层？
-task-registry.json（进化意见以流水线任务形式写入，requires_approval 标记控制自动入队 / 待 SE 批准）
+task-registry.json（进化意见以流水线任务形式写入，直接进入执行队列）
     ↓
-系统工程师审阅 → 批准 / 拒绝 pending-review 任务
+系统工程师观测（超然观测者，不介入执行决策）
 ```
 
 - **教师工具**：机械可重复执行，确定性。负责从真实数据提取测试用例、运行评测、收集原始结果数字。工具层面不做判断，只产出事实。
@@ -1538,7 +1538,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `evaluate_l3`          | Engineering Anything 交付能力：任务类型覆盖度（task-registry 去重）、端到端交付成功率（opencode 近 10 次成功率）、交付物多样性（App/generated/ 文件数）、**三角色协作链健康**（task-registry completed/failed 比例，不含 cancelled/queued）|
 | `evaluate_l3`          | 组织协作进化 四维度：**①成员画像**（inject.md 含蒸馏信息比例——行为模式/沟通风格/协作关系等关键词覆盖率）、**②关系图谱**（Kuzu 协作边 co_discusses/requests_from/supports/role_in_context）、**③影子Agent**（ChromaDB shadow_interactions 演进环记录数 + 访客 Registry active/dormant/archived 统计）、**④跨成员感知**（关系蒸馏日志上次运行时间 + 成员档案含协作信息比例）|
 | `evaluate_l4`          | 系统自我演化状态（两层）：【系统层】进化信号（S1：skill-candidates + dpo-candidates，区分 pending vs total 避免堆总量误导）、知识内化（蒸馏产出 + codebase_patterns）、Skill 积累（S3：同时统计 native + archive 两个目录，三角色总数）+ 三阶段机制运转状态（Phase 1 draft 自动生成率 / Phase 2 usage 覆盖率 / Phase 3 迭代+废弃统计）、Andy 巡检时效（距上次 HEARTBEAT 小时数）+ Skill 健康审计产出、**AGENTS.md 规则收敛度**（三角色合计规则行数，lower_better，越少说明行为越内化到权重）、**路由阈值进化**（route-events.jsonl 近 200 条本地路由占比，越高说明本地模型承担越多）；【模型层】按 pattern_type 分组统计 dpo-candidates.jsonl 积累量（⚪/🟡/🔴，距 50 条内化阈值的缺口）、近 7 天 vs 前 7 天趋势、本地模型就绪状态；**模型能力评估（evaluate_local_model）**：Kuzu 家人事实自动生成知识题（0.4 权重）+ ChromaDB 真实对话测对话能力（0.6 权重），零硬编码，第二个部署有数据即可运行 |
-| `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`）；**进化意见生成器**（规则驱动 IIFE，return 前插入）：检测 5 类信号——L1 问题率（>12%/25% 两档）/ L2 交付成功率（<60%）/ L4 DPO 达阈值 / L4 信号积压（>30）/ L4 Andy HEARTBEAT 超时（>48h），行动就绪条件自动写入 `task-registry.json`（requires_approval=false 直接入队；=true 进入 pending-review 等 SE 批准），输出 `▶ 进化意见（N 条）` 或 `▶ 进化意见：无需干预`。业主发「系统评估」即触发 |
+| `evaluate_system`      | 总入口：依次调 L0~L4 评估，汇总为一张评分卡（`L0: ✅/⚠️/❌`）；**进化意见生成器**（规则驱动 IIFE，return 前插入）：检测 5 类信号——L1 问题率（>12%/25% 两档）/ L2 交付成功率（<60%）/ L4 DPO 达阈值 / L4 信号积压（>30）/ L4 Andy HEARTBEAT 超时（>48h），行动就绪条件自动写入 `task-registry.json`（直接进入执行队列，无需 SE 批准），输出 `▶ 进化意见（N 条）` 或 `▶ 进化意见：无需干预`。业主发「系统评估」即触发 |
 | `update_heartbeat`     | 追加监控观察（`append_observation`）/ 标记日报已发（`mark_daily_sent`，清空待汇总观察）|
 | `log_improvement_task` | 记录监控发现的系统改进点到 `data/learning/task-registry.json`；必填 `action_type`（`agents_md` 改行为规则 / `code_fix` 改代码 / `readme` 改正朔刷新认知 / `observe` 积累数据再判断），工程师收到任务即知推荐动作；写入前检测 pending 任务中是否已有标题关键词高度重叠的记录（≥2 词），避免重复提交相同改进点 |
 
@@ -1572,7 +1572,7 @@ Lucas 在以下情况主动在对话入口提醒业主：
 | `data/learning/opencode-sessions.json` | opencode session 状态持久化 | wecom-entrance 重启后 Andy 仍可通过 `get_opencode_result` 查询历史 session |
 | `data/learning/followup-queue.jsonl` | 协作链完成时写入（taskId / userId / 需求摘要 / 交付时间 / status=pending）；Lucas 20:00 HEARTBEAT 扫描后标记 `status=sent` | 观察 `pending` 条目是否被 Lucas 按时跟进 |
 | `data/learning/andy-goals.jsonl` | Andy HEARTBEAT Check 0 写入（id / trigger / description / actionTaken / status）；每次最多新增一条，上次 pending/in_progress 时优先推进上次目标 | 观察 `trigger` 是否反映真实薄弱指标；`status` 能否推进到 completed |
-| `data/learning/task-registry.json` | Andy HEARTBEAT 夜间规划输出（基础设施写入）+ evaluate_system 进化意见写入；`requires_approval=false` 的任务直接进入执行队列，`requires_approval=true` 的任务进入 pending-review | 通过 Main 通道查看和操作待审批任务（API：`GET /api/main/pipeline-tasks`、`POST /:id/approve`、`POST /:id/cancel`）；`agents_md` 类和 `architecture_proposal` 类任务必须 SE 批准后才执行 |
+| `data/learning/task-registry.json` | Andy HEARTBEAT 夜间规划输出（基础设施写入）+ evaluate_system 进化意见写入；所有任务直接进入执行队列，系统自主推进 | 通过 Main 通道查看任务进展（API：`GET /api/main/pipeline-tasks`、`POST /:id/cancel`）；SE 只观测，不批准/拒绝 |
 
 ### 框架角色能力契约
 
