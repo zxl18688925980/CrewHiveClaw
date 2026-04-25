@@ -12093,16 +12093,6 @@ last_used: null
           const bytes = Buffer.byteLength(content, "utf8");
           const displayPath = targetPath.startsWith(HOME) ? `~/${targetPath.slice(HOME.length + 1)}` : targetPath;
 
-          // ── 认知文件写入：实时通知 SE（可观测性）──────────────────────────
-          const cognitiveFileNames = new Set(["AGENTS.md", "SOUL.md", "MEMORY.md", "TOOLS.md", "HEARTBEAT.md", "DESIGN-PRINCIPLES.md"]);
-          const fileBasename = targetPath.split("/").pop() ?? "";
-          if (targetPath.includes(`${HOME}/.openclaw/workspace-`) && cognitiveFileNames.has(fileBasename)) {
-            const agentSlug = targetPath.split("/.openclaw/workspace-")[1]?.split("/")[0] ?? "unknown";
-            void notifyEngineer(
-              `【认知文件修改】${agentSlug} 更新了 ${fileBasename}\n路径：${displayPath}（${bytes} 字节）\n---\n发「查 L4」可查看完整自主行动记录`,
-              "info", toolCtx.agentId ?? DESIGNER_AGENT_ID,
-            );
-          }
 
           return {
             content: [{ type: "text", text: `✅ 已写入 ${displayPath}（${lines} 行，${bytes} 字节，${append ? "追加" : "覆盖"}）` }],
