@@ -3808,29 +3808,38 @@ async function runAndyPipeline(params: {
 
         (async () => {
           try {
-            let retryPrompt: string;
             if (hasSpec) {
-              // Andy 输出了 spec 但忘了调工具：直接把 spec 喂回去
-              retryPrompt = [
-                `【自动重触发 · 需求 ID: ${requirementId}】`,
-                `你上一轮完成了方案设计，但忘记调用 trigger_lisa_implementation。`,
-                `现在只需要做一件事：调用 trigger_lisa_implementation。`,
-                ``,
-                `你的完整 spec 如下，直接作为 spec 参数传入（不要修改）：`,
-                ``,
-                `\`\`\`json`,
-                specJsonMatch![1],
-                `\`\`\``,
-                ``,
-                `其他参数：`,
-                `- user_id: "${params.userId}"`,
-                `- requirement_id: "${requirementId}"`,
-                ``,
-                `立即调用 trigger_lisa_implementation，不需要做其他任何事。`,
-              ].join("\n");
+              // ── 基础设施层直接触发 Lisa（跳过 Andy 重试）────────────────────
+              // Andy 输出了 spec 但忘调工具：不再绕路让 Andy 再调一次（模型层职责已证明不可靠），
+              // 基础设施层直接提取 spec → 写占位文件 → 调 Lisa。
+              // 这是正向设计修复：orchestration 责任从模型移到基础设施。
+              const specContent = specJsonMatch![1];
+              const threadId = `andy-to-lisa:${requirementId}_collab`;
+              try {
+                const placeholder = [{ role: "user", text: `infra-triggered spec at ${nowCST()}`, ts: Date.now() }];
+                writeFileSync(agentThreadFile(threadId), JSON.stringify(placeholder));
+              } catch (_e) {}
+              void notifyEngineer(`协作链基础设施直接触发 [${requirementId}]\nAndy 有 spec 但未调工具，基础设施层提取 spec 直接调 Lisa（跳过 Andy 重试）`, "pipeline", FRONTEND_AGENT_ID);
+              const lisaInfraPrompt = [
+                `【Implementation Spec】\n\`\`\`json\n${specContent}\n\`\`\``,
+                "请阅读以上 spec，选择合适的实现方式：",
+                "• 简单修改（单文件、加路由、改字段）→ 用 read 读代码 + edit 修改 + bash 验证",
+                "• 复杂实现（多文件联动、需要 AI 迭代）→ 调用 run_opencode",
+                "实现完成后输出交付报告：1) 完成了什么 2) 生成的文件路径 3) 验证结果（是否成功/失败原因）4) 使用方式",
+                `【协作线程 ID】${threadId}（遇阻时调用 report_implementation_issue 请带上此 thread_id）`,
+              ].join("\n\n");
+              const lisaInfraResp = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, lisaInfraPrompt, 600_000, threadId, DESIGNER_AGENT_ID);
+              if (lisaInfraResp) {
+                markTaskStatus(requirementId, "completed");
+                void notifyEngineer(`基础设施直接触发成功 [${requirementId}] Lisa 实现完成`, "pipeline", FRONTEND_AGENT_ID);
+              } else {
+                markTaskStatus(requirementId, "failed");
+                void notifyEngineer(`基础设施直接触发失败 [${requirementId}] Lisa 无响应，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
+                await runLucasPipelineFallback(requirementId, params);
+              }
             } else {
-              // 无可提取的 spec：用原始需求重新开始，但强调只需要调工具
-              retryPrompt = [
+              // 无可提取的 spec：仍需 Andy 重新设计（Andy 这次必须调 trigger_lisa_implementation）
+              const retryPrompt = [
                 `【自动重触发 · 需求 ID: ${requirementId}】`,
                 `你上一轮处理了这个需求但没有触发实现。请重新处理：`,
                 ``,
@@ -3844,24 +3853,22 @@ async function runAndyPipeline(params: {
                 ``,
                 `第 3 步不可跳过。`,
               ].join("\n");
-            }
-
-            await callGatewayAgent(DESIGNER_AGENT_ID, retryPrompt, 600_000, undefined, FRONTEND_AGENT_ID);
-
-            // 重触发后再次验证
-            const threadFile2 = join(AGENT_THREAD_DIR, `andy-to-lisa:${requirementId}_collab.json`);
-            if (existsSync(threadFile2)) {
-              markTaskStatus(requirementId, "completed");
-              void notifyEngineer(`自动重触发成功 [${requirementId}] Lisa 已启动`, "pipeline", FRONTEND_AGENT_ID);
-            } else {
-              markTaskStatus(requirementId, "failed");
-              void notifyEngineer(`自动重触发失败 [${requirementId}] Andy 仍未调用 trigger_lisa_implementation，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
-              await runLucasPipelineFallback(requirementId, params);
+              await callGatewayAgent(DESIGNER_AGENT_ID, retryPrompt, 600_000, undefined, FRONTEND_AGENT_ID);
+              // 重触发后再次验证
+              const threadFile2 = join(AGENT_THREAD_DIR, `andy-to-lisa:${requirementId}_collab.json`);
+              if (existsSync(threadFile2)) {
+                markTaskStatus(requirementId, "completed");
+                void notifyEngineer(`自动重触发成功 [${requirementId}] Lisa 已启动`, "pipeline", FRONTEND_AGENT_ID);
+              } else {
+                markTaskStatus(requirementId, "failed");
+                void notifyEngineer(`自动重触发失败 [${requirementId}] Andy 仍未输出 spec，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
+                await runLucasPipelineFallback(requirementId, params);
+              }
             }
           } catch (retryErr) {
             const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
             markTaskStatus(requirementId, "failed");
-            void notifyEngineer(`自动重触发异常 [${requirementId}] ${retryErrMsg.slice(0, 200)}，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
+            void notifyEngineer(`协作链补救异常 [${requirementId}] ${retryErrMsg.slice(0, 200)}，转 Lucas 处理`, "pipeline", FRONTEND_AGENT_ID);
             await runLucasPipelineFallback(requirementId, params);
           }
         })();
