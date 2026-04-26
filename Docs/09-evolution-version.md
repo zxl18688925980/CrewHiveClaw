@@ -12,6 +12,62 @@
 
 ---
 
+## v737 · ChromaDB cosine 迁移 + now.md 全家覆盖 + Kuzu has_pattern 修复（2026-04-26）
+
+**干预类型**：架构修复（距离函数 + 数据迁移）+ 配置修复 + 基础设施修复
+
+### 1. ChromaDB 距离函数迁移：L2 → cosine（架构级修复）
+
+**根因**：`conversations` / `conversations_closets` / `decisions` / `behavior_patterns` 四个集合在 `getChromaCollectionId` cosine 默认值上线前已存在，使用默认 L2 距离（Euclidean）。
+
+**核心 bug**：`scanCrossMemberContext`（index.ts line 2666-2675）对 `conversations` 集合应用 threshold=0.4，该阈值按 cosine 设计（range 0~2），而 L2 距离对 nomic-embed-text 768-dim 非归一化向量返回 100~300 量级。**结果：跨成员上下文感知功能自部署以来从未触发过。**
+
+**迁移方案**：
+- 使用 HTTP API 直接 fetch（绕过 Python client numpy boolean 比较 bug：`if embeddings:` 对 numpy array 抛"truth value ambiguous"）
+- Python chromadb client 只用于 delete/create/write
+- 二分法容错：batch fetch 失败时递归折半，直到 size=1 跳过单条损坏记录（不中断迁移）
+
+**迁移结果**：
+| 集合 | 记录数 | 跳过 | 备注 |
+|------|--------|------|------|
+| conversations | 4330 | 1（HNSW 内部损坏，offset=4217） | `scanCrossMemberContext` 阈值 0.4 现在正常工作 |
+| conversations_closets | 4337 | 0 | 主语义检索路径，排序质量改善 |
+| decisions | 1113 | 0 | Andy 决策注入排序质量改善 |
+| behavior_patterns | 639 | 0 | Lucas 行为模式召回排序质量改善 |
+| code_history | 保留 L2 | — | 8 条，只做 timeWeightedRerank 无阈值，迁移无收益 |
+
+**迁移脚本**：`HomeAILocal/Scripts/migrate-chroma-to-cosine.py`
+
+**陷阱记录**（同步写入 `docs/10-engineering-notes.md`）：
+1. `getOrCreateCollection` 不更新已有集合的 `hnsw:space`，只有创建时才生效
+2. Python client `col.get(include=["embeddings"])` 内部 `if embeddings:` 对 numpy array 触发 "truth value ambiguous"
+3. HNSW 内部损坏（"Error finding id"）：元数据存在但向量索引缺失，用二分法定位后跳过单条记录
+
+### 2. members.json now.md 全家覆盖修复
+
+**根因**：`profileMap` 缺少妈妈（`xiamoqiufengliang`，带秋字）和黟黟（`zengyueyutong`）两条映射。`updateNowFile(userId)` 查不到 key 直接 return，now.md 永远不会创建。
+
+**修复**：`config/members.json` 补入两条映射，Gateway 重启后自动生效。
+
+### 3. Kuzu has_pattern 写入三连修
+
+- 重试逻辑（6次×5s，覆盖 Gateway 短暂锁竞争）
+- stdout flush（修复 cron 非 TTY 模式 Python 全缓冲日志全丢）
+- model 格式兼容（v725 后 `{primary, fallbacks}` 对象格式，修复 `'dict' has no attribute 'split'` 崩溃）
+
+**变更文件**：
+- `HomeAILocal/Scripts/migrate-chroma-to-cosine.py`（新建）
+- `CrewClaw/crewclaw-routing/config/members.json`（两条映射补入）
+- `Docs/10-engineering-notes.md`（ChromaDB 迁移陷阱三条）
+- `~/HomeAI/CLAUDE.md` v737（不进 git）
+- `HomeAILocal/Scripts/distill-agent-memories.py`（Kuzu 三连修，进 git 的部分）
+
+### 越界干预记录
+
+ChromaDB 距离函数迁移属于架构级修复（功能级 bug，scanCrossMemberContext 完全失效），系统工程师直接执行。迁移不可逆（旧集合已删除），数据完整性通过记录数验证。
+
+---
+
 ## v687 · Lisa 直接编码能力——Claude Code 级别（2026-04-16）
 
 **干预类型**：架构变更（L2 Lisa 能力升级）
