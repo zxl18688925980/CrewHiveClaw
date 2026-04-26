@@ -1,10 +1,12 @@
 {
   "_comment": "HomeAI 实例层配置：userId → 档案文件名映射（兼容常见变体）。新增家庭成员在此文件追加，不改框架代码。",
   "profileMap": {
-    "zengxiaolong":      "zengxiaolong",
-    "xiamoqufengliang":  "xiamoqufengliang",
-    "xiamoqufenguliang": "xiamoqufengliang",
-    "zifeitu":           "zifeitu",
-    "zifeiyu":           "zifeitu"
+    "zengxiaolong":        "zengxiaolong",
+    "xiamoqufengliang":    "xiamoqufengliang",
+    "xiamoqufenguliang":   "xiamoqufengliang",
+    "xiamoqiufengliang":   "xiamoqufengliang",
+    "zengyueyutong":       "zengyueyutong",
+    "zifeitu":             "zifeitu",
+    "zifeiyu":             "zifeitu"
   }
 }
