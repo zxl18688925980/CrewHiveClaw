@@ -4020,7 +4020,7 @@ ${factsDesc}`;
         // 微调训练 → 直接进队列
         autoTasks.push({ priority: 'high', action_type: 'code_fix', requires_approval: false,
           title: `DPO ${ripePatterns.length} 个模式达内化阈值，待触发微调`,
-          description: `evaluate_l5 检测到模式达 50 条阈值：${ripePatterns.slice(0, 3).map(m => m.trim()).join('；')}。建议运行 run-finetune.sh 启动微调训练。` });
+          description: `evaluate_l5 检测到模式达 50 条阈值：${ripePatterns.slice(0, 3).map(m => m.trim()).join('；')}。建议运行 run-vl-finetune.sh 启动 Phase 1 VL 模型微调训练（DPO 数据已就绪，先运行 export-dpo-confirmed.py 导出到 dpo-final.jsonl）。` });
       }
 
       // L5：进化信号待处理积压（DPO pending + skill pending 合计 > 30）
