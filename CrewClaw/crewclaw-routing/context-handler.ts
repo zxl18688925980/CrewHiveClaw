@@ -53,6 +53,14 @@ export interface ContextEntry {
   tier: 0 | 1 | 2 | 3;
   sourceId: string;
   label: string;
+  // 压缩元数据（从 source 拷贝）
+  compressGroup?: string;
+  mustKeep?: boolean;
+  dedupMode?: 'exact' | 'normalized' | 'semantic' | 'none';
+  ttlHours?: number;
+  maxItemsAfterCompress?: number;
+  priorityBias?: number;
+  injectMode?: 'prepend' | 'appendSystem';
 }
 
 export interface DynamicContextResult {
@@ -191,11 +199,19 @@ export async function buildDynamicContext(
     const text = result.status === "fulfilled" ? result.value : "";
     if (!text) return;
 
+    const src_any = src as Record<string, unknown>;
     const entry: ContextEntry = {
       text,
       tier: (src as { tier?: 0 | 1 | 2 | 3 }).tier ?? 2,
       sourceId: (src as { id: string }).id,
       label: (src as { label: string }).label,
+      compressGroup:         src_any.compressGroup as string | undefined,
+      mustKeep:              src_any.mustKeep as boolean | undefined,
+      dedupMode:             src_any.dedupMode as 'exact'|'normalized'|'semantic'|'none' | undefined,
+      ttlHours:              src_any.ttlHours as number | undefined,
+      maxItemsAfterCompress: src_any.maxItemsAfterCompress as number | undefined,
+      priorityBias:          src_any.priorityBias as number | undefined,
+      injectMode:            src.inject === 'prepend' ? 'prepend' : 'appendSystem',
     };
 
     if (src.inject === "prepend") {
@@ -286,4 +302,303 @@ export function applyContextBudget(
     appendSystem: trimmedAppend.filter(Boolean),
     meta: result.meta,
   };
+}
+
+// ── Lucas 专属压缩管线 ─────────────────────────────────────────────────────
+
+export interface LucasCompressionOptions {
+  agentId: string;
+  prompt: string;
+  maxPrependChars: number;
+  maxAppendChars: number;
+  semanticThreshold: number;
+  semanticMaxCandidates: number;
+  dryRun?: boolean;
+  embedText?: (text: string) => Promise<number[]>;
+  nowMs?: number;
+}
+
+export interface LucasCompressionStats {
+  before_prepend_chars: number;
+  after_prepend_chars: number;
+  before_append_chars: number;
+  after_append_chars: number;
+  dropped_entries: number;
+  expired_dropped: number;
+  dedup_dropped: number;
+  semantic_dropped: number;
+}
+
+/** 文本标准化：去标签头、多余空白、换行 */
+export function normalizeContextText(text: string): string {
+  return text
+    .replace(/^【[^】]*】\s*/gm, "")
+    .replace(/[\n\r]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[-•·]\s*/gm, "")
+    .trim();
+}
+
+/** 从文本提取最近一个 ISO 时间戳，返回 ms；未找到返回 null */
+export function extractContextTimestamp(text: string): number | null {
+  const ISO_RE = /\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)?/g;
+  const matches = text.match(ISO_RE);
+  if (!matches || matches.length === 0) return null;
+  const timestamps = matches.map(m => new Date(m).getTime()).filter(t => !isNaN(t));
+  if (timestamps.length === 0) return null;
+  return Math.max(...timestamps);
+}
+
+/** 计算余弦相似度 */
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/** 对单条 ContextEntry 计算综合优先级分数 */
+export function scoreContextEntry(
+  entry: ContextEntry,
+  _promptEmbedding?: number[],
+  nowMs: number = Date.now(),
+): number {
+  let score = 0;
+  // mustKeep 附加分
+  if (entry.mustKeep) score += 100;
+  // tier 权重
+  const tierWeight: Record<number, number> = { 0: 40, 1: 25, 2: 10, 3: 0 };
+  score += tierWeight[entry.tier] ?? 10;
+  // priorityBias
+  score += (entry.priorityBias ?? 0) * 5;
+  // recency
+  const ts = extractContextTimestamp(entry.text);
+  if (ts !== null) {
+    const ageH = (nowMs - ts) / 3600000;
+    score += Math.max(0, 10 - ageH / 24); // 越新越高，24h 内满分 10
+  }
+  return score;
+}
+
+/** 检查 entry 是否已过期 */
+function isEntryExpired(entry: ContextEntry, nowMs: number): boolean {
+  const text = entry.text;
+  // 显式过期标签
+  if (/已过期|已完成|已取消/.test(text)) return true;
+  // valid_until 字段
+  const validUntilMatch = text.match(/valid_until[：:=]\s*(\d{4}-\d{2}-\d{2})/);
+  if (validUntilMatch) {
+    const deadline = new Date(validUntilMatch[1]).getTime();
+    if (!isNaN(deadline) && deadline < nowMs) return true;
+  }
+  // ttlHours：从文本中提取时间戳，若超过 ttl 则过期
+  if (entry.ttlHours != null) {
+    const ts = extractContextTimestamp(text);
+    if (ts !== null) {
+      const ageH = (nowMs - ts) / 3600000;
+      if (ageH > entry.ttlHours) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Lucas 专属上下文压缩管线
+ *
+ * 四步：过期过滤 → 规则去重 → 轻量语义去重 → 排序与配额裁剪
+ */
+export async function compressLucasContext(
+  result: DynamicContextResult,
+  options: LucasCompressionOptions,
+): Promise<{ result: DynamicContextResult; stats: LucasCompressionStats }> {
+  const nowMs = options.nowMs ?? Date.now();
+  const allEntries: ContextEntry[] = [
+    ...result.meta.prepend.map(e => ({ ...e, injectMode: 'prepend' as const })),
+    ...result.meta.appendSystem.map(e => ({ ...e, injectMode: 'appendSystem' as const })),
+  ];
+
+  const before_prepend_chars = result.prepend.reduce((s, t) => s + t.length, 0);
+  const before_append_chars  = result.appendSystem.reduce((s, t) => s + t.length, 0);
+
+  // ── Step A: 过期过滤 ─────────────────────────────────────────────────────
+  let expiredDropped = 0;
+  const afterExpiry = allEntries.filter(e => {
+    if (isEntryExpired(e, nowMs)) { expiredDropped++; return false; }
+    return true;
+  });
+
+  // ── Step B: 规则去重 ─────────────────────────────────────────────────────
+  let dedupDropped = 0;
+  const afterDedup: ContextEntry[] = [];
+  const seenKeys = new Set<string>();
+
+  // 排序优先级：mustKeep > tier asc > priorityBias desc > timestamp desc > text.length asc
+  const sortForDedup = (entries: ContextEntry[]) => [...entries].sort((a, b) => {
+    if ((b.mustKeep ? 1 : 0) !== (a.mustKeep ? 1 : 0)) return (b.mustKeep ? 1 : 0) - (a.mustKeep ? 1 : 0);
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    const bBias = b.priorityBias ?? 0, aBias = a.priorityBias ?? 0;
+    if (aBias !== bBias) return bBias - aBias;
+    const aTs = extractContextTimestamp(a.text) ?? 0;
+    const bTs = extractContextTimestamp(b.text) ?? 0;
+    if (bTs !== aTs) return bTs - aTs;
+    return a.text.length - b.text.length;
+  });
+
+  for (const entry of sortForDedup(afterExpiry)) {
+    const mode = entry.dedupMode ?? 'normalized';
+    if (mode === 'none') { afterDedup.push(entry); continue; }
+    // 'semantic' 先按 normalized 方式判断，之后在 Step C 再做 embedding 去重
+    const key = mode === 'exact'
+      ? `${entry.sourceId}::${entry.text}`
+      : `${entry.sourceId}::${normalizeContextText(entry.text).slice(0, 200)}`;
+    if (seenKeys.has(key)) { dedupDropped++; continue; }
+    seenKeys.add(key);
+    afterDedup.push(entry);
+  }
+
+  // ── Step C: 轻量语义去重 ────────────────────────────────────────────────
+  let semanticDropped = 0;
+  const afterSemantic = [...afterDedup];
+
+  if (options.embedText) {
+    try {
+      const semanticCandidates = afterDedup
+        .filter(e => e.dedupMode === 'semantic')
+        .slice(0, options.semanticMaxCandidates);
+
+      if (semanticCandidates.length > 1) {
+        // 按 compressGroup 分组，只在同组内比较
+        const groups = new Map<string, ContextEntry[]>();
+        for (const e of semanticCandidates) {
+          const g = e.compressGroup ?? 'default';
+          if (!groups.has(g)) groups.set(g, []);
+          groups.get(g)!.push(e);
+        }
+
+        const toRemove = new Set<string>();
+        for (const [, groupEntries] of groups) {
+          if (groupEntries.length < 2) continue;
+          // 生成 embeddings
+          const embeddings = await Promise.all(
+            groupEntries.map(e => options.embedText!(normalizeContextText(e.text).slice(0, 400)))
+          );
+          // 两两比较，淘汰低分重复
+          for (let i = 0; i < groupEntries.length; i++) {
+            for (let j = i + 1; j < groupEntries.length; j++) {
+              const sim = cosineSimilarity(embeddings[i], embeddings[j]);
+              if (sim >= options.semanticThreshold) {
+                // 淘汰总分较低的
+                const scoreI = scoreContextEntry(groupEntries[i], undefined, nowMs);
+                const scoreJ = scoreContextEntry(groupEntries[j], undefined, nowMs);
+                const loser = scoreI >= scoreJ ? j : i;
+                const loserKey = groupEntries[loser].sourceId + groupEntries[loser].text.slice(0, 50);
+                if (!toRemove.has(loserKey)) {
+                  toRemove.add(loserKey);
+                  semanticDropped++;
+                }
+              }
+            }
+          }
+        }
+
+        // 从 afterSemantic 中去除语义重复项
+        afterSemantic.splice(0);
+        for (const e of afterDedup) {
+          const key = e.sourceId + e.text.slice(0, 50);
+          if (!toRemove.has(key)) afterSemantic.push(e);
+        }
+      }
+    } catch {
+      // 语义去重失败静默回退，保留规则去重结果
+    }
+  }
+
+  // ── Step D: 排序与配额裁剪 ───────────────────────────────────────────────
+  // 先按总分降序排列
+  const scored = afterSemantic.map(e => ({
+    entry: e,
+    score: scoreContextEntry(e, undefined, nowMs),
+  })).sort((a, b) => b.score - a.score);
+
+  // 每个 source 的 maxItemsAfterCompress 控制
+  const sourceCount = new Map<string, number>();
+  const finalEntries: ContextEntry[] = [];
+
+  // 先保证 mustKeep
+  const mustKeepIds = new Set<string>();
+  const mustKeepGroups = new Map<string, boolean>();
+  for (const { entry } of scored) {
+    if (entry.mustKeep && !mustKeepGroups.has(entry.compressGroup ?? entry.sourceId)) {
+      if (!isEntryExpired(entry, nowMs)) {
+        mustKeepIds.add(entry.sourceId + entry.text.slice(0, 50));
+        mustKeepGroups.set(entry.compressGroup ?? entry.sourceId, true);
+      }
+    }
+  }
+
+  for (const { entry } of scored) {
+    const key = entry.sourceId + entry.text.slice(0, 50);
+    const cnt = sourceCount.get(entry.sourceId) ?? 0;
+    const max = entry.maxItemsAfterCompress ?? Infinity;
+    if (cnt < max || mustKeepIds.has(key)) {
+      finalEntries.push(entry);
+      sourceCount.set(entry.sourceId, cnt + 1);
+    }
+  }
+
+  // 按预算裁剪 prepend / appendSystem
+  const prependEntries = finalEntries.filter(e => e.injectMode === 'prepend');
+  const appendEntries  = finalEntries.filter(e => e.injectMode === 'appendSystem');
+
+  // 超配额时从低分末尾裁
+  function fitToBudget(entries: ContextEntry[], budget: number): ContextEntry[] {
+    let total = entries.reduce((s, e) => s + e.text.length, 0);
+    const res = [...entries];
+    while (total > budget && res.length > 0) {
+      // 从末尾（最低分）裁，但 mustKeep 不裁
+      let removed = false;
+      for (let i = res.length - 1; i >= 0; i--) {
+        if (!res[i].mustKeep) {
+          total -= res[i].text.length;
+          res.splice(i, 1);
+          removed = true;
+          break;
+        }
+      }
+      if (!removed) break; // 全是 mustKeep，不再裁
+    }
+    return res;
+  }
+
+  const finalPrepend = options.dryRun ? prependEntries : fitToBudget(prependEntries, options.maxPrependChars);
+  const finalAppend  = options.dryRun ? appendEntries  : fitToBudget(appendEntries, options.maxAppendChars);
+
+  const totalDropped = allEntries.length - (finalPrepend.length + finalAppend.length);
+
+  const stats: LucasCompressionStats = {
+    before_prepend_chars,
+    after_prepend_chars: finalPrepend.reduce((s, e) => s + e.text.length, 0),
+    before_append_chars,
+    after_append_chars:  finalAppend.reduce((s, e) => s + e.text.length, 0),
+    dropped_entries:     totalDropped,
+    expired_dropped:     expiredDropped,
+    dedup_dropped:       dedupDropped,
+    semantic_dropped:    semanticDropped,
+  };
+
+  const compressedResult: DynamicContextResult = {
+    prepend:      finalPrepend.map(e => e.text),
+    appendSystem: finalAppend.map(e => e.text),
+    meta: {
+      prepend:      finalPrepend,
+      appendSystem: finalAppend,
+    },
+  };
+
+  return { result: compressedResult, stats };
 }

@@ -1,5 +1,5 @@
 import kuzu, os, json, sys
-sym = "code"
+sym = "gateway"
 db = kuzu.Database(os.path.expanduser('~/HomeAI/Data/kuzu'))
 conn = kuzu.Connection(db)
 # 定义位置

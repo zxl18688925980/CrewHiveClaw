@@ -6,5 +6,13 @@
     "1": { "maxChars": 10000 },
     "2": { "maxChars": 18000 },
     "3": { "maxChars": 5000 }
+  },
+  "lucasCompression": {
+    "enabled": true,
+    "maxPrependChars": 4000,
+    "maxAppendChars": 12000,
+    "semanticThreshold": 0.92,
+    "semanticMaxCandidates": 12,
+    "logStats": true
   }
 }

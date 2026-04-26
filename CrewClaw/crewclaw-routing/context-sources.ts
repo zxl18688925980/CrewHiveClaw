@@ -73,6 +73,13 @@ export interface ChromaSource {
   label:        string;   // 注入时的前缀标签，例如「近期对话」
   inject:       InjectMode;
   tier?:        0 | 1 | 2 | 3;  // 上下文预算分层（默认 2），0=不可裁剪 1=高优 2=正常 3=低优
+  // ── 压缩元数据（本期仅 Lucas 使用）────────────────────────────────
+  compressGroup?: string;              // 所属压缩分类
+  mustKeep?: boolean;                  // true = 该类至少保留 1 条
+  dedupMode?: 'exact' | 'normalized' | 'semantic' | 'none';
+  ttlHours?: number;                   // 注入有效期（小时）
+  maxItemsAfterCompress?: number;      // 压缩后最多保留条数
+  priorityBias?: number;               // 排序附加分（建议 -2 到 +2）
 }
 
 // ── Kuzu 来源 ─────────────────────────────────────────────────────────────
@@ -87,6 +94,13 @@ export interface KuzuSource {
   inject:  InjectMode;
   ready:   boolean;                    // false = Kuzu 数据尚未就绪，跳过（不报错）
   tier?:   0 | 1 | 2 | 3;             // 上下文预算分层（默认 2）
+  // ── 压缩元数据（本期仅 Lucas 使用）────────────────────────────────
+  compressGroup?: string;              // 所属压缩分类
+  mustKeep?: boolean;                  // true = 该类至少保留 1 条
+  dedupMode?: 'exact' | 'normalized' | 'semantic' | 'none';
+  ttlHours?: number;                   // 注入有效期（小时）
+  maxItemsAfterCompress?: number;      // 压缩后最多保留条数
+  priorityBias?: number;               // 排序附加分（建议 -2 到 +2）
 }
 
 // ── 文件来源（过渡态）────────────────────────────────────────────────────
@@ -109,6 +123,13 @@ export interface FileSource {
   // findRelevantMemories：optional=true 的文件仅在 query 命中 keywords 时注入（ClaudeCode memdir 对齐）
   optional?: boolean;
   keywords?: string[];  // 命中任意一个关键词即注入，不命中则跳过
+  // ── 压缩元数据（本期仅 Lucas 使用）────────────────────────────────
+  compressGroup?: string;              // 所属压缩分类
+  mustKeep?: boolean;                  // true = 该类至少保留 1 条
+  dedupMode?: 'exact' | 'normalized' | 'semantic' | 'none';
+  ttlHours?: number;                   // 注入有效期（小时）
+  maxItemsAfterCompress?: number;      // 压缩后最多保留条数
+  priorityBias?: number;               // 排序附加分（建议 -2 到 +2）
 }
 
 export type ContextSource = ChromaSource | KuzuSource | FileSource;
@@ -126,6 +147,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "user-profile",
       label: "家人档案", inject: "append-system",
       tier: 1,
+      compressGroup: 'profile', mustKeep: true, dedupMode: 'normalized', maxItemsAfterCompress: 1, priorityBias: 2,
     },
 
     // 家人动态摘要：机械提取的实时状态（承诺、话题、接话点），不走检索，每轮注入
@@ -134,6 +156,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "user-now",
       label: "当前状态快照", inject: "append-system",
       tier: 0,
+      compressGroup: 'now', mustKeep: true, dedupMode: 'none', maxItemsAfterCompress: 1, priorityBias: 3,
     },
 
     // 项目背景：HomeAI 是什么、Andy/Lisa 幕后团队、流水线、里程碑（前世今生）
@@ -143,6 +166,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       filePath: "~/.openclaw/workspace-lucas/BACKGROUND.md",
       label: "项目背景", inject: "append-system",
       tier: 1,
+      compressGroup: 'background', dedupMode: 'normalized', ttlHours: 72, maxItemsAfterCompress: 1, priorityBias: -1,
     },
 
     // Lucas 自我认知摘要：OpenClaw 原生已在 prompt 开头注入 MEMORY.md，无需重复
@@ -158,6 +182,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "conversations", queryMode: "by-user",
       topK: 5, label: "近期对话", inject: "append-system",
       tier: 2,
+      compressGroup: 'recent-dialogue', dedupMode: 'semantic', maxItemsAfterCompress: 2,
     },
 
     // Lucas 自己的决策记忆
@@ -166,6 +191,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "decisions", queryMode: "semantic", agentFilter: "lucas",
       topK: 3, label: "决策记忆", inject: "append-system",
       tier: 2,
+      compressGroup: 'knowledge', dedupMode: 'semantic', maxItemsAfterCompress: 2,
     },
 
     // 对家人的未完成承诺
@@ -174,6 +200,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "decisions", queryMode: "pending-commitments",
       topK: 5, label: "未完成承诺", inject: "append-system",
       tier: 3,
+      compressGroup: 'pending', dedupMode: 'normalized', ttlHours: 168, maxItemsAfterCompress: 2, mustKeep: true,
     },
 
     // 团队近期动态
@@ -182,6 +209,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "agent_interactions", queryMode: "agent-interactions", agentFilter: "lucas",
       topK: 3, label: "团队近期动态", inject: "append-system",
       tier: 3,
+      compressGroup: 'knowledge', dedupMode: 'normalized', ttlHours: 72, maxItemsAfterCompress: 1,
     },
 
     // 家庭行为规律
@@ -190,6 +218,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "behavior_patterns", queryMode: "semantic",
       topK: 3, label: "行为规律", inject: "append-system",
       tier: 2,
+      compressGroup: 'knowledge', dedupMode: 'semantic', maxItemsAfterCompress: 2,
     },
 
     // 家庭知识
@@ -198,6 +227,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       collection: "family_knowledge", queryMode: "semantic",
       topK: 3, label: "家庭知识", inject: "append-system",
       tier: 2,
+      compressGroup: 'knowledge', dedupMode: 'semantic', maxItemsAfterCompress: 2,
     },
 
     // Kuzu：当前能力清单（init-capabilities.py 已写入，数据就绪）
@@ -213,6 +243,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 21, label: "当前能力清单", inject: "append-system",
       ready: true,
       tier: 2,
+      compressGroup: 'capability', dedupMode: 'normalized', ttlHours: 168, maxItemsAfterCompress: 1,
     },
 
     // Kuzu：角色行为模式（ready=true；distill-agent-memories.py 首次成功运行于 2026-03-31）
@@ -227,6 +258,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 10, label: "行为模式积累", inject: "append-system",
       ready: true,
       tier: 2,
+      compressGroup: 'knowledge', dedupMode: 'semantic', ttlHours: 168, maxItemsAfterCompress: 2,
     },
 
     // Web 应用工具（关键词命中时注入精准 URL）
@@ -235,6 +267,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       queryMode: "app-capabilities",
       label: "可调用工具", inject: "prepend",
       tier: 1,
+      compressGroup: 'capability', dedupMode: 'normalized', maxItemsAfterCompress: 1, priorityBias: 1,
     },
 
     // Kuzu：家人实时状态（路径已完整：distill-memories.py → Kuzu → render-knowledge.py → inject.md）
@@ -248,6 +281,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 10, label: "家人当前状态", inject: "append-system",
       ready: true,
       tier: 1,
+      compressGroup: 'profile', dedupMode: 'semantic', maxItemsAfterCompress: 2, priorityBias: 2,
     },
 
     // Kuzu：近期待跟进事项（has_pending_event，按 valid_until 升序，最近到期的排前面）
@@ -261,6 +295,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 5, label: "待跟进事项", inject: "append-system",
       ready: true,
       tier: 3,
+      compressGroup: 'pending', dedupMode: 'normalized', mustKeep: true, maxItemsAfterCompress: 1, priorityBias: 2,
     },
 
     // Kuzu：当前活跃话题线索（distill-active-threads.py 写入，每次对话后触发 6h 冷却）
@@ -276,6 +311,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 5, label: "当前活跃话题", inject: "append-system",
       ready: true,
       tier: 2,
+      compressGroup: 'topic', dedupMode: 'semantic', mustKeep: true, ttlHours: 1080, maxItemsAfterCompress: 1, priorityBias: 1,
     },
 
     // Kuzu：关系网络近况（P2-A path B）— 遍历家庭关系边，找相关家人的当前状态/近期关注/重要事件
@@ -292,6 +328,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 12, label: "家人近况", inject: "append-system",
       ready: true,
       tier: 1,
+      compressGroup: 'relationship', dedupMode: 'semantic', maxItemsAfterCompress: 2,
     },
 
     // Kuzu：话题共鸣（P2-A path A）— 找到与当前说话人关注相同话题的其他人（家庭成员 + 周边人）
@@ -311,6 +348,7 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 8, label: "话题共鸣", inject: "append-system",
       ready: true,
       tier: 3,
+      compressGroup: 'topic', dedupMode: 'semantic', maxItemsAfterCompress: 1,
     },
 
     // Kuzu：因果关系事实（causal_relation，MAGMA 因果维度独立注入）
@@ -326,10 +364,12 @@ export const contextSources: Record<string, ContextSource[]> = {
       topK: 8, label: "因果关系", inject: "append-system",
       ready: true,
       tier: 3,
+      compressGroup: 'knowledge', dedupMode: 'semantic', maxItemsAfterCompress: 1,
     },
 
     // 自动积累工作流模式（plugin 管理，按 prompt 关键词召回 top-3）
     // 写入路径：data/learning/auto-skills/lucas/（不在 OpenClaw native skills 目录，不全量注入）
+    // 不参与压缩管线
     {
       source: "file", id: "auto-skills",
       queryMode: "auto-skill-recall",
