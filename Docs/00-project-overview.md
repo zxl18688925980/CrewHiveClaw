@@ -3768,12 +3768,12 @@ wecom-entrance 进程崩溃时，正在执行的 catch 块不会运行，task-re
 | 层级 | 触发时机 | 机制 |
 |------|---------|------|
 | **Layer 1** | Andy pipeline catch 块 | `markTaskStatus("failed")` — 代码层捕获的异常即时标记 |
-| **Layer 2** | wecom-entrance 启动时 | 扫描 running > 5min 的孤儿任务 → 标记 `interrupted`（写入 `interruptedAt` + `interruptReason: process-restart`）→ 通知 SE → 延迟 2min 等 Gateway 稳定后通知 Lucas 决定是否重触发 |
+| **Layer 2** | wecom-entrance 启动时 | 扫描 running > 5min 的孤儿任务 → 标记 `interrupted`（写入 `interruptedAt` + `interruptReason: process-restart`）→ 通知 SE → 延迟 2min 等 Gateway 稳定后**自动恢复**：heartbeat 提交且有 queued 副本（前 80 字符匹配）→ `cancelled`（去重）；heartbeat 无副本 → 重新 `queued`；用户提交 → 始终重新 `queued` + 通知 Lucas |
 | **Layer 3** | 每 30 分钟定时扫描 | running > 2h 的任务通知 SE（`stuckNotifiedAt` 防止每个任务每 2h 重复通知） |
 
-**task-registry 状态机**：`queued → running → completed / failed / cancelled / interrupted`
+**task-registry 状态机**：`queued → running → completed / failed / cancelled / interrupted`；Layer 2 自动恢复可将 `interrupted → queued`（附 `requeueReason: startup-orphan-recovery`）
 
-Layer 2 延迟 2min 通知 Lucas 的原因：wecom-entrance 启动后 Gateway 可能尚未就绪，给两个进程留稳定时间窗口再发 Agent 调用。Andy/Lisa 无直接交互界面，依赖此机制确保任务中断可见、可恢复，而不是静默消失。
+Layer 2 延迟 2min 的原因：wecom-entrance 启动后 Gateway 可能尚未就绪，留稳定时间窗口再发 Agent 调用。自动恢复策略：heartbeat 触发的任务下次 HEARTBEAT 会自然补发，优先去重避免重复执行；用户提交的任务无副本，优先保续不丢失。
 
 ### 量化健康标准
 
