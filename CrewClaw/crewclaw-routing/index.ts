@@ -6257,6 +6257,60 @@ const crewclawRoutingPlugin = {
       }
     }, SESSION_SWEEP_INTERVAL_MS).unref();
 
+    // ── Off-peak 积压排干定时器（22:00-08:00 CST，每 30 分钟一次）──────────────
+    // 补充事件驱动机制（Lucas 对话结束触发）的盲区：
+    //   场景1：白天家人无对话时，queued 任务可能积压数小时
+    //   场景2：手动修改 task-registry（如 interrupted→queued）后首次对话前的空窗期
+    // 与事件驱动共享 6h 全局冷却（lastProactiveDispatchAt）
+    setInterval(() => {
+      try {
+        const cstHour = new Date(Date.now() + 8 * 3600000).getUTCHours();
+        if (cstHour >= 8 && cstHour < 22) return; // 仅 22:00-08:00 CST 窗口触发
+        const nowTs = Date.now();
+        if (nowTs - lastProactiveDispatchAt < PROACTIVE_DISPATCH_COOLDOWN_MS) return;
+        // 读 queued 任务：queue file 优先，fallback registry status=queued
+        let queuedTasks: Record<string, unknown>[] = [];
+        if (existsSync(TASK_QUEUE_FILE)) {
+          queuedTasks = readJsonlEntries(TASK_QUEUE_FILE);
+        }
+        if (queuedTasks.length === 0) {
+          const orphaned = readTaskRegistry().filter(t => t.status === "queued");
+          if (orphaned.length > 0) {
+            queuedTasks = orphaned.map(t => ({
+              requirement: t.requirement,
+              intentType: "develop_feature",
+              requestorId: t.submittedBy ?? "unknown",
+              originalSymptom: t.requirement,
+              taskId: t.id,
+            }));
+            logger.info(`[Dispatch] off-peak 定时扫描：从 registry 补救 ${queuedTasks.length} 个 queued 任务`);
+          }
+        }
+        if (queuedTasks.length === 0) return;
+        const activeTasks = readTaskRegistry().filter(t => t.status === "running");
+        if (activeTasks.length > 0) return;
+        // 条件满足：触发 off-peak 排干
+        lastProactiveDispatchAt = nowTs;
+        if (existsSync(TASK_QUEUE_FILE)) writeFileSync(TASK_QUEUE_FILE, "", "utf8");
+        logger.info(`[Dispatch] off-peak 排干任务队列：${queuedTasks.length} 个任务，CST 小时=${cstHour}，系统空闲`);
+        void notifyEngineer(
+          `🌙 [off-peak调度] 定时扫描发现 ${queuedTasks.length} 个积压任务，系统空闲，主动启动处理（6h 冷却）`,
+          "pipeline",
+          FRONTEND_AGENT_ID,
+        );
+        queuedTasks.forEach((task, i) => {
+          setTimeout(() => {
+            runAndyPipeline({
+              requirement: (task as { requirement: string }).requirement,
+              intentType: ((task as { intentType?: string }).intentType) ?? "develop_feature",
+              userId: ((task as { requestorId?: string }).requestorId) ?? "unknown",
+              originalSymptom: ((task as { originalSymptom?: string }).originalSymptom) ?? (task as { requirement: string }).requirement,
+            }).catch(() => {});
+          }, i * 2 * 60 * 1000); // 每任务间隔 2 分钟，避免并发雪崩
+        });
+      } catch (_e) { /* 静默，不影响 Gateway 主流程 */ }
+    }, 30 * 60 * 1000).unref();
+
     function cleanupSessionMaps(sessionKey: string) {
       sessionIntent.delete(sessionKey);
       sessionModel.delete(sessionKey);
