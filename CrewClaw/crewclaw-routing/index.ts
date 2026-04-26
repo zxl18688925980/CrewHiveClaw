@@ -7943,6 +7943,53 @@ const crewclawRoutingPlugin = {
         }
       }
 
+      // ── 宪法级文件保护（最高优先级，全角色生效，不受 enforcement-rules 控制）──────
+      // 受保护文件只能由系统工程师通过 Claude Code 维护，任何 Agent 不可写入：
+      //   · SOUL.md / IDENTITY.md：各角色人格身份核心文件
+      //   · Docs/*.md：Readme 系列正朔文档（HomeAI Readme.md / 00-project-overview.md 等）
+      {
+        const HOME = process.env.HOME ?? "";
+        const DOCS_DIR = `${HOME}/HomeAI/CrewHiveClaw/Docs/`;
+        const PROTECTED_BASENAMES = new Set(["SOUL.md", "IDENTITY.md"]);
+
+        function isConstitutionalFile(rawPath: string): boolean {
+          const resolved = rawPath.startsWith("~/") ? `${HOME}/${rawPath.slice(2)}` : rawPath;
+          const basename = resolved.split("/").pop() ?? "";
+          if (PROTECTED_BASENAMES.has(basename)) return true;
+          if (resolved.startsWith(DOCS_DIR) && basename.endsWith(".md")) return true;
+          return false;
+        }
+
+        // write_file / edit / write：检查 path 参数
+        if (["write_file", "edit", "write"].includes(event.toolName)) {
+          const params = event.params as Record<string, unknown>;
+          const filePath = String(params?.path ?? params?.file_path ?? params?.filename ?? "");
+          if (filePath && isConstitutionalFile(filePath)) {
+            const basename = filePath.split("/").pop() ?? filePath;
+            return {
+              block: true,
+              blockReason: `⛔ 宪法级保护：${basename} 是受保护文件，只能由系统工程师通过 Claude Code 修改。Agent 不可直接写入 SOUL.md / IDENTITY.md / Readme 系列文档。如需变更，请通过 query_requirement_owner 或 notify_engineer 报告需求。`,
+            };
+          }
+        }
+
+        // bash：检测命令中是否含对受保护文件的写操作
+        if (event.toolName === "bash") {
+          const params = event.params as Record<string, unknown>;
+          const command = String(params?.command ?? params?.cmd ?? "");
+          const hasProtectedFile =
+            ["SOUL.md", "IDENTITY.md"].some((f) => command.includes(f)) ||
+            command.includes("/CrewHiveClaw/Docs/");
+          const hasWriteOp = />|tee\s|sed\s+-i|echo\s+.*>>/.test(command);
+          if (hasProtectedFile && hasWriteOp) {
+            return {
+              block: true,
+              blockReason: `⛔ 宪法级保护：命令疑似写入受保护文件（SOUL.md / IDENTITY.md / Readme 系列），Agent 不可修改这些文件。`,
+            };
+          }
+        }
+      }
+
       if (ctx.agentId !== DESIGNER_AGENT_ID) return;
 
       // write / edit：封锁写代码，但允许写 Andy 自己的工作域（spec 设计产出）
