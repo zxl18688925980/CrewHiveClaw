@@ -1006,15 +1006,64 @@ app.listen(PORT, () => {
           body: JSON.stringify({ type: 'intervention', fromAgent: inferTaskAgent(task), message: msg }),
         }).catch(err => logger.error('notify-engineer 失败（启动扫描）', { error: err.message }));
       }
-      // 延迟 2 分钟等 Gateway 稳定后通知 Lucas，由他决定是否重触发
-      setTimeout(async () => {
+      // 自动恢复：heartbeat 任务有 queued 副本 → cancelled；其余 → 重新 queued
+      // 延迟 2 分钟等 Gateway 稳定后执行（让 HEARTBEAT 自然触发的 queued 任务先就位）
+      setTimeout(() => {
         try {
-          const summary = orphans.map(t => `- ${t.id}（${t.title || t.requirement?.slice(0, 40) || '无标题'}）`).join('\n');
-          const lucasMsg = `系统刚刚重启，检测到 ${orphans.length} 个任务在重启前被中断，已标记 interrupted：\n${summary}\n\n你来判断是否需要重新触发这些任务。`;
-          await callGatewayAgent('lucas', lucasMsg, 'system:startup', 60000);
-          logger.info('已通知 Lucas 处理孤儿任务', { count: orphans.length });
+          const currentEntries = readTaskRegistry();
+          const queued = currentEntries.filter(e => e.status === 'queued');
+
+          const isHeartbeatUser = (uid) =>
+            uid && (uid.endsWith('-heartbeat') || uid.startsWith('heartbeat-'));
+
+          // 为每个孤儿决定：cancel 还是 re-queue
+          const decisions = orphans.map(orphan => {
+            const sub = orphan.submittedBy || '';
+            if (isHeartbeatUser(sub)) {
+              // heartbeat 提交的任务：检查是否有内容相似的 queued 副本
+              const reqPrefix = (orphan.requirement || '').slice(0, 80);
+              const hasDup = queued.some(q =>
+                q.id !== orphan.id &&
+                (q.requirement || '').slice(0, 80) === reqPrefix
+              );
+              return { orphan, action: hasDup ? 'cancel' : 'requeue' };
+            } else {
+              // 用户提交的任务：始终重新排队
+              return { orphan, action: 'requeue' };
+            }
+          });
+
+          const requeued = decisions.filter(d => d.action === 'requeue').map(d => d.orphan);
+          const cancelled = decisions.filter(d => d.action === 'cancel').map(d => d.orphan);
+
+          // 写回注册表
+          const now2 = new Date().toISOString();
+          const finalEntries = currentEntries.map(e => {
+            if (requeued.find(o => o.id === e.id)) {
+              return { ...e, status: 'queued', requeuedAt: now2, requeueReason: 'startup-orphan-recovery' };
+            }
+            if (cancelled.find(o => o.id === e.id)) {
+              return { ...e, status: 'cancelled', cancelledAt: now2, cancelReason: 'startup-orphan-dup-queued' };
+            }
+            return e;
+          });
+          writeTaskRegistry(finalEntries);
+
+          logger.info('启动扫描：孤儿任务自动恢复完成', {
+            requeued: requeued.map(o => o.id),
+            cancelled: cancelled.map(o => o.id),
+          });
+
+          // 通知 Lucas（仅有用户提交的重排任务时才通知，避免 heartbeat 噪音）
+          const userRequeued = requeued.filter(o => !isHeartbeatUser(o.submittedBy || ''));
+          if (userRequeued.length > 0) {
+            const summary = userRequeued.map(t => `- ${t.id}（${t.title || t.requirement?.slice(0, 40) || '无标题'}）`).join('\n');
+            const lucasMsg = `系统刚刚重启，以下 ${userRequeued.length} 个被中断的任务已自动重新排队，稍后会继续执行：\n${summary}`;
+            callGatewayAgent('lucas', lucasMsg, 'system:startup', 60000)
+              .catch(err => logger.error('通知 Lucas 孤儿任务恢复失败', { error: err.message }));
+          }
         } catch (err) {
-          logger.error('通知 Lucas 孤儿任务失败', { error: err.message });
+          logger.error('孤儿任务自动恢复失败', { error: err.message });
         }
       }, 2 * 60 * 1000);
     } catch (err) {
