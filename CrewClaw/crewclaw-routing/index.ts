@@ -10571,7 +10571,7 @@ last_used: null
                 });
 
                 if (alreadyDirty.length > 0) {
-                  log("pipeline", `[pre-check] dirty files detected: ${alreadyDirty.map(ip => ip.file).join(", ")}`);
+                  logger.info(`[pre-check] dirty files detected: ${alreadyDirty.map(ip => ip.file).join(", ")}`);
                   void notifyEngineer(
                     `【${p.requirement_id ?? "?"}】代码现状预检：${alreadyDirty.length} 个目标文件已有未提交变更（${alreadyDirty.map(ip => ip.file).join(", ")}），Andy 仍触发了 Lisa 实现。请关注是否重复工作。`,
                     "pipeline", DESIGNER_AGENT_ID,
@@ -10691,14 +10691,14 @@ last_used: null
                       if (!pendingEntry.resolved) {
                         pendingEntry.resolved = true;
                         resolve(recId);
-                        log("pipeline", `[approval-gate] ${approvalKey}: timeout (${APPROVAL_TIMEOUT_SEC}s), using recommended=${recId}`);
+                        logger.info(`[approval-gate] ${approvalKey}: timeout (${APPROVAL_TIMEOUT_SEC}s), using recommended=${recId}`);
                       }
                     }, APPROVAL_TIMEOUT_SEC * 1000);
                   });
                   const chosen = await approvalPromise;
                   pendingApprovals.delete(approvalKey);
                   if (chosen !== recId) {
-                    log("pipeline", `[approval-gate] ${approvalKey}: user chose ${chosen} (was ${recId})`);
+                    logger.info(`[approval-gate] ${approvalKey}: user chose ${chosen} (was ${recId})`);
                   }
                 }
               }
@@ -10957,7 +10957,7 @@ last_used: null
 
               const verify1 = verifyLisaDelivery(specData);
               if (!verify1.passed) {
-                log("pipeline", `[verify] first check failed: ${verify1.summary}`);
+                logger.info(`[verify] first check failed: ${verify1.summary}`);
                 // 自动重试一次：附验证失败信息重新触发 Lisa
                 const retryMsg = [
                   "【自动重试 · 交付验证失败】",
@@ -10971,7 +10971,7 @@ last_used: null
                   lisaResponse = await callGatewayAgent(IMPLEMENTOR_AGENT_ID, retryMsg, 600_000, threadId, DESIGNER_AGENT_ID);
                   const verify2 = verifyLisaDelivery(specData);
                   if (!verify2.passed) {
-                    log("pipeline", `[verify] retry also failed: ${verify2.summary}`);
+                    logger.info(`[verify] retry also failed: ${verify2.summary}`);
                     // 二次验证仍失败 → 通知 Andy 带具体证据
                     void callGatewayAgent(DESIGNER_AGENT_ID, [
                       `【Lisa 交付验证失败 · ${reqId}】（自动重试后仍未通过）`,
@@ -10983,7 +10983,7 @@ last_used: null
                     success = false;
                   }
                 } catch (retryErr) {
-                  log("pipeline", `[verify] retry exception: ${retryErr}`);
+                  logger.info(`[verify] retry exception: ${retryErr}`);
                   responseText = `Lisa 重试异常: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`;
                   success = false;
                 }
@@ -11001,7 +11001,7 @@ last_used: null
                 const overlap = gitFiles.filter(gf => specFiles.some(sf => gf.endsWith(sf) || sf.endsWith(gf)));
 
                 if (specFiles.length > 0 && overlap.length === 0 && gitFiles.length > 0) {
-                  log("pipeline", `[verify] change-target mismatch: git changed [${gitFiles.join(",")}] but spec targets [${specFiles.join(",")}]`);
+                  logger.info(`[verify] change-target mismatch: git changed [${gitFiles.join(",")}] but spec targets [${specFiles.join(",")}]`);
                   void notifyEngineer(
                     `【${reqId}】变更来源校验：Lisa 修改了 ${gitFiles.join(", ")}，但 spec 目标是 ${specFiles.join(", ")}，可能修改了错误文件。`,
                     "pipeline", IMPLEMENTOR_AGENT_ID,
@@ -11252,7 +11252,7 @@ last_used: null
             if (success) {
               const finalCheck = runProjectCompileCheck();
               if (finalCheck.changedFiles.length === 0) {
-                log("pipeline", `[complete-check] ${reqId}: no git changes at completion time, marking failed`);
+                logger.info(`[complete-check] ${reqId}: no git changes at completion time, marking failed`);
                 void notifyEngineer(
                   `【${reqId}】完成标记被阻止：Lisa 报告成功但 git diff 无变更，可能变更被撤销或 Lisa 幻觉。任务标记为 failed。`,
                   "pipeline", IMPLEMENTOR_AGENT_ID,
