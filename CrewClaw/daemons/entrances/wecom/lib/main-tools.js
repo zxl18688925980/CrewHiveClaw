@@ -395,7 +395,7 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l1',
-    description: '评估 L1（Agent记忆与认知质量·写入侧）：四维度蒸馏管道健康（语义/时间/实体/因果 × 三角色 embedding 有效率）、蒸馏产出（Andy design_learning / Lisa impl_learning）、家人档案注入完整性（Kuzu→inject.md）、Kuzu 知识图谱数据量、数据新鲜度、时间分层退化检测。',
+    description: '评估 L1（Agent记忆与认知质量·写入侧）：四维度记忆写入健康（语义/时间/实体/因果 × 三角色 embedding 有效率）、蒸馏产出内容质量（Kuzu has_pattern：Andy/Lisa 模式数量 + 实质描述率 + 内容样本）、Kuzu Fact 数据量与内容样本、家人档案注入完整性、承诺追踪（task-registry.json >30天未完成）、时间分层退化检测。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -416,7 +416,7 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l3',
-    description: '评估 L3（Engineering Anything · 开发即交付）：三角色闭环交付力——任务类型覆盖度 + 端到端交付成功率 + 交付物多样性 + 三角色流水线健康（task-registry 状态分布）。',
+    description: '评估 L3（Engineering Anything · 开发即交付）：三角色闭环交付力——任务类型覆盖度 + 端到端交付成功率（含近期完成任务样本：3条title+type）+ 交付物多样性（含generated/实际目录名）+ 三角色流水线健康；外循环教师测试：近期交付内容样本（5条，Main判断是否真正Engineering Anything）+ 逾期未交付需求（ChromaDB requirements >30天无outcome）+ outcome_note质量（好/差样本对比）。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -426,7 +426,7 @@ const MAIN_TOOLS = [
   },
   {
     name: 'evaluate_l5',
-    description: '评估 L5（系统自我演化·让 L1~L4 越来越好）两层：【系统层·Andy 主力】进化信号积累 + 知识内化 + Skill 积累 + Andy 巡检时效；【模型层】DPO 信号积累+趋势、本地模型就绪状态、模型能力评估（调用 evaluate_local_model 获取量化评分）。',
+    description: '评估 L5（系统自我演化·让 L1~L4 越来越好）两层：【系统层】进化信号积累 + Skill 积累（含高频Skill名称样本） + Andy巡检时效 + AGENTS.md规则收敛（含规则样本：可内化规范 vs 永久约束）；【模型层】DPO积累（capability/target分布）+ DPO good_response质量（好/差样本对比）+ DPO训练方向审计（3条实际触发场景，Main判断是否训练了正确方向）+ 本地模型就绪状态 + Phase 1 adapter状态。',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -1717,88 +1717,78 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
-    // 10. Andy/Lisa 蒸馏产出（教师视角：内容质量 > 仅计数）
-    const _checkDocQuality = (doc) => {
-      if (!doc || typeof doc !== 'string') return false;
-      const t = doc.trim();
-      if (t.length < 30) return false;
-      const badWords = ['待补充', 'todo', '暂无', '（无）', 'n/a', 'placeholder', '无内容'];
-      if (badWords.some(p => t.toLowerCase() === p)) return false;
-      return true;
-    };
+    // 10. Andy/Lisa 蒸馏产出（Kuzu has_pattern，由 distill-agent-memories.py 每日写入）
+    // 注意：蒸馏产出不在 ChromaDB decisions（无 design_learning/impl_learning type 记录），
+    //       而在 Kuzu has_pattern Fact（distill-agent-memories.py → write_kuzu_patterns）
+    const _distillScript = `
+import sys, json, os
+sys.path.insert(0, '/opt/homebrew/lib/python3.11/site-packages')
+try:
+    import kuzu
+    db   = kuzu.Database('${kuzuPath}')
+    conn = kuzu.Connection(db)
+    result = {}
+    for aid in ['andy', 'lisa']:
+        r = conn.execute(
+            "MATCH (a:Entity {id: $aid})-[f:Fact {relation: 'has_pattern'}]->(p:Entity) "
+            "WHERE f.valid_until IS NULL RETURN p.name, f.context LIMIT 10",
+            {"aid": aid}
+        )
+        pats = []
+        while r.has_next():
+            row = r.get_next()
+            pats.append({'name': (row[0] or '')[:60], 'ctx': (row[1] or '')[:120]})
+        result[aid] = pats
+    print(json.dumps({'ok': True, 'patterns': result}))
+except Exception as e:
+    print(json.dumps({'ok': False, 'error': str(e)}))
+sys.stdout.flush()
+os._exit(0)
+`.trim();
     try {
-      const colResp = await fetch(`${CHROMA_API_BASE}/decisions`);
-      if (colResp.ok) {
-        const { id: colId } = await colResp.json();
-        // Andy design_learning — 计数 + 内容质量
-        const andyResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            where: { '$and': [{ agent: { '$eq': 'andy' } }, { type: { '$eq': 'design_learning' } }] },
-            include: ['documents', 'metadatas'], limit: 20,
-          }),
-        });
-        const andyData = andyResp.ok ? await andyResp.json() : { ids: [], documents: [] };
-        const andyDistillCount = (andyData.ids || []).length;
-        const andyDocs = andyData.documents || [];
-        const andyGoodDocs = andyDocs.filter(_checkDocQuality);
-        const andyQualRate = andyDocs.length > 0 ? Math.round(andyGoodDocs.length / andyDocs.length * 100) : null;
-        // Lisa impl_learning — 计数 + 内容质量
-        const lisaResp = await fetch(`${CHROMA_API_BASE}/${colId}/get`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            where: { '$and': [{ agent: { '$eq': 'lisa' } }, { type: { '$eq': 'impl_learning' } }] },
-            include: ['documents', 'metadatas'], limit: 20,
-          }),
-        });
-        const lisaData = lisaResp.ok ? await lisaResp.json() : { ids: [], documents: [] };
-        const lisaDistillCount = (lisaData.ids || []).length;
-        const lisaDocs = lisaData.documents || [];
-        const lisaGoodDocs = lisaDocs.filter(_checkDocQuality);
-        const lisaQualRate = lisaDocs.length > 0 ? Math.round(lisaGoodDocs.length / lisaDocs.length * 100) : null;
-        const hasLearnings = andyDistillCount > 0 || lisaDistillCount > 0;
-        if (!hasLearnings) {
-          results.push('⚠️ Andy/Lisa 蒸馏产出：无记录（每日凌晨 1 点触发）');
+      const _tmpDistill = path.join(INSTANCE_ROOT, 'temp', `eval-l1-distill-${Date.now()}.py`);
+      fs.mkdirSync(path.join(INSTANCE_ROOT, 'temp'), { recursive: true });
+      fs.writeFileSync(_tmpDistill, _distillScript);
+      const _distillOut = execSync(`${PYTHON311} ${_tmpDistill}`, { encoding: 'utf8', timeout: 20000 }).trim();
+      try { fs.unlinkSync(_tmpDistill); } catch (_) {}
+      const _dd = JSON.parse(_distillOut);
+      if (!_dd.ok) {
+        results.push(`⚠️ Andy/Lisa 蒸馏产出（Kuzu has_pattern）：查询失败——${(_dd.error || '').slice(0, 60)}`);
+        if (score === '✅') score = '⚠️';
+      } else {
+        const _andyPs = (_dd.patterns || {}).andy || [];
+        const _lisaPs  = (_dd.patterns || {}).lisa  || [];
+        const _patTotal = _andyPs.length + _lisaPs.length;
+        if (_patTotal === 0) {
+          results.push('⚠️ Andy/Lisa 蒸馏产出（Kuzu has_pattern）：无记录——每日 1:00 蒸馏触发，首次需等待');
           if (score === '✅') score = '⚠️';
         } else {
-          results.push(`✅ Andy/Lisa 蒸馏产出数量：design_learning ${andyDistillCount} 条，impl_learning ${lisaDistillCount} 条`);
-          // Andy 内容质量
-          if (andyQualRate !== null) {
-            const andyQualOk = andyQualRate >= 80;
-            results.push(`${andyQualOk ? '✅' : '⚠️'} Andy design_learning 内容质量（抽样${andyDocs.length}条）：${andyQualRate}% 有实质洞察${!andyQualOk ? ' — 含空/过短/占位符内容' : ''}`);
-            if (!andyQualOk && score === '✅') score = '⚠️';
-            if (!andyQualOk) {
-              const badDoc = andyDocs.find(d => !_checkDocQuality(d));
-              if (badDoc !== undefined) results.push(`    ↳ 差样本：「${String(badDoc || '').trim().slice(0, 80)}」`);
-            }
+          results.push(`✅ Andy/Lisa 蒸馏产出：Andy ${_andyPs.length} 个模式，Lisa ${_lisaPs.length} 个模式`);
+          // Andy 内容质量（context 字段是否有实质描述）
+          if (_andyPs.length > 0) {
+            const _ag = _andyPs.filter(p => p.ctx && p.ctx.trim().length > 20).length;
+            const _aq = Math.round(_ag / _andyPs.length * 100);
+            const _aqOk = _aq >= 80;
+            results.push(`${_aqOk ? '✅' : '⚠️'} Andy 模式内容质量（${_andyPs.length} 个）：${_aq}% 有实质描述${!_aqOk ? '（context 过短/空）' : ''}`);
+            if (!_aqOk && score === '✅') score = '⚠️';
+            // 内容样本（供 Main 教师视角判断是否真正提炼了洞察）
+            const _aLines = _andyPs.slice(0, 3).map((p, i) => `    ${i + 1}. 【${p.name}】${p.ctx ? ' — ' + p.ctx : '（无描述）'}`).join('\n');
+            results.push(`  📋 Andy 蒸馏模式样本：\n${_aLines}`);
           }
           // Lisa 内容质量
-          if (lisaQualRate !== null) {
-            const lisaQualOk = lisaQualRate >= 80;
-            results.push(`${lisaQualOk ? '✅' : '⚠️'} Lisa impl_learning 内容质量（抽样${lisaDocs.length}条）：${lisaQualRate}% 有实质洞察${!lisaQualOk ? ' — 含空/过短/占位符内容' : ''}`);
-            if (!lisaQualOk && score === '✅') score = '⚠️';
-            if (!lisaQualOk) {
-              const badDoc = lisaDocs.find(d => !_checkDocQuality(d));
-              if (badDoc !== undefined) results.push(`    ↳ 差样本：「${String(badDoc || '').trim().slice(0, 80)}」`);
-            }
-          }
-          // 内容样本（供 Main 教师视角判断是否有实质洞察，不只是任务描述）
-          const _andySamples = andyDocs.filter(_checkDocQuality).slice(0, 3);
-          if (_andySamples.length > 0) {
-            const _aLines = _andySamples.map((d, i) => `    ${i + 1}. 「${String(d).trim().slice(0, 120)}」`).join('\n');
-            results.push(`  📋 Andy design_learning 样本：\n${_aLines}`);
-          }
-          const _lisaSamples = lisaDocs.filter(_checkDocQuality).slice(0, 3);
-          if (_lisaSamples.length > 0) {
-            const _lLines = _lisaSamples.map((d, i) => `    ${i + 1}. 「${String(d).trim().slice(0, 120)}」`).join('\n');
-            results.push(`  📋 Lisa impl_learning 样本：\n${_lLines}`);
+          if (_lisaPs.length > 0) {
+            const _lg = _lisaPs.filter(p => p.ctx && p.ctx.trim().length > 20).length;
+            const _lq = Math.round(_lg / _lisaPs.length * 100);
+            const _lqOk = _lq >= 80;
+            results.push(`${_lqOk ? '✅' : '⚠️'} Lisa 模式内容质量（${_lisaPs.length} 个）：${_lq}% 有实质描述${!_lqOk ? '（context 过短/空）' : ''}`);
+            if (!_lqOk && score === '✅') score = '⚠️';
+            const _lLines = _lisaPs.slice(0, 3).map((p, i) => `    ${i + 1}. 【${p.name}】${p.ctx ? ' — ' + p.ctx : '（无描述）'}`).join('\n');
+            results.push(`  📋 Lisa 蒸馏模式样本：\n${_lLines}`);
           }
         }
       }
     } catch (e) {
-      results.push(`⚠️ Andy/Lisa 蒸馏产出检查失败：${e.message.slice(0, 60)}`);
+      results.push(`⚠️ Andy/Lisa 蒸馏产出检查异常：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
     }
 
@@ -1897,7 +1887,7 @@ os._exit(0)
         if (r.includes('家人档案最后更新')) { const m = r.match(/([\d.]+) 小时前/); if (m) trackScore(_l1s, _L1I, 'data_freshness', +m[1]); }
         else if (r.includes('家人档案新鲜度') || (r.includes('家人档案') && !r.includes('注入文件'))) trackScore(_l1s, _L1I, 'data_freshness', 9999);
         if (r.includes('家人档案注入文件')) { const m = r.match(/(\d+) 个/); if (m) trackScore(_l1s, _L1I, 'family_inject', +m[1]); }
-        if (r.includes('Andy/Lisa 蒸馏产出')) { const ac = (+((r.match(/design_learning (\d+)/)?.[1] || '0')) > 0); const lc = (+((r.match(/impl_learning (\d+)/)?.[1] || '0')) > 0); trackScore(_l1s, _L1I, 'distillation_output', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
+        if (r.includes('Andy/Lisa 蒸馏产出')) { const ac = (+((r.match(/Andy (\d+) 个模式/)?.[1] || '0')) > 0); const lc = (+((r.match(/Lisa (\d+) 个模式/)?.[1] || '0')) > 0); trackScore(_l1s, _L1I, 'distillation_output', ac && lc ? 'both_active' : (ac || lc ? 'one_active' : 'none_active')); }
       }
       // 记忆写入健康：取三角色 embedding 有效率最低值
       let _minEmbRate = null;
@@ -2598,6 +2588,25 @@ os._exit(0)
         const ok = deliverySuccess >= deliveryTotal * 0.7;
         results.push(`${ok ? '✅' : '⚠️'} 端到端交付成功率：${deliverySuccess}/${deliveryTotal} = ${rate}%`);
         if (!ok && score === '✅') score = '⚠️';
+        // 展示近期完成任务样本（教师视角：是否真正"交付"了有价值的东西）
+        try {
+          const taskRegPath2 = path.join(learningDir, 'task-registry.json');
+          if (fs.existsSync(taskRegPath2)) {
+            const allTasks = JSON.parse(fs.readFileSync(taskRegPath2, 'utf8'));
+            const recentDone = allTasks
+              .filter(t => t.status === 'completed' || t.status === 'delivered')
+              .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+              .slice(0, 3);
+            if (recentDone.length > 0) {
+              const sampleLines = recentDone.map((t, i) => {
+                const title = (t.title || t.requirement || '（无标题）').slice(0, 60);
+                const type  = t.taskType ? `[${t.taskType}]` : '';
+                return `    ${i + 1}. ${type}「${title}」`;
+              }).join('\n');
+              results.push(`  📋 近期完成任务样本：\n${sampleLines}`);
+            }
+          }
+        } catch (_) {}
       }
     } catch (e) {
       results.push(`⚠️ 交付成功率检查失败：${e.message.slice(0, 60)}`);
@@ -2642,6 +2651,19 @@ os._exit(0)
       const ok = typeCount >= 3;
       results.push(`${ok ? '✅' : '⚠️'} 交付物多样性：${typeCount} 种（${[...deliverableTypes].join(', ')}）`);
       if (!ok && score === '✅') score = '⚠️';
+      // 展示实际 app 名称样本（教师视角：真正构建了哪些东西）
+      try {
+        const appDirSample = path.join(INSTANCE_ROOT, 'App', 'generated');
+        if (fs.existsSync(appDirSample)) {
+          const appNames = fs.readdirSync(appDirSample)
+            .filter(f => !f.startsWith('.'))
+            .slice(-5) // 最近 5 个（目录通常按创建时间排）
+            .reverse();
+          if (appNames.length > 0) {
+            results.push(`  📦 generated/ 目录（最近 ${appNames.length} 项）：${appNames.map(n => `「${n.slice(0, 30)}」`).join(' ')}`);
+          }
+        }
+      } catch (_) {}
     } catch (e) {
       results.push(`⚠️ 交付物多样性检查失败：${e.message.slice(0, 60)}`);
       if (score === '✅') score = '⚠️';
@@ -2675,6 +2697,32 @@ os._exit(0)
       if (score === '✅') score = '⚠️';
     }
 
+
+    // ── 外循环教师：近期交付内容样本（系统是否在做真正有价值的事）──
+    // 教师视角：能数到"交付了"不够，要看交付的是什么——是 Engineering Anything 还是跑腿工具
+    try {
+      const taskRegPathSample = path.join(learningDir, 'task-registry.json');
+      if (fs.existsSync(taskRegPathSample)) {
+        const allTasksSample = JSON.parse(fs.readFileSync(taskRegPathSample, 'utf8'));
+        const doneSample = allTasksSample
+          .filter(t => t.status === 'completed' || t.status === 'delivered')
+          .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+          .slice(0, 5);
+        if (doneSample.length === 0) {
+          results.push('⚪ 交付内容样本（外循环教师）：尚无已完成任务');
+        } else {
+          const sampleLines = doneSample.map((t, i) => {
+            const title = (t.title || t.requirement || '（无标题）').slice(0, 70);
+            const desc  = (t.description || t.spec || '').slice(0, 80);
+            const type  = t.taskType ? `[${t.taskType}]` : '[unknown]';
+            return `    ${i + 1}. ${type}「${title}」${desc ? ' / ' + desc : ''}`;
+          }).join('\n');
+          results.push(`📋 交付内容样本（外循环教师）：\n${sampleLines}`);
+        }
+      }
+    } catch (e) {
+      results.push(`⚪ 交付内容样本检测跳过：${e.message.slice(0, 60)}`);
+    }
 
     // ── 外循环教师测试：逾期未交付需求检测（真实数据）──
     // 从 ChromaDB requirements 集合找 outcome 为空且 >30 天的需求，作为 L2 交付盲点
@@ -2738,6 +2786,10 @@ os._exit(0)
               const bad = completedDecs.find(m => (m?.outcome_note || '').trim().length <= 20);
               if (bad) results.push(`    ↳ 差样本：outcome="${bad.outcome}" note="${(bad.outcome_note || '（空）').slice(0, 60)}"`);
             }
+            // 始终展示好样本做对比（教师视角：什么才算有实质说明）
+            const good = completedDecs.find(m => (m?.outcome_note || '').trim().length > 40);
+            if (good) results.push(`    ↳ 好样本：outcome="${good.outcome}" note="${(good.outcome_note || '').slice(0, 80)}"`);
+
           }
         }
       }
@@ -3050,6 +3102,35 @@ os._exit(0)
         const useOk = useRate >= 30 || totalArchiveSkills < 5;
         sysLayerResults.push(`${useOk ? '✅' : '⚠️'} Archive Skill 使用价值：${usedArchiveSkills}/${totalArchiveSkills} 个（${useRate}%）被实际调用${!useOk ? ' — 大量 Skill 零调用，沉淀质量存疑' : ''}`);
         if (!useOk && score === '✅') score = '⚠️';
+        // 展示被调用 Skill 名称（教师视角：调用了哪些 Skill，是否有价值）
+        try {
+          const usedSkillNames = [];
+          for (const agent of ['lucas', 'andy', 'lisa']) {
+            const archiveDir2 = path.join(INSTANCE_ROOT, 'Data', 'learning', 'auto-skills', agent);
+            if (!fs.existsSync(archiveDir2)) continue;
+            const skillDirs2 = fs.readdirSync(archiveDir2).filter(f => {
+              try { return fs.statSync(path.join(archiveDir2, f)).isDirectory(); } catch { return false; }
+            });
+            for (const skillDir2 of skillDirs2) {
+              const skillFile2 = path.join(archiveDir2, skillDir2, 'SKILL.md');
+              if (!fs.existsSync(skillFile2)) continue;
+              try {
+                const content2 = fs.readFileSync(skillFile2, 'utf8');
+                const fm2 = content2.match(/^---\n([\s\S]*?)\n---/);
+                if (fm2) {
+                  const ucMatch = fm2[1].match(/^usage_count:\s*(\d+)/m);
+                  const nmMatch = fm2[1].match(/^name:\s*(.+)/m);
+                  const uc = ucMatch ? parseInt(ucMatch[1]) : 0;
+                  if (uc > 0) usedSkillNames.push({ agent, name: (nmMatch?.[1] || skillDir2).trim(), count: uc });
+                }
+              } catch (_) {}
+            }
+          }
+          if (usedSkillNames.length > 0) {
+            const top3 = usedSkillNames.sort((a, b) => b.count - a.count).slice(0, 3);
+            sysLayerResults.push(`  📋 高频 Skill：${top3.map(s => `[${s.agent}]${s.name}×${s.count}`).join(' / ')}`);
+          }
+        } catch (_) {}
       }
     } catch (e) {
       sysLayerResults.push(`⚪ Skill 使用价值检查跳过：${e.message.slice(0, 60)}`);
@@ -3103,6 +3184,24 @@ os._exit(0)
         : totalAgentRules <= 200 ? '规则适中（基线阶段）'
         : '规则偏多，仍依赖外部注入';
       sysLayerResults.push(`${maturityIcon} AGENTS.md 规则收敛：三角色合计 ${totalAgentRules} 条规则行（${maturityDesc}）`);
+      // 教师视角：随机抽取 2 条规则——是"行为规范"（可内化）还是"永久约束"（不应删）
+      try {
+        for (const agentName2 of ['andy', 'lisa']) {
+          const agentsPath2 = path.join(process.env.HOME, '.openclaw', `workspace-${agentName2}`, 'AGENTS.md');
+          if (!fs.existsSync(agentsPath2)) continue;
+          const lines2 = fs.readFileSync(agentsPath2, 'utf8').split('\n');
+          const ruleLines2 = lines2.filter(l => /^\s*[-*]\s/.test(l)).map(l => l.trim());
+          if (ruleLines2.length > 0) {
+            // 取第 1 条和中间 1 条作为代表样本
+            const mid = Math.floor(ruleLines2.length / 2);
+            const samples = [ruleLines2[0], ruleLines2[mid]].filter(Boolean);
+            if (samples.length > 0) {
+              sysLayerResults.push(`  📋 ${agentName2} 规则样本（${ruleLines2.length}条中取2）：`);
+              samples.forEach(s => sysLayerResults.push(`    · ${s.slice(0, 90)}`));
+            }
+          }
+        }
+      } catch (_) {}
     } catch (e) {
       sysLayerResults.push(`⚠️ AGENTS.md 规则统计失败：${e.message.slice(0, 60)}`);
     }
@@ -3218,10 +3317,52 @@ os._exit(0)
             const bad = goodResps.find(r => r.trim().length <= 50);
             if (bad !== undefined) mdlLayerResults.push(`    ↳ 差样本：「${String(bad || '').trim().slice(0, 80)}」`);
           }
+          // 始终展示好样本对比（教师视角：什么才算有实质改进）
+          const goodSample = goodResps.find(r => r.trim().length > 80);
+          if (goodSample) mdlLayerResults.push(`    ↳ 好样本：「${goodSample.trim().slice(0, 100)}」`);
         }
       }
     } catch (e) {
       mdlLayerResults.push(`⚪ DPO 质量检查跳过：${e.message.slice(0, 60)}`);
+    }
+
+    // M1c. DPO 训练方向审计（外循环教师核心：训练的是不是真正需要改的行为）
+    // 教师视角：capability+target 分布够了，但 Main 还需要看实际触发场景
+    try {
+      const dpoCandPath2 = path.join(learningDir, 'dpo-candidates.jsonl');
+      if (fs.existsSync(dpoCandPath2)) {
+        const lines2 = fs.readFileSync(dpoCandPath2, 'utf8').split('\n').filter(l => l.trim());
+        const entries2 = lines2.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        // 取 3 条有 good_response 的样本（已完整，有对照）
+        const auditSamples = entries2.filter(e => e.good_response && e.messages).slice(0, 3);
+        if (auditSamples.length > 0) {
+          mdlLayerResults.push('📋 DPO 训练方向审计（外循环教师）：');
+          auditSamples.forEach((e, i) => {
+            const cap    = e.capability || 'unknown';
+            const target = e.internalization_target || 'unknown';
+            // 取 user 消息作为触发场景快照
+            const userMsg = (Array.isArray(e.messages) ? e.messages.find(m => m.role === 'user') : null);
+            const prompt  = (userMsg?.content || e.prompt || '（无 prompt）').slice(0, 80);
+            const goodSnip = (e.good_response || '').slice(0, 60);
+            mdlLayerResults.push(`   ${i + 1}. [${cap}→${target}] 触发：「${prompt}」→ 改为：「${goodSnip}…」`);
+          });
+        } else if (entries2.length > 0) {
+          // 降级：展示无 good_response 的待处理条目
+          const pending3 = entries2.filter(e => !e.good_response).slice(0, 3);
+          if (pending3.length > 0) {
+            mdlLayerResults.push('📋 DPO 待处理样本（尚无 good_response）：');
+            pending3.forEach((e, i) => {
+              const cap    = e.capability || 'unknown';
+              const target = e.internalization_target || 'unknown';
+              const userMsg = (Array.isArray(e.messages) ? e.messages.find(m => m.role === 'user') : null);
+              const prompt  = (userMsg?.content || e.prompt || '（无 prompt）').slice(0, 80);
+              mdlLayerResults.push(`   ${i + 1}. [${cap}→${target}] 触发：「${prompt}」`);
+            });
+          }
+        }
+      }
+    } catch (e) {
+      mdlLayerResults.push(`⚪ DPO 方向审计跳过：${e.message.slice(0, 60)}`);
     }
 
     // M2. 本地模型就绪检查（双路：Ollama API + MLX 文件目录）
