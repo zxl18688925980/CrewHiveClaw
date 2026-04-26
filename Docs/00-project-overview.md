@@ -4247,10 +4247,10 @@ trigger_development_pipeline 调用时
 | `LOCAL_MODEL_NAME` | `homeai-assistant` | 本地 Ollama 模型名；低复杂度路由端点 |
 | `LUCAS_PROVIDER` | `dashscope` | 前台 Agent 云端 provider |
 | `LUCAS_MODEL` | `qwen3.6-plus` | 前台 Agent 云端模型 ID |
-| `ANDY_PROVIDER` | `openai` | 方案设计 Agent 云端 provider |
-| `ANDY_MODEL` | `gpt-5.4` | 方案设计 Agent 云端模型 ID |
-| `LISA_PROVIDER` | `google` | 实现 Agent 云端 provider |
-| `LISA_MODEL` | `models/gemini-3.1-pro-preview` | 实现 Agent 云端模型 ID |
+| `ANDY_PROVIDER` | `google` | 方案设计 Agent 云端 provider |
+| `ANDY_MODEL` | `models/gemini-3.1-pro-preview` | 方案设计 Agent 云端模型 ID |
+| `LISA_PROVIDER` | `openai` | 实现 Agent 云端 provider |
+| `LISA_MODEL` | `gpt-5.4` | 实现 Agent 云端模型 ID |
 | `DEEPSEEK_API_KEY` | — | DeepSeek API Key |
 | `ZAI_API_KEY` | — | ZAI API Key |
 | `ANTHROPIC_API_KEY` | — | Anthropic API Key（Main 使用） |
