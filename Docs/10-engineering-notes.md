@@ -1299,3 +1299,26 @@ exec node \
 12288（12GB）在 48GB 机器上安全；根据实际物理内存调整（建议不超过系统内存的 25%）。
 
 **状态**：活跃（已在 start-gateway.sh 设置 12288，其余 Node.js 长运行服务应评估是否需要同样配置）
+
+---
+
+### ChromaDB 集合距离函数迁移陷阱（2026-04-26）
+
+**背景**：ChromaDB 的 `getOrCreateCollection` 若集合已存在则直接返回，不更新 metadata（包括 `hnsw:space`）。早期创建的集合使用默认 L2 距离，即使代码里写了 `metadata: {"hnsw:space": "cosine"}` 也不会改变已有集合。
+
+**实际影响**：
+- `conversations`、`conversations_closets`、`decisions`、`behavior_patterns` 均用 L2，nomic-embed-text 向量未归一化，L2 距离在 100~300 量级
+- `scanCrossMemberContext` 阈值 `0.4`（按 cosine 设计），L2 距离永远 >> 0.4，跨成员协调扫描完全失效
+- `queryPendingRequirements` 查的是 `requirements` 集合（正好是 cosine），不受影响
+
+**迁移方法**：
+1. 用 HTTP API 分批 fetch 全量记录（含 embeddings）——不能用 Python client，它对 embedding numpy 数组做 `if embeddings` 判断会触发 "truth value of array is ambiguous" 错误
+2. `client.delete_collection(name)` 删除旧集合
+3. `client.create_collection(name, metadata={"hnsw:space": "cosine"})` 重建
+4. 分批写回（Python client `col.add`）
+
+**损坏记录处理**：`conversations` 集合 offset=4217 处有1条内部损坏记录（ChromaDB HNSW 索引与 metadata store 不一致，`Error finding id`）。使用递归二分法定位并跳过该条记录，其余 4330 条正常迁移。
+
+**迁移脚本**：`HomeAILocal/Scripts/migrate-chroma-to-cosine.py`（支持任意目标集合，含容错跳过逻辑）
+
+**状态**：活跃（conversations/closets/decisions/behavior_patterns 已迁移，code_history 8条保留 L2，不影响功能）
