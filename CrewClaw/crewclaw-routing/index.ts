@@ -4679,6 +4679,8 @@ function buildAndyVerificationPrompt(spec: string, lisaReport: string): string {
 
 const FINETUNE_QUEUE_FILE    = join(PROJECT_ROOT, "data/learning/finetune-queue.jsonl");
 const DPO_CANDIDATES_FILE   = join(PROJECT_ROOT, "data/learning/dpo-candidates.jsonl");
+const FRICTION_EVENTS_FILE  = join(PROJECT_ROOT, "data/learning/friction-events.jsonl");
+const TASK_ARCHIVES_DIR     = join(PROJECT_ROOT, "data/learning/task-archives");
 const FINETUNE_THRESHOLD     = 0.6;
 const FINETUNE_QUEUE_TRIGGER = 100;
 // Andy spec SFT 积累队列：每次通过验证的 spec 写入，回填 outcome 后 eligibleForTraining=true
@@ -6241,6 +6243,9 @@ const crewclawRoutingPlugin = {
     const sessionFalseCommitCorrections = new Map<string, string>();
     // L1 Skill 提醒：agent_end 检测到 5+ 工具调用时写入，下一轮 before_prompt_build 注入提醒
     const sessionSkillReminders = new Map<string, { toolCount: number; tools: string[] }>();
+    // 协作摩擦信号检测：记录每个 agent+user key 最后一次用户消息时间戳，
+    // 用于检测「连续消息 <30s + 纠正关键词」的摩擦组合信号
+    const sessionLastUserMsgTimestamp = new Map<string, number>();
 
     // ── Gateway 资源池实例（插件生命周期内全局共享）──────────────────────────
     // Lucas 专属保留槽位，其余 agent 使用共享竞争槽位
@@ -7107,6 +7112,36 @@ const crewclawRoutingPlugin = {
           }
         }
 
+        // ── 协作摩擦信号采集（fire-and-forget）──────────────────────────────
+        // 「连续消息 <30s」+ 纠正关键词 = 摩擦信号：系统未能一次满足用户意图
+        // 单独连续消息或单独纠正词均不记录，两者同时命中才写入
+        if (!isVisitorSession && FAMILY_USER_IDS_LOWER.has(userId)) {
+          const _frictionMsg = sessionPrompt.get(ctx.sessionKey ?? "") ?? "";
+          const _lastMsgTs = sessionLastUserMsgTimestamp.get(_agentUserKey) ?? 0;
+          const _msSinceLast = Date.now() - _lastMsgTs;
+          const FRICTION_WINDOW_MS = 30_000;
+          const FRICTION_CORRECTION_PATTERNS = [
+            "不对", "不是", "你说错了", "你理解错了", "不是这样的", "不是这个意思",
+            "你搞错了", "你误会了", "再看一下", "重新", "还不对",
+            "我说的是", "我的意思是", "那不是我要的", "没用", "不行",
+          ];
+          const _frictionHit = FRICTION_CORRECTION_PATTERNS.find(p => _frictionMsg.includes(p));
+          if (_lastMsgTs > 0 && _msSinceLast < FRICTION_WINDOW_MS && _frictionHit) {
+            try {
+              appendJsonl(FRICTION_EVENTS_FILE, {
+                t:              nowCST(),
+                userId,
+                sessionKey:     ctx.sessionKey,
+                trigger_pattern: _frictionHit,
+                msg_snippet:    _frictionMsg.slice(0, 200),
+                ms_since_last:  _msSinceLast,
+              });
+            } catch { /* 静默 */ }
+          }
+          // 每次家庭用户消息都更新时间戳，用于下次连续检测
+          sessionLastUserMsgTimestamp.set(_agentUserKey, Date.now());
+        }
+
         // ── L2 积极反馈信号采集（fire-and-forget）──────────────────────────
         // 检测家人消息中的积极反馈语句 → 提取上一轮 Lucas 响应 → 写入正向 DPO 样本
         // 原理：积极反馈 = 用户对上一轮响应满意，上一轮响应是高质量训练正样本
@@ -7281,6 +7316,30 @@ const crewclawRoutingPlugin = {
                 );
                 logger.info(`[l0-feedback-inject] injected into Andy: weakest=${latest.weakest_dim} signals=${latest.signals.length}`);
               }
+            }
+          }
+        } catch (_e) { /* 静默，不影响主流程 */ }
+
+        // ── 经验感知式 Spec：注入与当前需求最相关的历史模式（#4）──────────────
+        // 对 behavior_patterns（Andy 蒸馏产物）做语义检索，精准注入【可复用经验】
+        // 目的：Andy 设计 spec 时复用已有模式，并在 design_intent 中标注引用来源
+        try {
+          const _andyReqPrompt = event.prompt ?? "";
+          if (_andyReqPrompt.length > 10) {
+            const _andyEmb = await embedText(_andyReqPrompt.slice(0, 500));
+            const _andyPatterns = await chromaQuery(
+              "behavior_patterns", _andyEmb, 5,
+              { agent: { $eq: "andy" } },
+            );
+            if (_andyPatterns.length > 0) {
+              const _patternLines = _andyPatterns.slice(0, 3)
+                .map((p, i) => `${i + 1}. ${p.document.slice(0, 160)}`)
+                .join("\n");
+              appendSystem.push(
+                `【可复用经验（语义匹配当前需求）】\n${_patternLines}\n` +
+                `↗ 如果上述经验与本次设计相关，请在 design_intent 中注明「复用了 XX 模式」，避免重复踩坑。`,
+              );
+              logger.info(`[andy-pattern-inject] injected ${Math.min(3, _andyPatterns.length)} patterns`);
             }
           }
         } catch (_e) { /* 静默，不影响主流程 */ }
@@ -8693,12 +8752,19 @@ ${toolDescriptions}
                           const aUsage = parseInt(archiveFm.match(/usage_count: (\d+)/)?.[1] ?? "0");
                           const aSuccess = parseInt(archiveFm.match(/success_count: (\d+)/)?.[1] ?? "0");
                           const failRate = aUsage > 0 ? (aUsage - aSuccess) / aUsage : 0;
+                          // 稳定周期：从 first_seen 推算天数（≥30天视为充分验证）
+                          const firstSeen = archiveFm.match(/first_seen:\s*(\S+)/)?.[1];
+                          const daysSinceCreated = firstSeen
+                            ? Math.floor((Date.now() - new Date(firstSeen).getTime()) / 86_400_000)
+                            : 0;
                           // 检查 native 数量（≤ 15 才晋升）
                           const nativeSkillsDir = join(homedir(), `.openclaw/workspace-${ctx.agentId}/skills`);
                           const nativeCount = existsSync(nativeSkillsDir)
                             ? readdirSync(nativeSkillsDir, { withFileTypes: true }).filter(e => e.isDirectory()).length
                             : 0;
-                          if (aSuccess >= 3 && failRate < 0.3 && nativeCount < 15) {
+                          // 晋升门槛：（≥5次成功 OR 稳定30天）AND 失败率<20% AND native槽位未满
+                          // 比原条件（3次/30%）更严格，减少噪声 Skill 污染 native 层
+                          if ((aSuccess >= 5 || daysSinceCreated >= 30) && failRate < 0.2 && nativeCount < 15) {
                             // 晋升：将 archive Skill 复制到 native，更新状态
                             const nativeSkillPath = join(nativeSkillsDir, skillNameFromPath, "SKILL.md");
                             mkdirSync(join(nativeSkillsDir, skillNameFromPath), { recursive: true });
@@ -12630,6 +12696,8 @@ last_used: null
         const p = params as { spec_summary: string; original_symptom?: string; requirement_id?: string; thread_id?: string };
         const threadId = p.thread_id ?? (p.requirement_id ? `andy-eval:${p.requirement_id}` : undefined);
 
+        // 检查 spec_summary 中是否包含 design_intent 字段
+        const _hasDesignIntent = p.spec_summary.includes('"design_intent"') || p.spec_summary.includes('design_intent');
         const evalPrompt = [
           `【Spec 审查请求】`,
           p.requirement_id ? `需求 ID：${p.requirement_id}` : "",
@@ -12647,7 +12715,18 @@ last_used: null
           `【Spec 内容摘要】`,
           p.spec_summary,
           ``,
-          `请对照评估标准逐项审查，输出 PASS / FAIL 结论和具体检查项。`,
+          // design_intent 对齐检查：evaluator 验证实现方向是否与设计意图吻合
+          ...(!_hasDesignIntent ? [
+            `⚠️ 注意：此 Spec 缺少 design_intent 字段（Andy 应在 JSON 中填写 3 条最重要的设计判断）。`,
+            `   请在评估结论中标注 PARTIAL 并注明「缺少 design_intent，无法验证实现与设计意图对齐性」。`,
+            ``,
+          ] : [
+            `【设计意图对齐检查】`,
+            `请验证：Lisa 的实现方向（integration_points + acceptance_criteria）是否与 design_intent 中的设计判断一致？`,
+            `如有明显偏离（如 design_intent 要求最小改动但方案涉及大范围重构），请标注 PARTIAL 并说明偏差点。`,
+            ``,
+          ]),
+          `请对照评估标准逐项审查，输出 PASS / FAIL / PARTIAL 结论和具体检查项。`,
         ].filter(Boolean).join("\n");
 
         // 通知 SE：Andy 发起独立 Spec 审查
@@ -13557,6 +13636,29 @@ last_used: null
               .filter(Boolean)
               .join("\n");
             void notifyEngineer(msg, "pipeline", FRONTEND_AGENT_ID);
+
+            // 任务归档（#5）：outcome=success 时写 task-archives/{reqId}.json
+            // 归档内容供 DPO/SFT 训练：完整任务上下文（需求+交付+反馈）一体化
+            if (outcome === "success") {
+              try {
+                mkdirSync(TASK_ARCHIVES_DIR, { recursive: true });
+                writeFileSync(
+                  join(TASK_ARCHIVES_DIR, `${notifyReqId}.json`),
+                  JSON.stringify({
+                    archivedAt:   nowCST(),
+                    reqId:        notifyReqId,
+                    requirement:  taskEntry?.requirement ?? "",
+                    submittedBy:  taskEntry?.submittedBy ?? "",
+                    submittedAt:  taskEntry?.submittedAt ?? "",
+                    completedAt:  taskEntry?.updatedAt ?? "",
+                    outcome,
+                    outcome_note,
+                  }, null, 2),
+                  "utf8",
+                );
+                logger.info(`[task-archive] archived ${notifyReqId}`);
+              } catch (_ae) { /* 静默 */ }
+            }
           }
         }
 
