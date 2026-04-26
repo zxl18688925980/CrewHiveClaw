@@ -39,7 +39,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createReadTool, createEditTool, createWriteTool, createBashTool, createGrepTool, createFindTool, createLsTool } from "@mariozechner/pi-coding-agent";
 import { AgentRegistry } from "./agent-registry.js";
-import { buildDynamicContext, applyContextBudget, type ContextResolvers, type BudgetConfig } from "./context-handler.js";
+import { buildDynamicContext, applyContextBudget, compressLucasContext, type ContextResolvers, type BudgetConfig, type LucasCompressionStats } from "./context-handler.js";
 import type { SessionParams } from "./context-sources.js";
 
 // ── 配置 ──────────────────────────────────────────────────────────────────
@@ -3436,7 +3436,9 @@ async function notifyEngineer(message: string, type: "pipeline" | "intervention"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isNonHumanUser(userId: string): boolean {
   return !userId || userId.startsWith("system") || userId === "unknown" || userId === "test" ||
-    userId === "group" || userId === "owner" || userId === "heartbeat-cron" || UUID_RE.test(userId);
+    userId === "group" || userId === "owner" ||
+    userId.endsWith("-heartbeat") || userId.startsWith("heartbeat-") ||
+    UUID_RE.test(userId);
 }
 
 async function pushToChannel(response: string, userId: string, success: boolean, fromAgent?: string): Promise<void> {
@@ -3753,7 +3755,7 @@ async function runAndyPipeline(params: {
       void notifyEngineer(`【${requirementId}】Andy 开始探索需求：${params.requirement.slice(0, 80)}`, "pipeline", DESIGNER_AGENT_ID);
       // 流式状态同步：告知 Lucas 需求已收到
       pushStageToLucas(requirementId, "planning", "planning", params.userId);
-      if (params.userId && params.userId !== "unknown") {
+      if (params.userId && params.userId !== "unknown" && !isNonHumanUser(params.userId)) {
         void callGatewayAgent(
           FRONTEND_AGENT_ID,
           [
@@ -3775,7 +3777,7 @@ async function runAndyPipeline(params: {
       // 1800s 绰绰有余；超时或报错只发生一次，不会创建重复会话。
       const andyResponse = await callGatewayAgent(DESIGNER_AGENT_ID, andyMessage, 1_800_000, undefined, FRONTEND_AGENT_ID);
       // 告知 Lucas Andy 已开始处理（知情方，Lucas 决定是否与用户沟通）
-      if (params.userId && params.userId !== "unknown") {
+      if (params.userId && params.userId !== "unknown" && !isNonHumanUser(params.userId)) {
         void callGatewayAgent(
           FRONTEND_AGENT_ID,
           [
@@ -4702,6 +4704,8 @@ const TASK_REGISTRY_FILE = join(PROJECT_ROOT, "data/learning/task-registry.json"
 // 不直接推给用户——由 Lucas 根据用户身份决定是否告知、怎么翻译（千人千面）
 const stagePushTracker = new Map<string, Set<string>>();  // reqId -> Set<stage>
 function pushStageToLucas(reqId: string, stage: string, internalStage: string, userId: string, extra?: string): void {
+  // 系统内部触发的任务（heartbeat / cron）不需要 Lucas 告知"用户"——没有对应的真实用户
+  if (isNonHumanUser(userId)) return;
   const pushed = stagePushTracker.get(reqId) ?? new Set<string>();
   if (pushed.has(stage)) return;  // 去重
   pushed.add(stage);
@@ -7175,6 +7179,43 @@ const crewclawRoutingPlugin = {
         const budgeted = applyContextBudget(ctxResult, budgetConfig, agentId);
         prepend = budgeted.prepend;
         appendSystem = budgeted.appendSystem;
+
+        // ── Lucas 专属压缩管线（在 applyContextBudget 之后、person facts 之前）────
+        if (agentId === FRONTEND_AGENT_ID) {
+          try {
+            const lucasCfg = (budgetConfig as Record<string, unknown>).lucasCompression as {
+              enabled?: boolean; maxPrependChars?: number; maxAppendChars?: number;
+              semanticThreshold?: number; semanticMaxCandidates?: number; logStats?: boolean;
+            } | undefined;
+            if (lucasCfg?.enabled !== false) {
+              const compressionOptions = {
+                agentId,
+                prompt: event.prompt,
+                maxPrependChars:       lucasCfg?.maxPrependChars       ?? 4000,
+                maxAppendChars:        lucasCfg?.maxAppendChars         ?? 12000,
+                semanticThreshold:     lucasCfg?.semanticThreshold      ?? 0.92,
+                semanticMaxCandidates: lucasCfg?.semanticMaxCandidates  ?? 12,
+                dryRun:                (budgetConfig as Record<string, unknown>).dryRun as boolean ?? false,
+                embedText,
+                nowMs: Date.now(),
+              };
+              const budgetedResult = {
+                prepend,
+                appendSystem,
+                meta: budgeted.meta,
+              };
+              const { result: compressed, stats } = await compressLucasContext(budgetedResult, compressionOptions);
+              prepend      = compressed.prepend;
+              appendSystem = compressed.appendSystem;
+              if (lucasCfg?.logStats !== false) {
+                logger.info(`[lucas-ctx-compress] ${JSON.stringify({ agent: agentId, ...stats } as LucasCompressionStats & { agent: string })}`);
+              }
+            }
+          } catch (_compressErr) {
+            // 压缩失败静默回退，保持 budget-only 行为
+            logger.warn(`[lucas-ctx-compress] failed, fallback to budget-only: ${_compressErr instanceof Error ? _compressErr.message : String(_compressErr)}`);
+          }
+        }
       } catch (_e) { /* 配置文件缺失或解析失败，保持原样 */ }
 
       // ── 主动注入：prompt 提到家庭成员时，注入该人的 Kuzu 蒸馏事实 ──────────

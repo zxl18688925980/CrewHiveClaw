@@ -151,6 +151,11 @@ async function runLucasProactiveLoop() {
         markTaskLucasAcked(task.id);
         continue;
       }
+      // 系统内部触发的任务（*-heartbeat / heartbeat-* 等）→ 没有对应真实用户，静默标记即可
+      if (submittedBy.endsWith('-heartbeat') || submittedBy.startsWith('heartbeat-')) {
+        markTaskLucasAcked(task.id);
+        continue;
+      }
       // UUID 格式（系统/工程师提交）→ 通知系统工程师
       const isUUID = /^[0-9a-f-]{36}$/.test(submittedBy);
       const targetUserId = isUUID
@@ -856,7 +861,7 @@ ${precomputedTechDebtSignals}
                 callGatewayAgent(
                   'andy',
                   `你之前完成了需求 ${reqId} 的方案设计（approaches.json 已存在），但尚未调用 trigger_lisa_implementation 将 spec 交给 Lisa 实现。请立即调用 trigger_lisa_implementation。只需完成这一步，不需重新设计方案。`,
-                  `heartbeat-p0-${reqId}`,
+                  'andy-heartbeat',
                   300000
                 ).catch(e => logger.warn('HEARTBEAT P0：补触发失败', { reqId, error: e.message }));
               }
