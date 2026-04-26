@@ -103,14 +103,25 @@ RELATION_LABELS = {
 
 # ── Kuzu 连接 ─────────────────────────────────────────────────────────────────
 
-def get_kuzu_conn():
+def get_kuzu_conn(max_retries: int = 6, retry_delay: float = 5.0):
+    """连接 Kuzu，遇锁冲突最多重试 max_retries 次（Gateway subprocess 持锁为短暂竞争）。"""
+    import time
     try:
         import kuzu
-        db = kuzu.Database(str(KUZU_DB_PATH))
-        return kuzu.Connection(db)
     except ImportError:
         print("ERROR: kuzu 未安装，运行 pip3 install kuzu", file=sys.stderr)
         sys.exit(1)
+    for attempt in range(max_retries):
+        try:
+            db = kuzu.Database(str(KUZU_DB_PATH))
+            return kuzu.Connection(db)
+        except Exception as e:
+            if "lock" in str(e).lower() and attempt < max_retries - 1:
+                print(f"  Kuzu 锁冲突（尝试 {attempt+1}/{max_retries}），{retry_delay}s 后重试...", file=sys.stderr)
+                time.sleep(retry_delay)
+            else:
+                print(f"ERROR: Kuzu 连接失败：{e}", file=sys.stderr)
+                sys.exit(1)
 
 # ── 默认模式：渲染 Kuzu → .inject.md ─────────────────────────────────────────
 
@@ -536,6 +547,8 @@ def main():
             else:
                 run_render(conn, user_ids)
     finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
         os._exit(0)  # bypass kuzu Database::~Database() SIGBUS on macOS ARM64；异常路径同样触发
 
 

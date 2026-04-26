@@ -24,18 +24,31 @@ from pathlib import Path
 
 # ── Kuzu 工具 ─────────────────────────────────────────────────────────────────
 
-def get_kuzu_conn():
-    """连接 Kuzu 数据库，失败时返回 None（不影响蒸馏主流程）。"""
+def get_kuzu_conn(max_retries: int = 6, retry_delay: float = 5.0):
+    """连接 Kuzu 数据库，失败时返回 None（不影响蒸馏主流程）。
+
+    Gateway 通过 spawn Python subprocess 访问 Kuzu，每次查询结束后立即 os._exit(0) 释放锁。
+    锁冲突为毫秒~秒级竞争，最多重试 max_retries 次（默认 6×5s = 30s），基本可覆盖任何并发查询。
+    """
+    import time
     try:
         import kuzu as _kuzu
-        db = _kuzu.Database(str(_DATA_ROOT / "kuzu"))
-        return _kuzu.Connection(db)
     except ImportError:
         print("  WARN: kuzu 未安装，跳过 Kuzu 写入", file=sys.stderr)
         return None
-    except Exception as e:
-        print(f"  WARN: Kuzu 连接失败：{e}", file=sys.stderr)
-        return None
+
+    for attempt in range(max_retries):
+        try:
+            db = _kuzu.Database(str(_DATA_ROOT / "kuzu"))
+            return _kuzu.Connection(db)
+        except Exception as e:
+            if "lock" in str(e).lower() and attempt < max_retries - 1:
+                print(f"  Kuzu 锁冲突（尝试 {attempt+1}/{max_retries}），{retry_delay}s 后重试...", file=sys.stderr)
+                time.sleep(retry_delay)
+            else:
+                print(f"  WARN: Kuzu 连接失败：{e}", file=sys.stderr)
+                return None
+    return None
 
 
 def _title_to_slug(title: str) -> str:
@@ -408,7 +421,10 @@ def read_agent_model_config() -> dict:
         agent = next((a for a in cfg["agents"]["list"] if a["id"] == agent_id), None)
         if not agent:
             continue
-        provider_key, model_id = agent["model"].split("/", 1)
+        # model 字段可能是字符串（旧格式）或 {primary, fallbacks} 对象（v725 格式）
+        raw_model = agent["model"]
+        model_str = raw_model["primary"] if isinstance(raw_model, dict) else raw_model
+        provider_key, model_id = model_str.split("/", 1)
         provider = cfg.get("models", {}).get("providers", {}).get(provider_key, {})
         if provider.get("baseUrl") and provider.get("apiKey"):
             return {
@@ -619,6 +635,8 @@ def main():
                 start_new_session=True,  # 脱离父进程组，父进程退出不影响子进程
             )
     finally:
+        sys.stdout.flush()  # os._exit 不 flush，cron 日志需要先 flush
+        sys.stderr.flush()
         os._exit(0)  # 释放 Kuzu 文件锁；bypass Database::~Database() SIGBUS on macOS ARM64；异常路径同样触发
 
 
